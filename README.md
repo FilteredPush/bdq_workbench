@@ -21,6 +21,12 @@ mvn -q package
 java -jar target/bdq_workbench-0.1.0-SNAPSHOT.jar
 ```
 
+Show command-line help:
+
+```bash
+java -jar target/bdq_workbench-0.1.0-SNAPSHOT.jar --help
+```
+
 Configuration defaults are in `src/main/resources/application.properties` and can be overridden with `-Dbdq.*` system properties.
 
 ## Architecture overview
