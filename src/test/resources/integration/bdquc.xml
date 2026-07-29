@@ -1,0 +1,3 @@
+<usecases>
+  <usecase id="uc1" name="Test Use Case" policy="urn:policy:1" />
+</usecases>
