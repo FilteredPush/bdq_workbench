@@ -5,19 +5,20 @@ BDQ Workbench is a Java 21 application scaffold for policy-driven Biodiversity D
 ## Build and test
 
 ```bash
-./mvnw -q test
+mvn -q test
 ```
 
 Run integration tests only (failsafe):
 
 ```bash
-./mvnw -q verify -Prelease
+mvn -q verify -Prelease
 ```
 
 ## Run
 
 ```bash
-./mvnw -q exec:java -Dexec.mainClass=org.filteredpush.bdq_workbench.app.BdqWorkbenchApplication
+mvn -q package
+java -jar target/bdq_workbench-0.1.0-SNAPSHOT.jar
 ```
 
 Configuration defaults are in `src/main/resources/application.properties` and can be overridden with `-Dbdq.*` system properties.
