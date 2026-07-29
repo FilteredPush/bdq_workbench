@@ -1,6 +1,6 @@
 # bdq_workbench
 
-BDQ Workbench is a Java 21 application scaffold for policy-driven Biodiversity Data Quality (BDQ) execution over Darwin Core Archives (DwC-A) and Darwin Core Data Packages.
+BDQ Workbench is a Java 17 application scaffold for policy-driven Biodiversity Data Quality (BDQ) execution over Darwin Core Archives (DwC-A) and Darwin Core Data Packages.
 
 ## Build and test
 
