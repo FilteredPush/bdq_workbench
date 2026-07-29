@@ -2,7 +2,9 @@ package org.filteredpush.bdq_workbench.app;
 
 import java.io.PrintStream;
 import java.nio.file.Files;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import org.filteredpush.bdq_workbench.execution.ParallelPhaseExecutionService;
 import org.filteredpush.bdq_workbench.execution.ReflectionExecutionAdapter;
 import org.filteredpush.bdq_workbench.ingest.DefaultIngestService;
@@ -38,13 +40,13 @@ public final class BdqWorkbenchApplication {
                 renderUsage(out);
                 return 0;
             }
-            String unknownArgument = firstUnknownArgument(args);
-            if (unknownArgument != null) {
-                err.println("Unknown argument: " + unknownArgument);
+            ParseResult parseResult = parseArguments(args);
+            if (parseResult.error() != null) {
+                err.println(parseResult.error());
                 renderUsage(err);
                 return 2;
             }
-            AppConfig config = new ConfigLoader().load();
+            AppConfig config = new ConfigLoader().load(parseResult.overrides());
             validateStartup(config);
             WorkbenchFacade facade = new WorkbenchFacade(
                     new DefaultIngestService(),
@@ -85,28 +87,50 @@ public final class BdqWorkbenchApplication {
         return false;
     }
 
-    private static String firstUnknownArgument(String[] args) {
-        for (String arg : args) {
-            if (!HELP_FLAG.equals(arg) && !HELP_SHORT_FLAG.equals(arg)) {
-                return arg;
+    private static ParseResult parseArguments(String[] args) {
+        Map<String, String> overrides = new HashMap<>();
+        for (int i = 0; i < args.length; i++) {
+            String arg = args[i];
+            if (HELP_FLAG.equals(arg) || HELP_SHORT_FLAG.equals(arg)) {
+                continue;
             }
+            String key = switch (arg) {
+                case "--dataset" -> "bdq.dataset";
+                case "--usecase-file" -> "bdq.usecase.file";
+                case "--rdf-files" -> "bdq.rdf.files";
+                case "--usecase-id" -> "bdq.usecase.id";
+                case "--discovery-packages" -> "bdq.discovery.packages";
+                case "--threads" -> "bdq.threads";
+                default -> null;
+            };
+            if (key == null) {
+                return new ParseResult(Map.of(), "Unknown argument: " + arg);
+            }
+            if (i + 1 >= args.length) {
+                return new ParseResult(Map.of(), "Missing value for argument: " + arg);
+            }
+            overrides.put(key, args[++i]);
         }
-        return null;
+        return new ParseResult(Map.copyOf(overrides), null);
     }
 
     private static void renderUsage(PrintStream out) {
-        out.println("Usage: java -jar target/bdq_workbench-0.1.0-SNAPSHOT.jar [--help]");
+        out.println("Usage: java -jar target/bdq_workbench-0.1.0-SNAPSHOT.jar [options]");
         out.println();
-        out.println("Configuration is provided through system properties:");
-        out.println("  -Dbdq.dataset=<path>           Input dataset (.zip DwC-A or datapackage.json)");
-        out.println("  -Dbdq.usecase.file=<path>      Use case XML file");
-        out.println("  -Dbdq.rdf.files=<paths>        Comma-separated RDF/OWL files");
-        out.println("  -Dbdq.usecase.id=<id>          Optional use case identifier");
-        out.println("  -Dbdq.discovery.packages=<pkgs> Comma-separated implementation packages");
-        out.println("  -Dbdq.threads=<n>              Worker thread count (>= 1)");
+        out.println("Options:");
+        out.println("  -h, --help                     Show this help");
+        out.println("  --dataset <path>               Input dataset (.zip DwC-A or datapackage.json)");
+        out.println("  --usecase-file <path>          Use case XML file");
+        out.println("  --rdf-files <paths>            Comma-separated RDF/OWL files");
+        out.println("  --usecase-id <id>              Optional use case identifier");
+        out.println("  --discovery-packages <pkgs>    Comma-separated implementation packages");
+        out.println("  --threads <n>                  Worker thread count (>= 1)");
     }
 
     static void render(ExecutionSummary summary, PrintStream out) {
         out.println("BDQ Workbench completed: " + summary.responses().size() + " outcomes");
+    }
+
+    private record ParseResult(Map<String, String> overrides, String error) {
     }
 }

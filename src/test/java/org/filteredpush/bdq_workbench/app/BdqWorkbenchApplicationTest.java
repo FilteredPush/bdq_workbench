@@ -16,7 +16,7 @@ class BdqWorkbenchApplicationTest {
         int exitCode = BdqWorkbenchApplication.run(new String[] {"--help"}, printStream(out), printStream(err));
 
         assertThat(exitCode).isZero();
-        assertThat(out.toString()).contains("Usage: java -jar");
+        assertThat(out.toString()).contains("Usage: java -jar").contains("--dataset <path>");
         assertThat(err.toString()).isEmpty();
     }
 
@@ -34,25 +34,30 @@ class BdqWorkbenchApplicationTest {
 
     @Test
     void returnsFriendlyStartupErrorWhenDatasetIsMissing() {
-        String originalDataset = System.getProperty("bdq.dataset");
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         ByteArrayOutputStream err = new ByteArrayOutputStream();
-        try {
-            System.setProperty("bdq.dataset", "missing-dataset.zip");
 
-            int exitCode = BdqWorkbenchApplication.run(new String[0], printStream(out), printStream(err));
+        int exitCode = BdqWorkbenchApplication.run(
+                new String[] {"--dataset", "missing-dataset.zip"},
+                printStream(out),
+                printStream(err));
 
-            assertThat(exitCode).isEqualTo(1);
-            assertThat(err.toString()).contains("BDQ Workbench startup failed: Dataset input not found: missing-dataset.zip");
-            assertThat(err.toString()).contains("Run with --help for usage.");
-            assertThat(out.toString()).isEmpty();
-        } finally {
-            if (originalDataset == null) {
-                System.clearProperty("bdq.dataset");
-            } else {
-                System.setProperty("bdq.dataset", originalDataset);
-            }
-        }
+        assertThat(exitCode).isEqualTo(1);
+        assertThat(err.toString()).contains("BDQ Workbench startup failed: Dataset input not found: missing-dataset.zip");
+        assertThat(err.toString()).contains("Run with --help for usage.");
+        assertThat(out.toString()).isEmpty();
+    }
+
+    @Test
+    void rejectsOptionWithoutValueWithUsage() {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        ByteArrayOutputStream err = new ByteArrayOutputStream();
+
+        int exitCode = BdqWorkbenchApplication.run(new String[] {"--dataset"}, printStream(out), printStream(err));
+
+        assertThat(exitCode).isEqualTo(2);
+        assertThat(err.toString()).contains("Missing value for argument: --dataset").contains("Usage: java -jar");
+        assertThat(out.toString()).isEmpty();
     }
 
     private static PrintStream printStream(ByteArrayOutputStream buffer) {

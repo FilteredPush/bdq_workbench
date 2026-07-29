@@ -27,7 +27,11 @@ Show command-line help:
 java -jar target/bdq_workbench-0.1.0-SNAPSHOT.jar --help
 ```
 
-Configuration defaults are in `src/main/resources/application.properties` and can be overridden with `-Dbdq.*` system properties.
+Configuration defaults are in `src/main/resources/application.properties` and can be overridden with CLI options, for example:
+
+```bash
+java -jar target/bdq_workbench-0.1.0-SNAPSHOT.jar --dataset path/to/dataset.zip
+```
 
 ## Architecture overview
 
