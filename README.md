@@ -21,6 +21,8 @@ mvn -q package
 java -jar target/bdq_workbench-0.1.0-SNAPSHOT.jar
 ```
 
+Launching the jar without options opens a desktop GUI for entering parameters and monitoring execution.
+
 Show command-line help:
 
 ```bash

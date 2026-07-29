@@ -60,6 +60,27 @@ class BdqWorkbenchApplicationTest {
         assertThat(out.toString()).isEmpty();
     }
 
+    @Test
+    void noArgsInHeadlessModeFallsBackToValidatedCliStartup() {
+        String originalHeadless = System.getProperty("java.awt.headless");
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        ByteArrayOutputStream err = new ByteArrayOutputStream();
+        try {
+            System.setProperty("java.awt.headless", "true");
+
+            int exitCode = BdqWorkbenchApplication.run(new String[0], printStream(out), printStream(err));
+
+            assertThat(exitCode).isEqualTo(1);
+            assertThat(err.toString()).contains("BDQ Workbench startup failed: Dataset input not found: dataset.zip");
+        } finally {
+            if (originalHeadless == null) {
+                System.clearProperty("java.awt.headless");
+            } else {
+                System.setProperty("java.awt.headless", originalHeadless);
+            }
+        }
+    }
+
     private static PrintStream printStream(ByteArrayOutputStream buffer) {
         return new PrintStream(buffer);
     }

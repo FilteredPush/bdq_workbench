@@ -1,6 +1,7 @@
 package org.filteredpush.bdq_workbench.app;
 
 import java.io.PrintStream;
+import java.awt.GraphicsEnvironment;
 import java.nio.file.Files;
 import java.util.HashMap;
 import java.util.List;
@@ -36,6 +37,10 @@ public final class BdqWorkbenchApplication {
 
     static int run(String[] args, PrintStream out, PrintStream err) {
         try {
+            if (args.length == 0 && !GraphicsEnvironment.isHeadless()) {
+                BdqWorkbenchGui.launch();
+                return 0;
+            }
             if (wantsHelp(args)) {
                 renderUsage(out);
                 return 0;
@@ -47,15 +52,8 @@ public final class BdqWorkbenchApplication {
                 return 2;
             }
             AppConfig config = new ConfigLoader().load(parseResult.overrides());
-            validateStartup(config);
-            WorkbenchFacade facade = new WorkbenchFacade(
-                    new DefaultIngestService(),
-                    new RdfPolicyResolverService(config.useCaseXml(), config.rdfDefinitions()),
-                    new ClasspathAnnotationTestDiscoveryService(config.implementationPackages()),
-                    new DefaultTestBindingService(),
-                    new ParallelPhaseExecutionService(config.threadCount(), new ReflectionExecutionAdapter()),
-                    new ReportingService(List.of(new SummaryReportExporter(), new XlsCompatibilityExporter())));
-            ExecutionSummary summary = facade.run(config);
+            validateStartupConfig(config);
+            ExecutionSummary summary = execute(config);
             render(summary, out);
             return 0;
         } catch (AppException e) {
@@ -69,7 +67,7 @@ public final class BdqWorkbenchApplication {
         }
     }
 
-    private static void validateStartup(AppConfig config) {
+    static void validateStartupConfig(AppConfig config) {
         if (config.threadCount() < 1) {
             throw new AppException("Invalid thread count: bdq.threads must be >= 1");
         }
@@ -117,6 +115,8 @@ public final class BdqWorkbenchApplication {
     private static void renderUsage(PrintStream out) {
         out.println("Usage: java -jar target/bdq_workbench-0.1.0-SNAPSHOT.jar [options]");
         out.println();
+        out.println("With no options on a desktop environment, the GUI launcher opens.");
+        out.println();
         out.println("Options:");
         out.println("  -h, --help                     Show this help");
         out.println("  --dataset <path>               Input dataset (.zip DwC-A or datapackage.json)");
@@ -129,6 +129,17 @@ public final class BdqWorkbenchApplication {
 
     static void render(ExecutionSummary summary, PrintStream out) {
         out.println("BDQ Workbench completed: " + summary.responses().size() + " outcomes");
+    }
+
+    static ExecutionSummary execute(AppConfig config) {
+        WorkbenchFacade facade = new WorkbenchFacade(
+                new DefaultIngestService(),
+                new RdfPolicyResolverService(config.useCaseXml(), config.rdfDefinitions()),
+                new ClasspathAnnotationTestDiscoveryService(config.implementationPackages()),
+                new DefaultTestBindingService(),
+                new ParallelPhaseExecutionService(config.threadCount(), new ReflectionExecutionAdapter()),
+                new ReportingService(List.of(new SummaryReportExporter(), new XlsCompatibilityExporter())));
+        return facade.run(config);
     }
 
     private record ParseResult(Map<String, String> overrides, String error) {
