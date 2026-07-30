@@ -83,8 +83,10 @@ class RdfPolicyResolverServiceTest {
                     bdqffdq:hasUseCase <http://rs.tdwg.org/bdquc/terms/Spatial-Temporal_Patterns> ;
                     bdqffdq:hasTest ex:testUnversioned .
 
-                ex:testVersioned rdfs:label "TEST_VERSIONED" .
-                ex:testUnversioned rdfs:label "TEST_UNVERSIONED" .
+                ex:testVersioned a bdqffdq:Validation ;
+                    rdfs:label "TEST_VERSIONED" .
+                ex:testUnversioned a bdqffdq:Validation ;
+                    rdfs:label "TEST_UNVERSIONED" .
                 """, StandardCharsets.UTF_8);
 
         RdfPolicyResolverService service = new RdfPolicyResolverService(useCaseFile, List.of(definitions));
@@ -122,8 +124,10 @@ class RdfPolicyResolverServiceTest {
                     bdqffdq:hasSingleRecordTest ex:testSingle ;
                     bdqffdq:hasMultiRecordMeasure ex:testMeasure .
 
-                ex:testSingle rdfs:label "TEST_SINGLE" .
-                ex:testMeasure rdfs:label "TEST_MEASURE" .
+                ex:testSingle a bdqffdq:Validation ;
+                    rdfs:label "TEST_SINGLE" .
+                ex:testMeasure a bdqffdq:Measure ;
+                    rdfs:label "TEST_MEASURE" .
                 """, StandardCharsets.UTF_8);
 
         RdfPolicyResolverService service = new RdfPolicyResolverService(useCaseFile, List.of(definitions));
@@ -199,6 +203,47 @@ class RdfPolicyResolverServiceTest {
 
                 ex:testNeed a bdqffdq:Validation ;
                     rdfs:label "TEST_NEED" .
+                """, StandardCharsets.UTF_8);
+
+        RdfPolicyResolverService service = new RdfPolicyResolverService(useCaseFile, List.of(definitions));
+        var plan = service.resolve("https://rs.tdwg.org/bdquc/terms/version/Spatial-Temporal_Patterns-2026-04-22");
+
+        assertThat(plan.policy().testIds()).containsExactly("https://example.org/testNeed");
+        assertThat(plan.tests()).hasSize(1);
+        assertThat(plan.tests().get(0).id()).isEqualTo("https://example.org/testNeed");
+    }
+
+    @Test
+    void resolvesTestsUsingOntologyRangeAndDataQualityNeedSubclassSemantics() throws Exception {
+        Path useCaseFile = tempDir.resolve("bdquc.xml");
+        Files.writeString(useCaseFile, """
+                <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+                         xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+                         xmlns:dcterms="http://purl.org/dc/terms/">
+                  <rdf:Description rdf:about="https://rs.tdwg.org/bdquc/terms/version/Spatial-Temporal_Patterns-2026-04-22">
+                    <rdf:type rdf:resource="https://rs.tdwg.org/bdqffdq/terms/UseCase"/>
+                    <rdfs:label>Spatial-Temporal Patterns</rdfs:label>
+                    <dcterms:isVersionOf rdf:resource="https://rs.tdwg.org/bdquc/terms/Spatial-Temporal_Patterns"/>
+                  </rdf:Description>
+                </rdf:RDF>
+                """, StandardCharsets.UTF_8);
+
+        Path definitions = tempDir.resolve("bdqtest.ttl");
+        Files.writeString(definitions, """
+                @prefix bdqffdq: <https://rs.tdwg.org/bdqffdq/terms/> .
+                @prefix ex: <https://example.org/> .
+                @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+                @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+
+                ex:policy1 a bdqffdq:ValidationPolicy ;
+                    bdqffdq:hasUseCase <https://rs.tdwg.org/bdquc/terms/Spatial-Temporal_Patterns> ;
+                    ex:requiresNeed ex:testNeed .
+
+                ex:requiresNeed rdfs:range bdqffdq:Issue .
+                bdqffdq:Issue rdfs:subClassOf bdqffdq:DataQualityNeed .
+
+                ex:testNeed rdf:type bdqffdq:Issue ;
+                    rdfs:label "TEST_NEED_BY_OWL_SEMANTICS" .
                 """, StandardCharsets.UTF_8);
 
         RdfPolicyResolverService service = new RdfPolicyResolverService(useCaseFile, List.of(definitions));

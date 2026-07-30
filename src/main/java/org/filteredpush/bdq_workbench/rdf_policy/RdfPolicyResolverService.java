@@ -5,12 +5,12 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import org.apache.jena.rdf.model.Model;
@@ -32,6 +32,9 @@ import org.slf4j.LoggerFactory;
 /** Loads bdquc and BDQ RDF definitions and resolves linked tests for use cases. */
 public class RdfPolicyResolverService implements PolicyResolverService {
     private static final Logger LOG = LoggerFactory.getLogger(RdfPolicyResolverService.class);
+    private static final String RDF_TYPE_URI = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+    private static final String RDFS_SUBCLASS_OF_URI = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
+    private static final String RDFS_RANGE_URI = "http://www.w3.org/2000/01/rdf-schema#range";
     private final Path useCaseXmlPath;
     private final List<Path> rdfFiles;
 
@@ -100,7 +103,8 @@ public class RdfPolicyResolverService implements PolicyResolverService {
         Set<String> matchedPolicyIds = new LinkedHashSet<>();
         Set<String> matchedTestIds = new LinkedHashSet<>();
         Map<String, PolicyTestExtraction> extractionByPolicy = new LinkedHashMap<>();
-        Set<String> globalTestCandidates = collectAllTestCandidates(model);
+        SemanticIndex semanticIndex = buildSemanticIndex(model);
+        Set<String> globalTestCandidates = semanticIndex.testResourceIds();
 
         var statements = model.listStatements();
         while (statements.hasNext()) {
@@ -117,13 +121,13 @@ public class RdfPolicyResolverService implements PolicyResolverService {
             }
             String policyId = resourceUri(statement.getSubject());
             matchedPolicyIds.add(policyId);
-            PolicyTestExtraction extraction = collectLinkedTests(statement.getSubject(), model, globalTestCandidates);
+            PolicyTestExtraction extraction = collectLinkedTests(statement.getSubject(), model, semanticIndex);
             extractionByPolicy.putIfAbsent(policyId, extraction);
             matchedTestIds.addAll(extraction.testIds());
         }
 
         for (String useCaseId : useCaseIds) {
-            matchedTestIds.addAll(collectLinkedTests(model.getResource(useCaseId), model, globalTestCandidates).testIds());
+            matchedTestIds.addAll(collectLinkedTests(model.getResource(useCaseId), model, semanticIndex).testIds());
         }
 
         extractionByPolicy.forEach((policyId, extraction) -> LOG.info(
@@ -143,13 +147,6 @@ public class RdfPolicyResolverService implements PolicyResolverService {
         LOG.info("Resolved {} policies and {} tests for use case {} (candidates: {})",
                 matchedPolicyIds.size(), matchedTestIds.size(), useCase.id(), useCaseIds);
         return new PolicyResolution(List.copyOf(matchedPolicyIds), List.copyOf(matchedTestIds));
-    }
-
-    private static Set<String> collectAllTestCandidates(Model model) {
-        Set<String> tests = new LinkedHashSet<>();
-        tests.addAll(findTypedResources(model, "validation", "test", "measure", "dataqualityneed"));
-        tests.addAll(findSubClassResources(model, "dataqualityneed", "validation", "test", "measure"));
-        return tests;
     }
 
     private static Set<String> candidateUseCaseIds(UseCase useCase) {
@@ -213,12 +210,13 @@ public class RdfPolicyResolverService implements PolicyResolverService {
         return normalizeName(localName).equals("hasusecase");
     }
 
-    private static boolean isTestPredicate(String localName) {
+    private static boolean isLikelyNeedPredicate(String localName) {
         String normalized = normalizeName(localName);
-        return normalized.contains("test")
-                || normalized.contains("validation")
+        return normalized.contains("validation")
+                || normalized.contains("amendment")
                 || normalized.contains("measurement")
                 || normalized.contains("measure")
+                || normalized.contains("issue")
                 || normalized.contains("dataqualityneed")
                 || normalized.endsWith("need");
     }
@@ -234,7 +232,7 @@ public class RdfPolicyResolverService implements PolicyResolverService {
         return resource.getURI() == null ? resource.toString() : resource.getURI();
     }
 
-    private static PolicyTestExtraction collectLinkedTests(Resource subject, Model model, Set<String> globalTestCandidates) {
+    private static PolicyTestExtraction collectLinkedTests(Resource subject, Model model, SemanticIndex semanticIndex) {
         Set<String> testIds = new LinkedHashSet<>();
         Set<String> predicateNames = new LinkedHashSet<>();
         if (subject == null) {
@@ -248,8 +246,8 @@ public class RdfPolicyResolverService implements PolicyResolverService {
                 continue;
             }
             String objectId = resourceUri(property.getResource());
-            boolean predicateLooksLikeTest = isTestPredicate(predicateName);
-            boolean objectLooksLikeTest = globalTestCandidates.contains(objectId);
+            boolean predicateLooksLikeTest = semanticIndex.isTestLinkPredicate(property.getPredicate().getURI(), predicateName);
+            boolean objectLooksLikeTest = semanticIndex.isTestResource(objectId);
             if (!predicateLooksLikeTest && !objectLooksLikeTest) {
                 continue;
             }
@@ -340,6 +338,7 @@ public class RdfPolicyResolverService implements PolicyResolverService {
         Set<String> policies = new LinkedHashSet<>();
         Set<String> tests = new LinkedHashSet<>();
         Map<String, Integer> testsPerPolicy = new LinkedHashMap<>();
+        SemanticIndex semanticIndex = buildSemanticIndex(model);
 
         var statements = model.listStatements();
         while (statements.hasNext()) {
@@ -350,9 +349,9 @@ public class RdfPolicyResolverService implements PolicyResolverService {
                 if (statement.getObject().isResource()) {
                     useCases.add(resourceUri(statement.getResource()));
                 }
-                int count = collectLinkedTests(statement.getSubject(), model, Collections.emptySet()).testIds().size();
+                int count = collectLinkedTests(statement.getSubject(), model, semanticIndex).testIds().size();
                 testsPerPolicy.put(policyId, count);
-                tests.addAll(collectLinkedTests(statement.getSubject(), model, Collections.emptySet()).testIds());
+                tests.addAll(collectLinkedTests(statement.getSubject(), model, semanticIndex).testIds());
             }
         }
 
@@ -363,8 +362,7 @@ public class RdfPolicyResolverService implements PolicyResolverService {
             policies.addAll(findTypedResources(model, "policy"));
         }
         if (tests.isEmpty()) {
-            tests.addAll(findTypedResources(model, "validation", "test", "measure", "dataqualityneed"));
-            tests.addAll(findSubClassResources(model, "dataqualityneed", "validation", "test", "measure"));
+            tests.addAll(semanticIndex.testResourceIds());
         }
 
         if (!testsPerPolicy.isEmpty()) {
@@ -381,8 +379,7 @@ public class RdfPolicyResolverService implements PolicyResolverService {
 
     private static Set<String> findTypedResources(Model model, String... typeTokens) {
         Set<String> matches = new HashSet<>();
-        String rdfType = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-        var statements = model.listStatements(null, model.createProperty(rdfType), (RDFNode) null);
+        var statements = model.listStatements(null, model.createProperty(RDF_TYPE_URI), (RDFNode) null);
         while (statements.hasNext()) {
             var statement = statements.nextStatement();
             if (!statement.getSubject().isResource() || !statement.getObject().isResource()) {
@@ -400,25 +397,129 @@ public class RdfPolicyResolverService implements PolicyResolverService {
         return matches;
     }
 
-    private static Set<String> findSubClassResources(Model model, String... typeTokens) {
-        Set<String> matches = new HashSet<>();
-        String subClassOf = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
-        var statements = model.listStatements(null, model.createProperty(subClassOf), (RDFNode) null);
-        while (statements.hasNext()) {
-            var statement = statements.nextStatement();
+    private static SemanticIndex buildSemanticIndex(Model model) {
+        Map<String, Set<String>> parentsByClass = new HashMap<>();
+        Set<String> allResources = new HashSet<>();
+        var subclasses = model.listStatements(null, model.createProperty(RDFS_SUBCLASS_OF_URI), (RDFNode) null);
+        while (subclasses.hasNext()) {
+            var statement = subclasses.nextStatement();
             if (!statement.getSubject().isResource() || !statement.getObject().isResource()) {
                 continue;
             }
-            String parentId = resourceUri(statement.getResource());
-            String normalizedParent = normalizeUriForMatch(parentId);
-            for (String token : typeTokens) {
-                if (normalizedParent.contains(token.toLowerCase(Locale.ROOT))) {
-                    matches.add(resourceUri(statement.getSubject()));
-                    break;
+            String child = resourceUri(statement.getSubject());
+            String parent = resourceUri(statement.getResource());
+            if (child.isBlank() || parent.isBlank()) {
+                continue;
+            }
+            parentsByClass.computeIfAbsent(normalizeUriForMatch(child), ignored -> new LinkedHashSet<>())
+                    .add(normalizeUriForMatch(parent));
+            allResources.add(normalizeUriForMatch(child));
+            allResources.add(normalizeUriForMatch(parent));
+        }
+
+        var allStatements = model.listStatements();
+        while (allStatements.hasNext()) {
+            var statement = allStatements.nextStatement();
+            if (statement.getSubject().isResource()) {
+                String subjectId = resourceUri(statement.getSubject());
+                if (!subjectId.isBlank()) {
+                    allResources.add(normalizeUriForMatch(subjectId));
+                }
+            }
+            if (statement.getObject().isResource()) {
+                String objectId = resourceUri(statement.getResource());
+                if (!objectId.isBlank()) {
+                    allResources.add(normalizeUriForMatch(objectId));
                 }
             }
         }
-        return matches;
+
+        Set<String> needClasses = new LinkedHashSet<>();
+        for (String resourceId : allResources) {
+            if (isCoreDataQualityNeedClass(resourceId)) {
+                needClasses.add(resourceId);
+            }
+        }
+        Set<String> testTypeClasses = new LinkedHashSet<>();
+        for (String resourceId : allResources) {
+            if (isClassOrSubclassOf(resourceId, needClasses, parentsByClass, new HashSet<>())) {
+                testTypeClasses.add(resourceId);
+            }
+        }
+
+        Set<String> testResources = new LinkedHashSet<>();
+        var typedStatements = model.listStatements(null, model.createProperty(RDF_TYPE_URI), (RDFNode) null);
+        while (typedStatements.hasNext()) {
+            var statement = typedStatements.nextStatement();
+            if (!statement.getSubject().isResource() || !statement.getObject().isResource()) {
+                continue;
+            }
+            String subjectId = resourceUri(statement.getSubject());
+            String typeId = resourceUri(statement.getResource());
+            if (subjectId.isBlank() || typeId.isBlank()) {
+                continue;
+            }
+            if (testTypeClasses.contains(normalizeUriForMatch(typeId))) {
+                testResources.add(subjectId);
+            }
+        }
+
+        Set<String> testLinkPredicates = new LinkedHashSet<>();
+        var rangeStatements = model.listStatements(null, model.createProperty(RDFS_RANGE_URI), (RDFNode) null);
+        while (rangeStatements.hasNext()) {
+            var statement = rangeStatements.nextStatement();
+            if (!statement.getSubject().isResource() || !statement.getObject().isResource()) {
+                continue;
+            }
+            String predicateUri = resourceUri(statement.getSubject());
+            String rangeUri = resourceUri(statement.getResource());
+            if (predicateUri.isBlank() || rangeUri.isBlank()) {
+                continue;
+            }
+            if (testTypeClasses.contains(normalizeUriForMatch(rangeUri))) {
+                testLinkPredicates.add(normalizeUriForMatch(predicateUri));
+            }
+        }
+
+        LOG.debug(
+                "Semantic RDF index: {} DataQualityNeed class candidates, {} DataQualityNeed-derived classes, {} test resources, {} test-link predicates",
+                needClasses.size(),
+                testTypeClasses.size(),
+                testResources.size(),
+                testLinkPredicates.size());
+        return new SemanticIndex(testResources, testLinkPredicates, testTypeClasses);
+    }
+
+    private static boolean isCoreDataQualityNeedClass(String resourceId) {
+        String normalized = normalizeUriForMatch(resourceId);
+        int slash = normalized.lastIndexOf('/');
+        int hash = normalized.lastIndexOf('#');
+        int cut = Math.max(slash, hash);
+        String local = (cut >= 0 ? normalized.substring(cut + 1) : normalized).toLowerCase(Locale.ROOT);
+        return local.equals("dataqualityneed")
+                || local.equals("validation")
+                || local.equals("amendment")
+                || local.equals("measure")
+                || local.equals("issue");
+    }
+
+    private static boolean isClassOrSubclassOf(
+            String classId,
+            Set<String> rootClasses,
+            Map<String, Set<String>> parentsByClass,
+            Set<String> visiting) {
+        if (rootClasses.contains(classId)) {
+            return true;
+        }
+        if (!visiting.add(classId)) {
+            return false;
+        }
+        for (String parent : parentsByClass.getOrDefault(classId, Set.of())) {
+            if (rootClasses.contains(parent) || isClassOrSubclassOf(parent, rootClasses, parentsByClass, visiting)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static List<Lang> orderedLangCandidates(Path path) {
@@ -442,6 +543,24 @@ public class RdfPolicyResolverService implements PolicyResolverService {
     }
 
     private record PolicyTestExtraction(List<String> testIds, List<String> predicates) {
+    }
+
+    private record SemanticIndex(
+            Set<String> testResourceIds,
+            Set<String> testLinkPredicates,
+            Set<String> testTypeClasses) {
+        private boolean isTestResource(String uri) {
+            return testResourceIds.contains(uri)
+                    || testResourceIds.contains(normalizeUriForMatch(uri))
+                    || testTypeClasses.contains(normalizeUriForMatch(uri));
+        }
+
+        private boolean isTestLinkPredicate(String uri, String localName) {
+            String normalizedUri = normalizeUriForMatch(uri);
+            return testLinkPredicates.contains(uri)
+                    || testLinkPredicates.contains(normalizedUri)
+                    || isLikelyNeedPredicate(localName);
+        }
     }
 
     private record FileStats(
