@@ -5,10 +5,8 @@ import java.awt.CardLayout;
 import java.awt.FileDialog;
 import java.awt.FlowLayout;
 import java.awt.Frame;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import javax.swing.BorderFactory;
@@ -27,7 +25,6 @@ import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
-import javax.xml.parsers.DocumentBuilderFactory;
 import org.filteredpush.bdq_workbench.execution.ParallelPhaseExecutionService;
 import org.filteredpush.bdq_workbench.execution.ReflectionExecutionAdapter;
 import org.filteredpush.bdq_workbench.ingest.DefaultIngestService;
@@ -35,19 +32,18 @@ import org.filteredpush.bdq_workbench.model.ExecutionPlan;
 import org.filteredpush.bdq_workbench.model.ExecutionSummary;
 import org.filteredpush.bdq_workbench.model.UseCase;
 import org.filteredpush.bdq_workbench.rdf_policy.RdfPolicyResolverService;
+import org.filteredpush.bdq_workbench.rdf_policy.UseCaseXmlParser;
 import org.filteredpush.bdq_workbench.reporting.ReportingService;
 import org.filteredpush.bdq_workbench.reporting.SummaryReportExporter;
 import org.filteredpush.bdq_workbench.reporting.XlsCompatibilityExporter;
 import org.filteredpush.bdq_workbench.test_discovery.ClasspathAnnotationTestDiscoveryService;
 import org.filteredpush.bdq_workbench.test_discovery.DefaultTestBindingService;
 import org.filteredpush.bdq_workbench.test_discovery.TestBindingResult;
-import org.w3c.dom.Element;
-import org.w3c.dom.NodeList;
 
 /** Desktop launcher for collecting startup parameters and monitoring execution progress. */
 final class BdqWorkbenchGui {
 
-    private static final String DEFAULT_USECASE_SOURCE = "https://bdq.tdwg.org/draft/dist/bdqdim.xml";
+    private static final String DEFAULT_USECASE_SOURCE = "https://bdq.tdwg.org/draft/dist/bdquc.xml";
     private static final String DEFAULT_TEST_DEFINITIONS_SOURCE = "https://bdq.tdwg.org/draft/dist/bdqtest.ttl";
     private static final String DEFAULT_ONTOLOGY_SOURCE = "https://bdq.tdwg.org/draft/vocabulary/bdqffdq.ttl";
 
@@ -114,6 +110,12 @@ final class BdqWorkbenchGui {
 
         JComboBox<UseCaseChoice> useCaseChoice = new JComboBox<>();
         addComboRow(form, "Use case", useCaseChoice);
+        JTextArea useCaseLoadStatus = new JTextArea(3, 40);
+        useCaseLoadStatus.setEditable(false);
+        useCaseLoadStatus.setLineWrap(true);
+        useCaseLoadStatus.setWrapStyleWord(true);
+        useCaseLoadStatus.setBorder(BorderFactory.createEtchedBorder());
+        form.add(useCaseLoadStatus);
 
         JButton toggleAdvanced = new JButton("Show Advanced Options");
         JPanel toggleRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
@@ -145,7 +147,6 @@ final class BdqWorkbenchGui {
 
         JCheckBox runWithAvailableOnly = new JCheckBox("Continue when some tests are unresolved", true);
         advanced.add(runWithAvailableOnly);
-
         setupPanel.add(form, BorderLayout.NORTH);
 
         JTextArea setupInfo = new JTextArea();
@@ -182,14 +183,14 @@ final class BdqWorkbenchGui {
                 useCaseSource.getText().trim(),
                 resolver,
                 useCaseChoice,
-                statusArea,
+                useCaseLoadStatus,
                 defaults.useCaseId()));
 
         pickUseCaseFile.addActionListener(e -> {
             String selected = chooseFile(frame, "Select use case XML");
             if (selected != null) {
                 useCaseSource.setText(selected);
-                loadUseCasesIntoCombo(selected, resolver, useCaseChoice, statusArea, defaults.useCaseId());
+                loadUseCasesIntoCombo(selected, resolver, useCaseChoice, useCaseLoadStatus, defaults.useCaseId());
             }
         });
 
@@ -300,7 +301,7 @@ final class BdqWorkbenchGui {
                 useCaseSource.getText().trim(),
                 resolver,
                 useCaseChoice,
-                statusArea,
+                useCaseLoadStatus,
                 defaults.useCaseId());
 
         return frame;
@@ -328,7 +329,7 @@ final class BdqWorkbenchGui {
             CachedResourceResolver resolver,
             AppConfig defaults) {
 
-        Path useCaseXml = resolver.resolve(useCaseSource, "bdqdim.xml");
+        Path useCaseXml = resolver.resolve(useCaseSource, "bdquc.xml");
         Path defaultTestDefinitions = resolver.resolve(DEFAULT_TEST_DEFINITIONS_SOURCE, "bdqtest.ttl");
         Path ontology = resolver.resolve(ontologySource, "bdqffdq.ttl");
 
@@ -374,6 +375,9 @@ final class BdqWorkbenchGui {
 
         StringBuilder sb = new StringBuilder();
         sb.append("Use case preflight mapping\n");
+        sb.append("Selected use case: ").append(state.plan().useCase().id()).append(" (")
+                .append(state.plan().useCase().label()).append(")\n");
+        sb.append("Selected policy: ").append(state.plan().useCase().policyId()).append('\n');
         sb.append("Policy tests total: ").append(policyTotal).append('\n');
         sb.append("Policy tests resolved from definitions: ").append(policyResolved).append('\n');
         sb.append("Policy tests unresolved in definitions: ").append(policyUnresolved).append('\n');
@@ -401,12 +405,12 @@ final class BdqWorkbenchGui {
             String source,
             CachedResourceResolver resolver,
             JComboBox<UseCaseChoice> combo,
-            JTextArea status,
+            JTextArea loadStatus,
             String defaultUseCaseId) {
         combo.removeAllItems();
         try {
-            Path useCaseXml = resolver.resolve(source, "bdqdim.xml");
-            List<UseCase> useCases = loadUseCases(useCaseXml);
+            Path useCaseXml = resolver.resolve(source, "bdquc.xml");
+            List<UseCase> useCases = UseCaseXmlParser.loadUseCases(useCaseXml).values().stream().toList();
             if (useCases.isEmpty()) {
                 throw new AppException("No use cases found in " + useCaseXml);
             }
@@ -421,33 +425,9 @@ final class BdqWorkbenchGui {
             if (defaultChoice != null) {
                 combo.setSelectedItem(defaultChoice);
             }
-            status.setText("Loaded " + useCases.size() + " use cases from " + useCaseXml + "\n");
+            loadStatus.setText("Loaded " + useCases.size() + " use cases from " + useCaseXml);
         } catch (Exception e) {
-            status.setText("Unable to load use cases: " + e.getMessage() + "\n");
-        }
-    }
-
-    private static List<UseCase> loadUseCases(Path xmlPath) {
-        if (Files.notExists(xmlPath)) {
-            throw new AppException("Use case file not found: " + xmlPath);
-        }
-        try {
-            var builderFactory = DocumentBuilderFactory.newInstance();
-            var doc = builderFactory.newDocumentBuilder().parse(xmlPath.toFile());
-            NodeList useCaseNodes = doc.getElementsByTagName("usecase");
-            Map<String, UseCase> result = new LinkedHashMap<>();
-            for (int i = 0; i < useCaseNodes.getLength(); i++) {
-                Element e = (Element) useCaseNodes.item(i);
-                String id = e.getAttribute("id");
-                String label = e.getAttribute("name");
-                String policy = e.getAttribute("policy");
-                if (!id.isBlank() && !policy.isBlank()) {
-                    result.put(id, new UseCase(id, label.isBlank() ? id : label, policy));
-                }
-            }
-            return result.values().stream().toList();
-        } catch (Exception e) {
-            throw new AppException("Unable to parse use cases from " + xmlPath, e);
+            loadStatus.setText("Unable to load use cases: " + e.getMessage());
         }
     }
 

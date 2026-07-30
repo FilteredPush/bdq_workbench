@@ -4,10 +4,8 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import javax.xml.parsers.DocumentBuilderFactory;
 import org.apache.jena.rdf.model.Model;
 import org.apache.jena.rdf.model.ModelFactory;
 import org.apache.jena.rdf.model.Resource;
@@ -18,9 +16,6 @@ import org.filteredpush.bdq_workbench.model.Phase;
 import org.filteredpush.bdq_workbench.model.Policy;
 import org.filteredpush.bdq_workbench.model.TestDefinition;
 import org.filteredpush.bdq_workbench.model.UseCase;
-import org.w3c.dom.Document;
-import org.w3c.dom.Element;
-import org.w3c.dom.NodeList;
 
 /** Loads bdquc and BDQ RDF definitions and resolves linked tests for use cases. */
 public class RdfPolicyResolverService implements PolicyResolverService {
@@ -34,7 +29,7 @@ public class RdfPolicyResolverService implements PolicyResolverService {
 
     @Override
     public ExecutionPlan resolve(String selectedUseCaseId) {
-        Map<String, UseCase> useCases = loadUseCases(useCaseXmlPath);
+        Map<String, UseCase> useCases = UseCaseXmlParser.loadUseCases(useCaseXmlPath);
         UseCase useCase = selectUseCase(useCases, selectedUseCaseId);
         Model rdf = loadRdf(rdfFiles);
 
@@ -127,26 +122,4 @@ public class RdfPolicyResolverService implements PolicyResolverService {
         return model;
     }
 
-    private static Map<String, UseCase> loadUseCases(Path xmlPath) {
-        if (!Files.exists(xmlPath)) {
-            throw new AppException("Use case file not found: " + xmlPath);
-        }
-        try {
-            Document doc = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(xmlPath.toFile());
-            NodeList useCaseNodes = doc.getElementsByTagName("usecase");
-            Map<String, UseCase> result = new LinkedHashMap<>();
-            for (int i = 0; i < useCaseNodes.getLength(); i++) {
-                Element e = (Element) useCaseNodes.item(i);
-                String id = e.getAttribute("id");
-                String label = e.getAttribute("name");
-                String policy = e.getAttribute("policy");
-                if (!id.isBlank() && !policy.isBlank()) {
-                    result.put(id, new UseCase(id, label.isBlank() ? id : label, policy));
-                }
-            }
-            return result;
-        } catch (Exception e) {
-            throw new AppException("Unable to parse use cases from " + xmlPath, e);
-        }
-    }
 }

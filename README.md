@@ -24,7 +24,7 @@ java -jar target/bdq_workbench-0.1.0-SNAPSHOT.jar
 Launching the jar without options opens a desktop GUI for entering parameters and monitoring execution.
 The startup screen includes a dataset file picker, use-case selection, and advanced options for custom use-case/test-definition/ontology sources, discovery packages, and threads. By default the GUI caches:
 
-- `https://bdq.tdwg.org/draft/dist/bdqdim.xml` (use cases)
+- `https://bdq.tdwg.org/draft/dist/bdquc.xml` (use cases)
 - `https://bdq.tdwg.org/draft/dist/bdqtest.ttl` (test definitions)
 - `https://bdq.tdwg.org/draft/vocabulary/bdqffdq.ttl` (ontology)
 
