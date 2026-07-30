@@ -10,9 +10,12 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.util.Locale;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** Resolves local/remote resources and caches downloaded remote files for reuse. */
 final class CachedResourceResolver {
+    private static final Logger LOG = LoggerFactory.getLogger(CachedResourceResolver.class);
 
     private final Path cacheDir;
     private final HttpClient httpClient;
@@ -39,6 +42,7 @@ final class CachedResourceResolver {
             if (Files.notExists(local)) {
                 throw new AppException("Resource not found: " + local);
             }
+            LOG.debug("Using local resource: {}", local.toAbsolutePath());
             return local;
         }
         return resolveRemote(trimmed, cacheFileName);
@@ -49,8 +53,10 @@ final class CachedResourceResolver {
             Files.createDirectories(cacheDir);
             Path cached = cacheDir.resolve(cacheFileName);
             if (Files.exists(cached) && Files.size(cached) > 0L) {
+                LOG.debug("Using cached remote resource: {} -> {}", url, cached.toAbsolutePath());
                 return cached;
             }
+            LOG.debug("Downloading remote resource: {}", url);
             HttpRequest request = HttpRequest.newBuilder(URI.create(url))
                     .GET()
                     .timeout(Duration.ofSeconds(60))
@@ -62,6 +68,7 @@ final class CachedResourceResolver {
             Path temp = Files.createTempFile(cacheDir, "bdq-", ".tmp");
             Files.write(temp, response.body());
             Files.move(temp, cached, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            LOG.debug("Cached remote resource: {} -> {}", url, cached.toAbsolutePath());
             return cached;
         } catch (IOException e) {
             throw new AppException("Failed to cache resource from " + url, e);

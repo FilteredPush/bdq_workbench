@@ -20,6 +20,8 @@ import org.apache.jena.riot.RiotException;
 import org.apache.jena.vocabulary.RDFS;
 import org.filteredpush.bdq_workbench.app.AppException;
 import org.filteredpush.bdq_workbench.model.UseCase;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
@@ -27,6 +29,7 @@ import org.w3c.dom.NodeList;
 
 /** Parses use case definitions from bdquc-style RDF/XML and related RDF serializations. */
 public final class UseCaseXmlParser {
+    private static final Logger LOG = LoggerFactory.getLogger(UseCaseXmlParser.class);
     private static final String RDF_NS = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 
     private UseCaseXmlParser() {
@@ -36,10 +39,33 @@ public final class UseCaseXmlParser {
         if (Files.notExists(xmlPath)) {
             throw new AppException("Use case file not found: " + xmlPath);
         }
+        LOG.debug("Loading use cases from {}", xmlPath.toAbsolutePath());
+        boolean xmlLike = isXmlLike(xmlPath);
+        if (xmlLike) {
+            Map<String, UseCase> xmlUseCases = loadUseCasesFromXml(xmlPath);
+            if (!xmlUseCases.isEmpty()) {
+                LOG.debug("Loaded {} use cases from XML parsing: {}", xmlUseCases.size(), xmlPath);
+                return xmlUseCases;
+            }
+        }
+
         Map<String, UseCase> rdfUseCases = loadUseCasesFromRdf(xmlPath);
         if (!rdfUseCases.isEmpty()) {
+            LOG.debug("Loaded {} use cases from RDF parsing: {}", rdfUseCases.size(), xmlPath);
             return rdfUseCases;
         }
+
+        if (!xmlLike) {
+            Map<String, UseCase> xmlUseCases = loadUseCasesFromXml(xmlPath);
+            if (!xmlUseCases.isEmpty()) {
+                LOG.debug("Loaded {} use cases from XML fallback parsing: {}", xmlUseCases.size(), xmlPath);
+                return xmlUseCases;
+            }
+        }
+        return Map.of();
+    }
+
+    private static Map<String, UseCase> loadUseCasesFromXml(Path xmlPath) {
         try {
             DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
             factory.setNamespaceAware(true);
@@ -52,7 +78,7 @@ public final class UseCaseXmlParser {
                 if (!(node instanceof Element element)) {
                     continue;
                 }
-                if (!isUseCaseElement(element)) {
+                if (!(isUseCaseElement(element) || isTypedUseCaseElement(element))) {
                     continue;
                 }
                 String policy = extractPolicy(element);
@@ -67,20 +93,21 @@ public final class UseCaseXmlParser {
                         getAttributeAny(element, "name", "label", "title"),
                         childValue(element, Set.of("name", "label", "title")),
                         id);
-
                 result.putIfAbsent(id, new UseCase(id, label, policy));
             }
             return result;
         } catch (Exception e) {
-            throw new AppException("Unable to parse use cases from " + xmlPath, e);
+            return Map.of();
         }
     }
 
     private static Map<String, UseCase> loadUseCasesFromRdf(Path rdfPath) {
         Model model;
         try {
+            LOG.debug("Attempting RDF parse for use cases: {}", rdfPath.toAbsolutePath());
             model = readModel(rdfPath);
         } catch (AppException e) {
+            LOG.debug("RDF parse failed for {}: {}", rdfPath, e.getMessage());
             return Map.of();
         }
 
@@ -131,13 +158,13 @@ public final class UseCaseXmlParser {
     private static List<Lang> orderedLangCandidates(Path path) {
         String name = path.getFileName().toString().toLowerCase(Locale.ROOT);
         if (name.endsWith(".xml") || name.endsWith(".rdf") || name.endsWith(".owl")) {
-            return List.of(Lang.RDFXML, Lang.TURTLE, Lang.JSONLD);
+            return List.of(Lang.RDFXML);
         }
         if (name.endsWith(".ttl")) {
-            return List.of(Lang.TURTLE, Lang.RDFXML, Lang.JSONLD);
+            return List.of(Lang.TURTLE);
         }
         if (name.endsWith(".jsonld") || name.endsWith(".json")) {
-            return List.of(Lang.JSONLD, Lang.TURTLE, Lang.RDFXML);
+            return List.of(Lang.JSONLD);
         }
         return List.of(Lang.RDFXML, Lang.TURTLE, Lang.JSONLD);
     }
@@ -176,15 +203,22 @@ public final class UseCaseXmlParser {
             String predicate = normalizedName(statement.getPredicate().getLocalName() == null
                     ? statement.getPredicate().getURI()
                     : statement.getPredicate().getLocalName());
-            if (!(predicate.contains("policy") || predicate.contains("profile"))) {
-                continue;
-            }
             if (statement.getObject().isResource()) {
                 Resource object = statement.getResource();
-                return object.getURI() == null ? object.toString() : object.getURI();
+                String objectId = object.getURI() == null ? object.toString() : object.getURI();
+                if (predicate.contains("policy") || predicate.contains("profile")
+                        || normalizedName(objectId).contains("policy")
+                        || normalizedName(objectId).contains("profile")) {
+                    return objectId;
+                }
             }
             if (statement.getObject().isLiteral()) {
-                return statement.getString().trim();
+                String literal = statement.getString().trim();
+                if (predicate.contains("policy") || predicate.contains("profile")
+                        || normalizedName(literal).contains("policy")
+                        || normalizedName(literal).contains("profile")) {
+                    return literal;
+                }
             }
         }
         return "";
@@ -205,7 +239,8 @@ public final class UseCaseXmlParser {
     private static String extractPolicy(Element element) {
         return firstNonBlank(
                 getAttributeAny(element, "policy", "profile", "qualityprofile", "policyid", "policyref"),
-                childResourceOrText(element, Set.of("policy", "profile", "qualityprofile")));
+                childResourceOrText(element, Set.of("policy", "profile", "qualityprofile")),
+                firstResourceByObjectHint(element));
     }
 
     private static String childResourceOrText(Element parent, Set<String> targetNames) {
@@ -227,6 +262,49 @@ public final class UseCaseXmlParser {
             String text = child.getTextContent();
             if (text != null && !text.isBlank()) {
                 return text.trim();
+            }
+        }
+        return "";
+    }
+
+    private static boolean isTypedUseCaseElement(Element element) {
+        NodeList descendants = element.getElementsByTagName("*");
+        for (int i = 0; i < descendants.getLength(); i++) {
+            Node node = descendants.item(i);
+            if (!(node instanceof Element child)) {
+                continue;
+            }
+            String local = normalizedLocalName(child);
+            if (!"type".equals(local)) {
+                continue;
+            }
+            String resource = firstNonBlank(
+                    child.getAttributeNS(RDF_NS, "resource"),
+                    getAttributeAny(child, "resource", "about", "uri", "href"),
+                    child.getTextContent());
+            if (isUseCaseToken(resource)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String firstResourceByObjectHint(Element parent) {
+        NodeList descendants = parent.getElementsByTagName("*");
+        for (int i = 0; i < descendants.getLength(); i++) {
+            Node node = descendants.item(i);
+            if (!(node instanceof Element child)) {
+                continue;
+            }
+            String resource = firstNonBlank(
+                    child.getAttributeNS(RDF_NS, "resource"),
+                    getAttributeAny(child, "resource", "about", "uri", "href"));
+            if (resource.isBlank()) {
+                continue;
+            }
+            String normalized = normalizedName(resource);
+            if (normalized.contains("policy") || normalized.contains("profile")) {
+                return resource;
             }
         }
         return "";
@@ -286,8 +364,16 @@ public final class UseCaseXmlParser {
     }
 
     private static String normalizedName(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return "";
+        }
         String lower = raw.toLowerCase(Locale.ROOT);
         int colon = lower.indexOf(':');
         return colon >= 0 ? lower.substring(colon + 1) : lower;
+    }
+
+    private static boolean isXmlLike(Path path) {
+        String name = path.getFileName().toString().toLowerCase(Locale.ROOT);
+        return name.endsWith(".xml") || name.endsWith(".rdf") || name.endsWith(".owl");
     }
 }

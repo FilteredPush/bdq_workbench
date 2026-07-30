@@ -58,7 +58,7 @@ class UseCaseXmlParserTest {
                   <rdf:Description rdf:about="https://example.org/usecase/uc3">
                     <rdf:type rdf:resource="https://example.org/ontology#UseCase"/>
                     <rdfs:label>Use Case Three</rdfs:label>
-                    <bdq:hasQualityProfile rdf:resource="https://example.org/policy/p3"/>
+                    <bdq:mapsTo rdf:resource="https://example.org/policy/p3"/>
                   </rdf:Description>
                 </rdf:RDF>
                 """, StandardCharsets.UTF_8);

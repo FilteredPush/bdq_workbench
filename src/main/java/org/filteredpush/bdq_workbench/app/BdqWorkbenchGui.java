@@ -39,9 +39,12 @@ import org.filteredpush.bdq_workbench.reporting.XlsCompatibilityExporter;
 import org.filteredpush.bdq_workbench.test_discovery.ClasspathAnnotationTestDiscoveryService;
 import org.filteredpush.bdq_workbench.test_discovery.DefaultTestBindingService;
 import org.filteredpush.bdq_workbench.test_discovery.TestBindingResult;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** Desktop launcher for collecting startup parameters and monitoring execution progress. */
 final class BdqWorkbenchGui {
+    private static final Logger LOG = LoggerFactory.getLogger(BdqWorkbenchGui.class);
 
     private static final String DEFAULT_USECASE_SOURCE = "https://bdq.tdwg.org/draft/dist/bdquc.xml";
     private static final String DEFAULT_TEST_DEFINITIONS_SOURCE = "https://bdq.tdwg.org/draft/dist/bdqtest.ttl";
@@ -51,12 +54,15 @@ final class BdqWorkbenchGui {
     }
 
     static void launch() {
+        LOG.debug("Scheduling BDQ Workbench GUI startup");
         SwingUtilities.invokeLater(() -> {
             try {
                 ConfigLoader loader = new ConfigLoader();
                 AppConfig defaults = loader.load(Map.of());
                 createFrame(defaults).setVisible(true);
+                LOG.info("BDQ Workbench GUI started");
             } catch (Exception e) {
+                LOG.error("Unable to start BDQ Workbench GUI", e);
                 JOptionPane.showMessageDialog(
                         null,
                         "Unable to start BDQ Workbench GUI: " + e.getMessage(),
@@ -213,6 +219,7 @@ final class BdqWorkbenchGui {
             SwingWorker<PreflightState, Void> preflight = new SwingWorker<>() {
                 @Override
                 protected PreflightState doInBackground() {
+                    LOG.debug("Preparing preflight mapping");
                     AppConfig config = buildConfig(
                             dataset.field().getText().trim(),
                             selectedUseCaseId(useCaseChoice),
@@ -238,6 +245,9 @@ final class BdqWorkbenchGui {
                 protected void done() {
                     try {
                         state[0] = get();
+                        LOG.debug("Preflight mapping complete: {} runnable, {} unresolved",
+                                state[0].binding().bindings().size(),
+                                state[0].binding().unresolved().size());
                         statusArea.setText(renderPreflightMessage(state[0]));
                         boolean complete = state[0].isFullyResolved();
                         if (!complete && !runWithAvailableOnly.isSelected()) {
@@ -249,6 +259,7 @@ final class BdqWorkbenchGui {
                         }
                     } catch (Exception ex) {
                         Throwable cause = ex.getCause() == null ? ex : ex.getCause();
+                        LOG.error("Preflight mapping failed", cause);
                         statusArea.setText("Failed to prepare run: " + cause.getMessage() + "\n");
                         startRun.setEnabled(false);
                     } finally {
@@ -272,6 +283,7 @@ final class BdqWorkbenchGui {
             SwingWorker<ExecutionSummary, Void> worker = new SwingWorker<>() {
                 @Override
                 protected ExecutionSummary doInBackground() {
+                    LOG.info("Starting BDQ Workbench execution");
                     return runWorkbench(state[0].config());
                 }
 
@@ -279,9 +291,11 @@ final class BdqWorkbenchGui {
                 protected void done() {
                     try {
                         ExecutionSummary summary = get();
+                        LOG.info("BDQ Workbench execution complete: {} outcomes", summary.responses().size());
                         statusArea.append("Completed: " + summary.responses().size() + " outcomes\n");
                     } catch (Exception ex) {
                         Throwable cause = ex.getCause() == null ? ex : ex.getCause();
+                        LOG.error("BDQ Workbench execution failed", cause);
                         statusArea.append("Failed: " + cause.getMessage() + "\n");
                         JOptionPane.showMessageDialog(
                                 frame,
@@ -411,6 +425,7 @@ final class BdqWorkbenchGui {
             String defaultUseCaseId) {
         combo.removeAllItems();
         try {
+            LOG.debug("Loading use cases from source: {}", source);
             Path useCaseXml = resolver.resolve(source, cacheNameFor(source));
             List<UseCase> useCases = UseCaseXmlParser.loadUseCases(useCaseXml).values().stream().toList();
             if (useCases.isEmpty()) {
@@ -427,8 +442,10 @@ final class BdqWorkbenchGui {
             if (defaultChoice != null) {
                 combo.setSelectedItem(defaultChoice);
             }
+            LOG.info("Loaded {} use cases from {}", useCases.size(), useCaseXml);
             loadStatus.setText("Loaded " + useCases.size() + " use cases from " + useCaseXml);
         } catch (Exception e) {
+            LOG.error("Unable to load use cases from {}", source, e);
             loadStatus.setText("Unable to load use cases: " + e.getMessage());
         }
     }
@@ -473,6 +490,7 @@ final class BdqWorkbenchGui {
     }
 
     private static void exitApplication(JFrame frame) {
+        LOG.info("Shutting down BDQ Workbench GUI");
         frame.dispose();
         System.exit(0);
     }

@@ -20,9 +20,12 @@ import org.filteredpush.bdq_workbench.model.Phase;
 import org.filteredpush.bdq_workbench.model.Policy;
 import org.filteredpush.bdq_workbench.model.TestDefinition;
 import org.filteredpush.bdq_workbench.model.UseCase;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** Loads bdquc and BDQ RDF definitions and resolves linked tests for use cases. */
 public class RdfPolicyResolverService implements PolicyResolverService {
+    private static final Logger LOG = LoggerFactory.getLogger(RdfPolicyResolverService.class);
     private final Path useCaseXmlPath;
     private final List<Path> rdfFiles;
 
@@ -33,6 +36,7 @@ public class RdfPolicyResolverService implements PolicyResolverService {
 
     @Override
     public ExecutionPlan resolve(String selectedUseCaseId) {
+        LOG.debug("Resolving policy from use case source: {}", useCaseXmlPath.toAbsolutePath());
         Map<String, UseCase> useCases = UseCaseXmlParser.loadUseCases(useCaseXmlPath);
         UseCase useCase = selectUseCase(useCases, selectedUseCaseId);
         Model rdf = loadRdf(rdfFiles);
@@ -117,8 +121,10 @@ public class RdfPolicyResolverService implements PolicyResolverService {
         Model model = ModelFactory.createDefaultModel();
         for (Path path : paths) {
             if (!Files.exists(path)) {
+                LOG.debug("Skipping missing RDF definitions file: {}", path);
                 continue;
             }
+            LOG.debug("Loading RDF definitions from {}", path.toAbsolutePath());
             readIntoModel(path, model);
         }
         return model;
@@ -130,6 +136,7 @@ public class RdfPolicyResolverService implements PolicyResolverService {
         IOException lastIo = null;
         for (Lang lang : languages) {
             try (InputStream in = Files.newInputStream(path)) {
+                LOG.debug("Parsing RDF definitions file {} as {}", path.toAbsolutePath(), lang.getName());
                 RDFParser.source(in)
                         .base(path.toUri().toString())
                         .lang(lang)

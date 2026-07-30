@@ -38,10 +38,12 @@ public final class BdqWorkbenchApplication {
     static int run(String[] args, PrintStream out, PrintStream err) {
         try {
             if (args.length == 0 && !GraphicsEnvironment.isHeadless()) {
+                LOG.info("Starting BDQ Workbench GUI");
                 BdqWorkbenchGui.launch();
                 return 0;
             }
             if (wantsHelp(args)) {
+                LOG.debug("Rendering CLI help");
                 renderUsage(out);
                 return 0;
             }
@@ -53,6 +55,7 @@ public final class BdqWorkbenchApplication {
             }
             AppConfig config = new ConfigLoader().load(parseResult.overrides());
             validateStartupConfig(config);
+            LOG.info("Starting BDQ Workbench CLI run with dataset {}", config.datasetPath());
             ExecutionSummary summary = execute(config);
             render(summary, out);
             return 0;
