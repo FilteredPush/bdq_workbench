@@ -170,6 +170,7 @@ public class RdfPolicyResolverService implements PolicyResolverService {
     private static boolean isTestPredicate(String localName) {
         String normalized = normalizeName(localName);
         return normalized.contains("test")
+                || normalized.contains("validation")
                 || normalized.contains("measurement")
                 || normalized.contains("measure");
     }
@@ -299,6 +300,7 @@ public class RdfPolicyResolverService implements PolicyResolverService {
         }
         if (tests.isEmpty()) {
             tests.addAll(findTypedResources(model, "validation", "test", "measure"));
+            tests.addAll(findSubClassResources(model, "dataqualityneed", "validation", "test", "measure"));
         }
 
         if (!testsPerPolicy.isEmpty()) {
@@ -320,6 +322,27 @@ public class RdfPolicyResolverService implements PolicyResolverService {
             String normalizedType = normalizeUriForMatch(typeId);
             for (String token : typeTokens) {
                 if (normalizedType.contains(token.toLowerCase(Locale.ROOT))) {
+                    matches.add(resourceUri(statement.getSubject()));
+                    break;
+                }
+            }
+        }
+        return matches;
+    }
+
+    private static Set<String> findSubClassResources(Model model, String... typeTokens) {
+        Set<String> matches = new HashSet<>();
+        String subClassOf = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
+        var statements = model.listStatements(null, model.createProperty(subClassOf), (RDFNode) null);
+        while (statements.hasNext()) {
+            var statement = statements.nextStatement();
+            if (!statement.getSubject().isResource() || !statement.getObject().isResource()) {
+                continue;
+            }
+            String parentId = resourceUri(statement.getResource());
+            String normalizedParent = normalizeUriForMatch(parentId);
+            for (String token : typeTokens) {
+                if (normalizedParent.contains(token.toLowerCase(Locale.ROOT))) {
                     matches.add(resourceUri(statement.getSubject()));
                     break;
                 }

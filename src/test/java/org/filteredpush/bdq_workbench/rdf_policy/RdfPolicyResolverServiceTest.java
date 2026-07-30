@@ -134,4 +134,41 @@ class RdfPolicyResolverServiceTest {
         assertThat(plan.tests().stream().map(test -> test.id()).toList())
                 .containsExactlyInAnyOrder("https://example.org/testSingle", "https://example.org/testMeasure");
     }
+
+    @Test
+    void resolvesTestsFromValidationPolicyLinksAndDataQualityNeedSubclassTests() throws Exception {
+        Path useCaseFile = tempDir.resolve("bdquc.xml");
+        Files.writeString(useCaseFile, """
+                <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+                         xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+                         xmlns:dcterms="http://purl.org/dc/terms/">
+                  <rdf:Description rdf:about="https://rs.tdwg.org/bdquc/terms/version/Spatial-Temporal_Patterns-2026-04-22">
+                    <rdf:type rdf:resource="https://rs.tdwg.org/bdqffdq/terms/UseCase"/>
+                    <rdfs:label>Spatial-Temporal Patterns</rdfs:label>
+                    <dcterms:isVersionOf rdf:resource="https://rs.tdwg.org/bdquc/terms/Spatial-Temporal_Patterns"/>
+                  </rdf:Description>
+                </rdf:RDF>
+                """, StandardCharsets.UTF_8);
+
+        Path definitions = tempDir.resolve("bdqtest.ttl");
+        Files.writeString(definitions, """
+                @prefix bdqffdq: <https://rs.tdwg.org/bdqffdq/terms/> .
+                @prefix ex: <https://example.org/> .
+                @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+                ex:policy1 a bdqffdq:ValidationPolicy ;
+                    bdqffdq:hasUseCase <https://rs.tdwg.org/bdquc/terms/Spatial-Temporal_Patterns> ;
+                    bdqffdq:hasValidation ex:testValidation .
+
+                ex:testValidation rdfs:subClassOf bdqffdq:DataQualityNeed ;
+                    rdfs:label "TEST_VALIDATION" .
+                """, StandardCharsets.UTF_8);
+
+        RdfPolicyResolverService service = new RdfPolicyResolverService(useCaseFile, List.of(definitions));
+        var plan = service.resolve("https://rs.tdwg.org/bdquc/terms/version/Spatial-Temporal_Patterns-2026-04-22");
+
+        assertThat(plan.policy().testIds()).containsExactly("https://example.org/testValidation");
+        assertThat(plan.tests()).hasSize(1);
+        assertThat(plan.tests().get(0).id()).isEqualTo("https://example.org/testValidation");
+    }
 }
