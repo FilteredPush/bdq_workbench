@@ -5,6 +5,7 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -66,11 +67,40 @@ public class RdfPolicyResolverService implements PolicyResolverService {
                 unresolved);
     }
 
+    public static RdfDefinitionSummary summarizeDefinitionSources(List<Path> paths) {
+        List<RdfDefinitionFileSummary> files = new ArrayList<>();
+        Set<String> allUseCases = new LinkedHashSet<>();
+        Set<String> allPolicies = new LinkedHashSet<>();
+        Set<String> allTests = new LinkedHashSet<>();
+
+        for (Path path : paths) {
+            if (!Files.exists(path)) {
+                continue;
+            }
+            Model parsed = readIntoModel(path);
+            FileStats stats = collectFileStats(parsed);
+            files.add(new RdfDefinitionFileSummary(
+                    path,
+                    stats.useCaseCount(),
+                    stats.policyCount(),
+                    stats.testCount()));
+            allUseCases.addAll(stats.useCaseIds());
+            allPolicies.addAll(stats.policyIds());
+            allTests.addAll(stats.testIds());
+        }
+        return new RdfDefinitionSummary(
+                List.copyOf(files),
+                allUseCases.size(),
+                allPolicies.size(),
+                allTests.size());
+    }
+
     private static PolicyResolution resolveLinkedTests(Model model, UseCase useCase) {
         Set<String> useCaseIds = candidateUseCaseIds(useCase);
         Set<String> matchedPolicyIds = new LinkedHashSet<>();
         Set<String> matchedTestIds = new LinkedHashSet<>();
-        Map<String, Set<String>> testsByPolicy = new LinkedHashMap<>();
+        Map<String, PolicyTestExtraction> extractionByPolicy = new LinkedHashMap<>();
+        Set<String> globalTestCandidates = collectAllTestCandidates(model);
 
         var statements = model.listStatements();
         while (statements.hasNext()) {
@@ -87,23 +117,39 @@ public class RdfPolicyResolverService implements PolicyResolverService {
             }
             String policyId = resourceUri(statement.getSubject());
             matchedPolicyIds.add(policyId);
-            Set<String> policyTests = new LinkedHashSet<>(collectLinkedTests(statement.getSubject(), model));
-            testsByPolicy.putIfAbsent(policyId, policyTests);
-            matchedTestIds.addAll(policyTests);
+            PolicyTestExtraction extraction = collectLinkedTests(statement.getSubject(), model, globalTestCandidates);
+            extractionByPolicy.putIfAbsent(policyId, extraction);
+            matchedTestIds.addAll(extraction.testIds());
         }
 
         for (String useCaseId : useCaseIds) {
-            matchedTestIds.addAll(collectLinkedTests(model.getResource(useCaseId), model));
+            matchedTestIds.addAll(collectLinkedTests(model.getResource(useCaseId), model, globalTestCandidates).testIds());
         }
 
-        testsByPolicy.forEach((policyId, testIds) -> LOG.debug(
-                "Matched policy {} with {} linked tests{}",
+        extractionByPolicy.forEach((policyId, extraction) -> LOG.info(
+                "Matched policy {} with {} linked tests{} using predicates {}",
                 policyId,
-                testIds.size(),
-                testIds.isEmpty() ? "" : ": " + testIds));
-        LOG.debug("Resolved {} policies and {} tests for use case {} (candidates: {})",
+                extraction.testIds().size(),
+                extraction.testIds().isEmpty() ? "" : ": " + extraction.testIds(),
+                extraction.predicates().isEmpty() ? "[]" : extraction.predicates()));
+        if (matchedPolicyIds.isEmpty()) {
+            LOG.warn("No policies matched selected use case {} (candidates: {})", useCase.id(), useCaseIds);
+        } else if (matchedTestIds.isEmpty()) {
+            LOG.warn(
+                    "Policies matched for use case {}, but no tests were linked. Candidate tests seen in RDF: {}",
+                    useCase.id(),
+                    globalTestCandidates.size());
+        }
+        LOG.info("Resolved {} policies and {} tests for use case {} (candidates: {})",
                 matchedPolicyIds.size(), matchedTestIds.size(), useCase.id(), useCaseIds);
         return new PolicyResolution(List.copyOf(matchedPolicyIds), List.copyOf(matchedTestIds));
+    }
+
+    private static Set<String> collectAllTestCandidates(Model model) {
+        Set<String> tests = new LinkedHashSet<>();
+        tests.addAll(findTypedResources(model, "validation", "test", "measure", "dataqualityneed"));
+        tests.addAll(findSubClassResources(model, "dataqualityneed", "validation", "test", "measure"));
+        return tests;
     }
 
     private static Set<String> candidateUseCaseIds(UseCase useCase) {
@@ -172,7 +218,9 @@ public class RdfPolicyResolverService implements PolicyResolverService {
         return normalized.contains("test")
                 || normalized.contains("validation")
                 || normalized.contains("measurement")
-                || normalized.contains("measure");
+                || normalized.contains("measure")
+                || normalized.contains("dataqualityneed")
+                || normalized.endsWith("need");
     }
 
     private static String normalizeName(String localName) {
@@ -186,23 +234,32 @@ public class RdfPolicyResolverService implements PolicyResolverService {
         return resource.getURI() == null ? resource.toString() : resource.getURI();
     }
 
-    private static List<String> collectLinkedTests(Resource subject, Model model) {
+    private static PolicyTestExtraction collectLinkedTests(Resource subject, Model model, Set<String> globalTestCandidates) {
         Set<String> testIds = new LinkedHashSet<>();
+        Set<String> predicateNames = new LinkedHashSet<>();
         if (subject == null) {
-            return List.of();
+            return new PolicyTestExtraction(List.of(), List.of());
         }
         var properties = model.listStatements(subject, null, (org.apache.jena.rdf.model.RDFNode) null);
         while (properties.hasNext()) {
             var property = properties.nextStatement();
-            if (!isTestPredicate(property.getPredicate().getLocalName()) || !property.getObject().isResource()) {
+            String predicateName = property.getPredicate().getLocalName();
+            if (!property.getObject().isResource()) {
                 continue;
             }
+            String objectId = resourceUri(property.getResource());
+            boolean predicateLooksLikeTest = isTestPredicate(predicateName);
+            boolean objectLooksLikeTest = globalTestCandidates.contains(objectId);
+            if (!predicateLooksLikeTest && !objectLooksLikeTest) {
+                continue;
+            }
+            predicateNames.add(predicateName == null ? property.getPredicate().getURI() : predicateName);
             String testId = resourceUri(property.getResource());
             if (!testId.isBlank()) {
                 testIds.add(testId);
             }
         }
-        return List.copyOf(testIds);
+        return new PolicyTestExtraction(List.copyOf(testIds), List.copyOf(predicateNames));
     }
 
     private static String resolveLabel(Model model, String uri) {
@@ -246,8 +303,8 @@ public class RdfPolicyResolverService implements PolicyResolverService {
             LOG.debug("Loading RDF definitions from {}", path.toAbsolutePath());
             Model parsed = readIntoModel(path);
             FileStats stats = collectFileStats(parsed);
-            LOG.info("Loaded RDF definitions file {}: {} policies, {} tests",
-                    path.toAbsolutePath(), stats.policyCount(), stats.testCount());
+            LOG.info("Loaded RDF definitions file {}: {} use cases, {} policies, {} tests",
+                    path.toAbsolutePath(), stats.useCaseCount(), stats.policyCount(), stats.testCount());
             model.add(parsed);
         }
         return model;
@@ -279,6 +336,7 @@ public class RdfPolicyResolverService implements PolicyResolverService {
     }
 
     private static FileStats collectFileStats(Model model) {
+        Set<String> useCases = new LinkedHashSet<>();
         Set<String> policies = new LinkedHashSet<>();
         Set<String> tests = new LinkedHashSet<>();
         Map<String, Integer> testsPerPolicy = new LinkedHashMap<>();
@@ -289,24 +347,36 @@ public class RdfPolicyResolverService implements PolicyResolverService {
             if (isHasUseCasePredicate(statement.getPredicate().getLocalName()) && statement.getSubject().isResource()) {
                 String policyId = resourceUri(statement.getSubject());
                 policies.add(policyId);
-                int count = collectLinkedTests(statement.getSubject(), model).size();
+                if (statement.getObject().isResource()) {
+                    useCases.add(resourceUri(statement.getResource()));
+                }
+                int count = collectLinkedTests(statement.getSubject(), model, Collections.emptySet()).testIds().size();
                 testsPerPolicy.put(policyId, count);
-                tests.addAll(collectLinkedTests(statement.getSubject(), model));
+                tests.addAll(collectLinkedTests(statement.getSubject(), model, Collections.emptySet()).testIds());
             }
         }
 
+        if (useCases.isEmpty()) {
+            useCases.addAll(findTypedResources(model, "usecase"));
+        }
         if (policies.isEmpty()) {
             policies.addAll(findTypedResources(model, "policy"));
         }
         if (tests.isEmpty()) {
-            tests.addAll(findTypedResources(model, "validation", "test", "measure"));
+            tests.addAll(findTypedResources(model, "validation", "test", "measure", "dataqualityneed"));
             tests.addAll(findSubClassResources(model, "dataqualityneed", "validation", "test", "measure"));
         }
 
         if (!testsPerPolicy.isEmpty()) {
             LOG.debug("Policy-to-test counts in current RDF file: {}", testsPerPolicy);
         }
-        return new FileStats(policies.size(), tests.size());
+        return new FileStats(
+                useCases.size(),
+                policies.size(),
+                tests.size(),
+                Set.copyOf(useCases),
+                Set.copyOf(policies),
+                Set.copyOf(tests));
     }
 
     private static Set<String> findTypedResources(Model model, String... typeTokens) {
@@ -371,7 +441,30 @@ public class RdfPolicyResolverService implements PolicyResolverService {
         }
     }
 
-    private record FileStats(int policyCount, int testCount) {
+    private record PolicyTestExtraction(List<String> testIds, List<String> predicates) {
+    }
+
+    private record FileStats(
+            int useCaseCount,
+            int policyCount,
+            int testCount,
+            Set<String> useCaseIds,
+            Set<String> policyIds,
+            Set<String> testIds) {
+    }
+
+    public record RdfDefinitionSummary(
+            List<RdfDefinitionFileSummary> files,
+            int totalUseCases,
+            int totalPolicies,
+            int totalTests) {
+    }
+
+    public record RdfDefinitionFileSummary(
+            Path path,
+            int useCaseCount,
+            int policyCount,
+            int testCount) {
     }
 
 }

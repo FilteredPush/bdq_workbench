@@ -142,9 +142,17 @@ final class BdqWorkbenchGui {
 
         JTextField testDefinitionsSource = addField(advanced, "Test definitions file/URL", DEFAULT_TEST_DEFINITIONS_SOURCE);
         JButton pickTestDefinitionsFile = new JButton("Pick test definitions file");
+        JButton loadTests = new JButton("Load tests");
         JPanel testDefinitionsButtons = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
         testDefinitionsButtons.add(pickTestDefinitionsFile);
+        testDefinitionsButtons.add(loadTests);
         advanced.add(testDefinitionsButtons);
+        JTextArea testDefinitionLoadStatus = new JTextArea(4, 40);
+        testDefinitionLoadStatus.setEditable(false);
+        testDefinitionLoadStatus.setLineWrap(true);
+        testDefinitionLoadStatus.setWrapStyleWord(true);
+        testDefinitionLoadStatus.setBorder(BorderFactory.createEtchedBorder());
+        advanced.add(testDefinitionLoadStatus);
 
         JTextField additionalTestDefinitions = addField(advanced, "Additional test definition files/URLs (comma-separated)", "");
         JTextField ontologySource = addField(advanced, "BDQ FFDQ ontology file/URL", DEFAULT_ONTOLOGY_SOURCE);
@@ -211,6 +219,11 @@ final class BdqWorkbenchGui {
                 testDefinitionsSource.setText(selected);
             }
         });
+        loadTests.addActionListener(e -> loadTestDefinitions(
+                testDefinitionsSource.getText().trim(),
+                additionalTestDefinitions.getText().trim(),
+                resolver,
+                testDefinitionLoadStatus));
 
         exit.addActionListener(e -> exitApplication(frame));
         closeButton.addActionListener(e -> exitApplication(frame));
@@ -224,7 +237,7 @@ final class BdqWorkbenchGui {
         run.addActionListener(e -> {
             run.setEnabled(false);
             cards.show(cardPanel, "monitor");
-            statusArea.setText("Preparing run configuration...\n");
+            setStatus(statusArea, "Preparing run configuration...\n");
             progress.setVisible(true);
             startRun.setEnabled(false);
 
@@ -262,11 +275,10 @@ final class BdqWorkbenchGui {
                                 state[0].binding().bindings().size(),
                                 state[0].binding().unresolved().size());
                         String preflightMessage = renderPreflightMessage(state[0]);
-                        statusArea.setText(preflightMessage);
-                        LOG.info("{}", preflightMessage);
+                        setStatus(statusArea, preflightMessage);
                         boolean complete = state[0].isFullyResolved();
                         if (!complete && !runWithAvailableOnly.isSelected()) {
-                            statusArea.append("\nRun is blocked until unresolved tests are handled.\n");
+                            appendStatus(statusArea, "\nRun is blocked until unresolved tests are handled.\n");
                             startRun.setEnabled(false);
                         } else {
                             startRun.setText(complete ? "Start Run" : "Start Available Tests");
@@ -275,7 +287,7 @@ final class BdqWorkbenchGui {
                     } catch (Exception ex) {
                         Throwable cause = ex.getCause() == null ? ex : ex.getCause();
                         LOG.error("Preflight mapping failed", cause);
-                        statusArea.setText("Failed to prepare run: " + cause.getMessage() + "\n");
+                        setStatus(statusArea, "Failed to prepare run: " + cause.getMessage() + "\n");
                         startRun.setEnabled(false);
                     } finally {
                         progress.setVisible(false);
@@ -293,7 +305,7 @@ final class BdqWorkbenchGui {
             startRun.setEnabled(false);
             backToSetup.setEnabled(false);
             progress.setVisible(true);
-            statusArea.append("\nStarting execution...\n");
+            appendStatus(statusArea, "\nStarting execution...\n");
 
             SwingWorker<ExecutionSummary, Void> worker = new SwingWorker<>() {
                 @Override
@@ -307,11 +319,11 @@ final class BdqWorkbenchGui {
                     try {
                         ExecutionSummary summary = get();
                         LOG.info("BDQ Workbench execution complete: {} outcomes", summary.responses().size());
-                        statusArea.append("Completed: " + summary.responses().size() + " outcomes\n");
+                        appendStatus(statusArea, "Completed: " + summary.responses().size() + " outcomes\n");
                     } catch (Exception ex) {
                         Throwable cause = ex.getCause() == null ? ex : ex.getCause();
                         LOG.error("BDQ Workbench execution failed", cause);
-                        statusArea.append("Failed: " + cause.getMessage() + "\n");
+                        appendStatus(statusArea, "Failed: " + cause.getMessage() + "\n");
                         JOptionPane.showMessageDialog(
                                 frame,
                                 "BDQ Workbench failed: " + cause.getMessage(),
@@ -332,6 +344,11 @@ final class BdqWorkbenchGui {
                 useCaseChoice,
                 useCaseLoadStatus,
                 defaults.useCaseId());
+        loadTestDefinitions(
+                testDefinitionsSource.getText().trim(),
+                additionalTestDefinitions.getText().trim(),
+                resolver,
+                testDefinitionLoadStatus);
 
         return frame;
     }
@@ -464,6 +481,54 @@ final class BdqWorkbenchGui {
         }
     }
 
+    private static void loadTestDefinitions(
+            String testDefinitionsSource,
+            String additionalTestDefinitions,
+            CachedResourceResolver resolver,
+            JTextArea loadStatus) {
+        try {
+            List<String> sources = collectDefinitionSources(testDefinitionsSource, additionalTestDefinitions);
+            if (sources.isEmpty()) {
+                throw new AppException("No test definition sources provided");
+            }
+            List<Path> resolved = new ArrayList<>();
+            for (String source : sources) {
+                resolved.add(resolver.resolve(source, cacheNameFor(source)));
+            }
+            var summary = RdfPolicyResolverService.summarizeDefinitionSources(resolved);
+            StringBuilder message = new StringBuilder();
+            message.append("Loaded ").append(summary.files().size()).append(" test definition file(s):\n");
+            summary.files().forEach(file -> message.append(" - ")
+                    .append(file.path())
+                    .append(" [use cases: ")
+                    .append(file.useCaseCount())
+                    .append(", policies: ")
+                    .append(file.policyCount())
+                    .append(", tests: ")
+                    .append(file.testCount())
+                    .append("]\n"));
+            message.append("Totals [use cases: ")
+                    .append(summary.totalUseCases())
+                    .append(", policies: ")
+                    .append(summary.totalPolicies())
+                    .append(", tests: ")
+                    .append(summary.totalTests())
+                    .append("]");
+            loadStatus.setText(message.toString());
+            LOG.info("{}", message);
+        } catch (Exception e) {
+            LOG.error("Unable to load test definitions", e);
+            loadStatus.setText("Unable to load test definitions: " + e.getMessage());
+        }
+    }
+
+    private static List<String> collectDefinitionSources(String testDefinitionsSource, String additionalTestDefinitions) {
+        List<String> sources = new ArrayList<>();
+        sources.addAll(splitCsv(testDefinitionsSource));
+        sources.addAll(splitCsv(additionalTestDefinitions));
+        return sources;
+    }
+
     private static List<String> splitCsv(String value) {
         if (value == null || value.isBlank()) {
             return List.of();
@@ -546,6 +611,29 @@ final class BdqWorkbenchGui {
     }
 
     private static String cacheNameFor(String source) {
+        String baseName = "resource";
+        try {
+            String uriPath = java.net.URI.create(source).getPath();
+            if (uriPath != null && !uriPath.isBlank()) {
+                baseName = Path.of(uriPath).getFileName().toString();
+            }
+        } catch (Exception ignored) {
+            // source is not a URI, treat as local path
+        }
+        if ("resource".equals(baseName) && source != null && !source.isBlank()) {
+            try {
+                baseName = Path.of(source).getFileName().toString();
+            } catch (Exception ignored) {
+                // keep fallback
+            }
+        }
+        if (baseName.contains(".")) {
+            baseName = baseName.substring(0, baseName.lastIndexOf('.'));
+        }
+        baseName = baseName.toLowerCase().replaceAll("[^a-z0-9._-]+", "-").replaceAll("(^-+|-+$)", "");
+        if (baseName.isBlank()) {
+            baseName = "resource";
+        }
         int hash = Math.abs(source.hashCode());
         String extension = ".rdf";
         int dot = source.lastIndexOf('.');
@@ -555,7 +643,17 @@ final class BdqWorkbenchGui {
                 extension = candidate;
             }
         }
-        return "cached-" + hash + extension;
+        return baseName + "-cached-" + hash + extension;
+    }
+
+    private static void setStatus(JTextArea statusArea, String message) {
+        statusArea.setText(message);
+        LOG.info("{}", message);
+    }
+
+    private static void appendStatus(JTextArea statusArea, String message) {
+        statusArea.append(message);
+        LOG.info("{}", message);
     }
 
     private record UseCaseChoice(String id, String label) {
