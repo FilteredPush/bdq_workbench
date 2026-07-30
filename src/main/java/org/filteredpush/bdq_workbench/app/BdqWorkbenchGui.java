@@ -7,6 +7,7 @@ import java.awt.FlowLayout;
 import java.awt.Frame;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -31,6 +32,7 @@ import org.filteredpush.bdq_workbench.execution.ReflectionExecutionAdapter;
 import org.filteredpush.bdq_workbench.ingest.DefaultIngestService;
 import org.filteredpush.bdq_workbench.model.ExecutionPlan;
 import org.filteredpush.bdq_workbench.model.ExecutionSummary;
+import org.filteredpush.bdq_workbench.model.Response;
 import org.filteredpush.bdq_workbench.model.UseCase;
 import org.filteredpush.bdq_workbench.rdf_policy.RdfPolicyResolverService;
 import org.filteredpush.bdq_workbench.rdf_policy.UseCaseXmlParser;
@@ -321,6 +323,16 @@ final class BdqWorkbenchGui {
                         ExecutionSummary summary = get();
                         LOG.info("BDQ Workbench execution complete: {} outcomes", summary.responses().size());
                         appendStatus(statusArea, "Completed: " + summary.responses().size() + " outcomes\n");
+                        Iterator <Response> i = summary.responses().iterator();
+                        while (i.hasNext()) {
+							Response r = i.next();
+							appendStatus(statusArea, String.format(
+									" - %s: %s -> %s (%s)\n",
+									r.testId(),
+									r.recordId(),
+									r.status(),
+									r.message()));
+						}
                     } catch (Exception ex) {
                         Throwable cause = ex.getCause() == null ? ex : ex.getCause();
                         LOG.error("BDQ Workbench execution failed", cause);

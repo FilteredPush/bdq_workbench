@@ -6,9 +6,13 @@ import org.filteredpush.bdq_workbench.model.ImplementationBinding;
 import org.filteredpush.bdq_workbench.model.OutcomeStatus;
 import org.filteredpush.bdq_workbench.model.Response;
 import org.filteredpush.bdq_workbench.test_discovery.DiscoveredImplementation;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** Reflection-based adapter for ffdq-compatible implementation invocation. */
 public class ReflectionExecutionAdapter implements ExecutionAdapter {
+	
+	private static final Logger LOG = LoggerFactory.getLogger(ReflectionExecutionAdapter.class);
 
     @Override
     public Response execute(CanonicalRecord record, ImplementationBinding binding, DiscoveredImplementation implementation) {
@@ -26,6 +30,7 @@ public class ReflectionExecutionAdapter implements ExecutionAdapter {
             if (binding.phase() == org.filteredpush.bdq_workbench.model.Phase.AMENDMENT) {
                 status = OutcomeStatus.AMENDED;
             }
+            LOG.debug("Executed {}.{} for record {} with status {}", binding.implementationClass(), binding.implementationMethod(), record.id(), status);
             return new Response(
                     record.id(),
                     binding.testId(),

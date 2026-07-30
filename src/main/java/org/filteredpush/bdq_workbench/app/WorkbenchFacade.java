@@ -14,9 +14,14 @@ import org.filteredpush.bdq_workbench.test_discovery.DiscoveredImplementation;
 import org.filteredpush.bdq_workbench.test_discovery.TestBindingResult;
 import org.filteredpush.bdq_workbench.test_discovery.TestBindingService;
 import org.filteredpush.bdq_workbench.test_discovery.TestDiscoveryService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** High-level orchestrator for ingestion, resolution, discovery, execution, and reporting. */
 public class WorkbenchFacade {
+	
+	private static final Logger LOG = LoggerFactory.getLogger(WorkbenchFacade.class);
+	
     private final IngestService ingestService;
     private final PolicyResolverService policyResolverService;
     private final TestDiscoveryService testDiscoveryService;
@@ -45,6 +50,10 @@ public class WorkbenchFacade {
         List<DiscoveredImplementation> discovered = testDiscoveryService.discover();
         TestBindingResult bindingResult = testBindingService.bind(plan.tests(), discovered, java.util.Map.of());
 
+        LOG.info("Executing {} tests with {} discovered implementations",
+				bindingResult.bindings().size(),
+				discovered.size());
+        
         List<Response> responses = new ArrayList<>(executionService.execute(
                 dataset,
                 bindingResult.bindings(),

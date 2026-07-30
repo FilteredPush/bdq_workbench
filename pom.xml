@@ -61,6 +61,34 @@
             <version>1.5.18</version>
         </dependency>
 
+                <dependency>
+                    <groupId>org.datakurator</groupId>
+                    <artifactId>kurator-ffdq</artifactId>
+                    <version>3.2.0</version>
+                </dependency>
+                <dependency>
+                    <groupId>org.filteredpush</groupId>
+                    <artifactId>event_date_qc</artifactId>
+                    <version>3.1.0</version>
+                </dependency>
+                <dependency>
+                    <groupId>org.filteredpush</groupId>
+                    <artifactId>sci_name_qc</artifactId>
+                    <version>1.2.0</version>
+                </dependency>
+                <dependency>
+                    <groupId>org.filteredpush</groupId>
+                    <artifactId>geo_ref_qc</artifactId>
+                    <version>2.1.1</version>
+                </dependency>
+                <dependency>
+                    <groupId>org.filteredpush</groupId>
+                    <artifactId>rec_occur_qc</artifactId>
+                    <version>1.1.0</version>
+                </dependency>
+
+
+
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
@@ -115,27 +143,41 @@
                     <threshold>Medium</threshold>
                 </configuration>
             </plugin>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-shade-plugin</artifactId>
-                <version>3.6.0</version>
-                <executions>
-                    <execution>
-                        <phase>package</phase>
-                        <goals>
-                            <goal>shade</goal>
-                        </goals>
-                        <configuration>
-                            <createDependencyReducedPom>false</createDependencyReducedPom>
-                            <transformers>
-                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
-                                    <mainClass>org.filteredpush.bdq_workbench.app.BdqWorkbenchApplication</mainClass>
-                                </transformer>
-                            </transformers>
-                        </configuration>
-                    </execution>
-                </executions>
-            </plugin>
+<plugin>
+  <groupId>org.apache.maven.plugins</groupId>
+  <artifactId>maven-shade-plugin</artifactId>
+  <version>3.6.0</version>
+  <executions>
+    <execution>
+      <phase>package</phase>
+      <goals>
+        <goal>shade</goal>
+      </goals>
+      <configuration>
+        <createDependencyReducedPom>false</createDependencyReducedPom>
+        <minimizeJar>false</minimizeJar>
+
+        <filters>
+          <filter>
+            <artifact>*:*</artifact>
+            <excludes>
+              <exclude>META-INF/*.SF</exclude>
+              <exclude>META-INF/*.DSA</exclude>
+              <exclude>META-INF/*.RSA</exclude>
+            </excludes>
+          </filter>
+        </filters>
+
+        <transformers>
+          <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+            <mainClass>org.filteredpush.bdq_workbench.app.BdqWorkbenchApplication</mainClass>
+          </transformer>
+          <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+        </transformers>
+      </configuration>
+    </execution>
+  </executions>
+</plugin>
         </plugins>
     </build>
 
@@ -167,33 +209,6 @@
                     <url>https://repository.gbif.org/content/groups/gbif</url>
                 </repository>
             </repositories>
-            <dependencies>
-                <dependency>
-                    <groupId>org.datakurator</groupId>
-                    <artifactId>kurator-ffdq</artifactId>
-                    <version>3.2.0</version>
-                </dependency>
-                <dependency>
-                    <groupId>org.filteredpush</groupId>
-                    <artifactId>event_date_qc</artifactId>
-                    <version>3.1.0</version>
-                </dependency>
-                <dependency>
-                    <groupId>org.filteredpush</groupId>
-                    <artifactId>sci_name_qc</artifactId>
-                    <version>1.2.0</version>
-                </dependency>
-                <dependency>
-                    <groupId>org.filteredpush</groupId>
-                    <artifactId>geo_ref_qc</artifactId>
-                    <version>2.1.1</version>
-                </dependency>
-                <dependency>
-                    <groupId>org.filteredpush</groupId>
-                    <artifactId>rec_occur_qc</artifactId>
-                    <version>1.1.0</version>
-                </dependency>
-            </dependencies>
         </profile>
     </profiles>
 </project>

@@ -12,9 +12,14 @@ import java.util.List;
 import java.util.Map;
 import org.filteredpush.bdq_workbench.app.AppException;
 import org.filteredpush.bdq_workbench.model.Phase;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** Reflective implementation discovery based on ffdq-style annotations. */
 public class ClasspathAnnotationTestDiscoveryService implements TestDiscoveryService {
+	
+	private static final Logger LOG = LoggerFactory.getLogger(ClasspathAnnotationTestDiscoveryService.class);
+	
     private final List<String> scanPackages;
 
     public ClasspathAnnotationTestDiscoveryService(List<String> scanPackages) {
@@ -24,9 +29,15 @@ public class ClasspathAnnotationTestDiscoveryService implements TestDiscoverySer
     @Override
     public List<DiscoveredImplementation> discover() {
         List<DiscoveredImplementation> discovered = new ArrayList<>();
-        try (var scanResult = new ClassGraph().enableAllInfo().acceptPackages(scanPackages.toArray(String[]::new)).scan()) {
+        LOG.debug("Scanning packages for test implementations: {}", scanPackages);
+        ClassLoader cl = Thread.currentThread().getContextClassLoader();
+        LOG.debug("Using class loader: {}", cl);
+        LOG.debug(System.getProperty("java.class.path"));
+        LOG.debug("Classpath entries: {}", String.join(", ", System.getProperty("java.class.path").split(System.getProperty("path.separator"))));
+        try (var scanResult = new ClassGraph().overrideClassLoaders(cl).ignoreClassVisibility().ignoreMethodVisibility().enableAllInfo().acceptPackages(scanPackages.toArray(String[]::new)).scan()) {
             for (ClassInfo classInfo : scanResult.getAllClasses()) {
                 Class<?> clazz = classInfo.loadClass();
+                LOG.debug("Scanning class: {}", clazz.getName());
                 Object target = null;
                 for (MethodInfo methodInfo : classInfo.getDeclaredMethodInfo()) {
                     Method method = methodInfo.loadClassAndGetMethod();

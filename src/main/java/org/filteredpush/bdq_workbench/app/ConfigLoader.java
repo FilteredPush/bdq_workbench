@@ -27,7 +27,7 @@ public class ConfigLoader {
                 .map(Path::of)
                 .toList();
 
-        List<String> implPackages = Arrays.stream(getValue(defaults, overrides, "bdq.discovery.packages", "org.filteredpush")
+        List<String> implPackages = Arrays.stream(getValue(defaults, overrides, "bdq.discovery.packages", "org.filteredpush.qc")
                         .split(","))
                 .map(String::trim)
                 .filter(s -> !s.isEmpty())
