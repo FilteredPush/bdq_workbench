@@ -30,6 +30,7 @@ class WorkbenchFacadeIT {
                 Method m = StubImpl.class.getMethod("validate", Map.class);
                 return List.of(new DiscoveredImplementation(
                         "urn:test:validate",
+                        null,
                         Phase.PRE_AMENDMENT,
                         StubImpl.class.getName(),
                         "validate",

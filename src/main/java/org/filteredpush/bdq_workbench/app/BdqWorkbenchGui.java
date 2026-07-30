@@ -7,6 +7,7 @@ import java.awt.FlowLayout;
 import java.awt.Frame;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import javax.swing.BorderFactory;
@@ -432,13 +433,32 @@ final class BdqWorkbenchGui {
         sb.append("Runnable mapped tests: ").append(runnable).append('\n');
         sb.append("Tests without discovered implementation: ").append(bindingUnresolved).append("\n\n");
 
+        Map<String, String> labelsByTestId = new LinkedHashMap<>();
+        state.plan().tests().forEach(t -> labelsByTestId.put(t.id(), t.label()));
+        state.plan().unresolvedTests().forEach(t -> labelsByTestId.put(t.id(), t.label()));
+        state.binding().unresolved().forEach(t -> labelsByTestId.put(t.id(), t.label()));
+
+        if (!state.binding().bindings().isEmpty()) {
+            sb.append("Matched library mappings:\n");
+            state.binding().bindings().forEach(b -> sb.append(" - ")
+                    .append(formatTestIdWithLabel(b.testId(), labelsByTestId.get(b.testId())))
+                    .append(" -> ")
+                    .append(b.implementationClass())
+                    .append("#")
+                    .append(b.implementationMethod())
+                    .append('\n'));
+        }
         if (!state.plan().unresolvedTests().isEmpty()) {
             sb.append("Unresolved policy definitions:\n");
-            state.plan().unresolvedTests().forEach(t -> sb.append(" - ").append(t.id()).append('\n'));
+            state.plan().unresolvedTests().forEach(t -> sb.append(" - ")
+                    .append(formatTestIdWithLabel(t.id(), t.label()))
+                    .append('\n'));
         }
         if (!state.binding().unresolved().isEmpty()) {
             sb.append("Unresolved library mappings:\n");
-            state.binding().unresolved().forEach(t -> sb.append(" - ").append(t.id()).append('\n'));
+            state.binding().unresolved().forEach(t -> sb.append(" - ")
+                    .append(formatTestIdWithLabel(t.id(), t.label()))
+                    .append('\n'));
         }
 
         sb.append("\nNote: multi-record measures need explicit implementation in this framework and are not discovered automatically.\n");
@@ -446,6 +466,13 @@ final class BdqWorkbenchGui {
             sb.append("You can continue with available tests.\n");
         }
         return sb.toString();
+    }
+
+    private static String formatTestIdWithLabel(String id, String label) {
+        if (label == null || label.isBlank() || label.equals(id)) {
+            return id;
+        }
+        return id + " (" + label + ")";
     }
 
     private static void loadUseCasesIntoCombo(

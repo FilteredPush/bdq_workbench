@@ -7,6 +7,7 @@ import org.filteredpush.bdq_workbench.model.Phase;
 /** Discovered implementation metadata with invocation handle. */
 public record DiscoveredImplementation(
         String providedTestId,
+        String providedVersion,
         Phase phase,
         String implementationClass,
         String implementationMethod,

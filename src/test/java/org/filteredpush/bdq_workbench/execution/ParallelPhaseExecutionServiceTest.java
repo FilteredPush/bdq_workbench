@@ -22,9 +22,9 @@ class ParallelPhaseExecutionServiceTest {
         Method post = Impl.class.getMethod("post", Map.class);
 
         List<DiscoveredImplementation> discovered = List.of(
-                new DiscoveredImplementation("t1", Phase.PRE_AMENDMENT, Impl.class.getName(), "pre", Map.of(), new Impl(), pre),
-                new DiscoveredImplementation("t2", Phase.AMENDMENT, Impl.class.getName(), "amend", Map.of(), new Impl(), amend),
-                new DiscoveredImplementation("t3", Phase.POST_AMENDMENT, Impl.class.getName(), "post", Map.of(), new Impl(), post));
+                new DiscoveredImplementation("t1", null, Phase.PRE_AMENDMENT, Impl.class.getName(), "pre", Map.of(), new Impl(), pre),
+                new DiscoveredImplementation("t2", null, Phase.AMENDMENT, Impl.class.getName(), "amend", Map.of(), new Impl(), amend),
+                new DiscoveredImplementation("t3", null, Phase.POST_AMENDMENT, Impl.class.getName(), "post", Map.of(), new Impl(), post));
 
         List<ImplementationBinding> bindings = List.of(
                 new ImplementationBinding("t1", Impl.class.getName(), "pre", Phase.PRE_AMENDMENT, Map.of()),

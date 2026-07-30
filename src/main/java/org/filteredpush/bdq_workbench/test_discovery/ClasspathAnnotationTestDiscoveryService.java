@@ -43,6 +43,7 @@ public class ClasspathAnnotationTestDiscoveryService implements TestDiscoverySer
                     }
                     discovered.add(new DiscoveredImplementation(
                             providedId,
+                            readProvidesVersion(method.getAnnotations()),
                             inferPhase(method.getAnnotations()),
                             clazz.getName(),
                             method.getName(),
@@ -60,6 +61,21 @@ public class ClasspathAnnotationTestDiscoveryService implements TestDiscoverySer
     private static String readProvides(Annotation[] annotations) {
         for (Annotation annotation : annotations) {
             if ("Provides".equals(annotation.annotationType().getSimpleName())) {
+                try {
+                    Method valueMethod = annotation.annotationType().getMethod("value");
+                    Object value = valueMethod.invoke(annotation);
+                    return value == null ? null : value.toString();
+                } catch (ReflectiveOperationException ignored) {
+                    return null;
+                }
+            }
+        }
+        return null;
+    }
+
+    private static String readProvidesVersion(Annotation[] annotations) {
+        for (Annotation annotation : annotations) {
+            if ("ProvidesVersion".equals(annotation.annotationType().getSimpleName())) {
                 try {
                     Method valueMethod = annotation.annotationType().getMethod("value");
                     Object value = valueMethod.invoke(annotation);
