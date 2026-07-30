@@ -140,6 +140,12 @@ final class BdqWorkbenchGui {
         useCaseButtons.add(pickUseCaseFile);
         advanced.add(useCaseButtons);
 
+        JTextField testDefinitionsSource = addField(advanced, "Test definitions file/URL", DEFAULT_TEST_DEFINITIONS_SOURCE);
+        JButton pickTestDefinitionsFile = new JButton("Pick test definitions file");
+        JPanel testDefinitionsButtons = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        testDefinitionsButtons.add(pickTestDefinitionsFile);
+        advanced.add(testDefinitionsButtons);
+
         JTextField additionalTestDefinitions = addField(advanced, "Additional test definition files/URLs (comma-separated)", "");
         JTextField ontologySource = addField(advanced, "BDQ FFDQ ontology file/URL", DEFAULT_ONTOLOGY_SOURCE);
         JTextField discoveryPackages = addField(
@@ -161,7 +167,7 @@ final class BdqWorkbenchGui {
         setupInfo.setWrapStyleWord(true);
         setupInfo.setText("Default test definitions are retrieved and cached from:\n"
                 + "  " + DEFAULT_TEST_DEFINITIONS_SOURCE + "\n"
-                + "Use advanced options to add more test definition files or change ontology source.");
+                + "Use advanced options to change the test definitions source, add more test definition files, or change ontology source.");
         setupPanel.add(new JScrollPane(setupInfo), BorderLayout.CENTER);
 
         JPanel setupControls = new JPanel(new FlowLayout(FlowLayout.RIGHT));
@@ -199,6 +205,12 @@ final class BdqWorkbenchGui {
                 loadUseCasesIntoCombo(selected, resolver, useCaseChoice, useCaseLoadStatus, defaults.useCaseId());
             }
         });
+        pickTestDefinitionsFile.addActionListener(e -> {
+            String selected = chooseFile(frame, "Select test definitions RDF");
+            if (selected != null) {
+                testDefinitionsSource.setText(selected);
+            }
+        });
 
         exit.addActionListener(e -> exitApplication(frame));
         closeButton.addActionListener(e -> exitApplication(frame));
@@ -224,6 +236,7 @@ final class BdqWorkbenchGui {
                             dataset.field().getText().trim(),
                             selectedUseCaseId(useCaseChoice),
                             useCaseSource.getText().trim(),
+                            testDefinitionsSource.getText().trim(),
                             additionalTestDefinitions.getText().trim(),
                             ontologySource.getText().trim(),
                             discoveryPackages.getText().trim(),
@@ -338,6 +351,7 @@ final class BdqWorkbenchGui {
             String dataset,
             String selectedUseCaseId,
             String useCaseSource,
+            String testDefinitionsSource,
             String additionalTestDefinitions,
             String ontologySource,
             String discoveryPackages,
@@ -346,9 +360,7 @@ final class BdqWorkbenchGui {
             AppConfig defaults) {
 
         Path useCaseXml = resolver.resolve(useCaseSource, cacheNameFor(useCaseSource));
-        Path defaultTestDefinitions = resolver.resolve(
-                DEFAULT_TEST_DEFINITIONS_SOURCE,
-                cacheNameFor(DEFAULT_TEST_DEFINITIONS_SOURCE));
+        Path defaultTestDefinitions = resolver.resolve(testDefinitionsSource, cacheNameFor(testDefinitionsSource));
         Path ontology = resolver.resolve(ontologySource, cacheNameFor(ontologySource));
 
         List<Path> rdfFiles = new ArrayList<>();

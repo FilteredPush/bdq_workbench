@@ -5,13 +5,16 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import org.apache.jena.rdf.model.Model;
 import org.apache.jena.rdf.model.ModelFactory;
+import org.apache.jena.rdf.model.RDFNode;
 import org.apache.jena.rdf.model.Resource;
 import org.apache.jena.riot.Lang;
 import org.apache.jena.riot.RDFParser;
@@ -67,6 +70,7 @@ public class RdfPolicyResolverService implements PolicyResolverService {
         Set<String> useCaseIds = candidateUseCaseIds(useCase);
         Set<String> matchedPolicyIds = new LinkedHashSet<>();
         Set<String> matchedTestIds = new LinkedHashSet<>();
+        Map<String, Set<String>> testsByPolicy = new LinkedHashMap<>();
 
         var statements = model.listStatements();
         while (statements.hasNext()) {
@@ -83,13 +87,20 @@ public class RdfPolicyResolverService implements PolicyResolverService {
             }
             String policyId = resourceUri(statement.getSubject());
             matchedPolicyIds.add(policyId);
-            matchedTestIds.addAll(collectLinkedTests(statement.getSubject(), model));
+            Set<String> policyTests = new LinkedHashSet<>(collectLinkedTests(statement.getSubject(), model));
+            testsByPolicy.putIfAbsent(policyId, policyTests);
+            matchedTestIds.addAll(policyTests);
         }
 
         for (String useCaseId : useCaseIds) {
             matchedTestIds.addAll(collectLinkedTests(model.getResource(useCaseId), model));
         }
 
+        testsByPolicy.forEach((policyId, testIds) -> LOG.debug(
+                "Matched policy {} with {} linked tests{}",
+                policyId,
+                testIds.size(),
+                testIds.isEmpty() ? "" : ": " + testIds));
         LOG.debug("Resolved {} policies and {} tests for use case {} (candidates: {})",
                 matchedPolicyIds.size(), matchedTestIds.size(), useCase.id(), useCaseIds);
         return new PolicyResolution(List.copyOf(matchedPolicyIds), List.copyOf(matchedTestIds));
@@ -158,7 +169,9 @@ public class RdfPolicyResolverService implements PolicyResolverService {
 
     private static boolean isTestPredicate(String localName) {
         String normalized = normalizeName(localName);
-        return normalized.equals("hastest") || normalized.equals("hasmeasurement");
+        return normalized.contains("test")
+                || normalized.contains("measurement")
+                || normalized.contains("measure");
     }
 
     private static String normalizeName(String localName) {
@@ -230,23 +243,28 @@ public class RdfPolicyResolverService implements PolicyResolverService {
                 continue;
             }
             LOG.debug("Loading RDF definitions from {}", path.toAbsolutePath());
-            readIntoModel(path, model);
+            Model parsed = readIntoModel(path);
+            FileStats stats = collectFileStats(parsed);
+            LOG.info("Loaded RDF definitions file {}: {} policies, {} tests",
+                    path.toAbsolutePath(), stats.policyCount(), stats.testCount());
+            model.add(parsed);
         }
         return model;
     }
 
-    private static void readIntoModel(Path path, Model model) {
+    private static Model readIntoModel(Path path) {
         List<Lang> languages = orderedLangCandidates(path);
         RiotException lastRiot = null;
         IOException lastIo = null;
         for (Lang lang : languages) {
             try (InputStream in = Files.newInputStream(path)) {
                 LOG.debug("Parsing RDF definitions file {} as {}", path.toAbsolutePath(), lang.getName());
+                Model model = ModelFactory.createDefaultModel();
                 RDFParser.source(in)
                         .base(path.toUri().toString())
                         .lang(lang)
                         .parse(model);
-                return;
+                return model;
             } catch (RiotException e) {
                 lastRiot = e;
             } catch (IOException e) {
@@ -257,6 +275,57 @@ public class RdfPolicyResolverService implements PolicyResolverService {
             throw new AppException("Unable to read RDF definitions from " + path, lastIo);
         }
         throw new AppException("Unable to parse RDF definitions from " + path, lastRiot);
+    }
+
+    private static FileStats collectFileStats(Model model) {
+        Set<String> policies = new LinkedHashSet<>();
+        Set<String> tests = new LinkedHashSet<>();
+        Map<String, Integer> testsPerPolicy = new LinkedHashMap<>();
+
+        var statements = model.listStatements();
+        while (statements.hasNext()) {
+            var statement = statements.nextStatement();
+            if (isHasUseCasePredicate(statement.getPredicate().getLocalName()) && statement.getSubject().isResource()) {
+                String policyId = resourceUri(statement.getSubject());
+                policies.add(policyId);
+                int count = collectLinkedTests(statement.getSubject(), model).size();
+                testsPerPolicy.put(policyId, count);
+                tests.addAll(collectLinkedTests(statement.getSubject(), model));
+            }
+        }
+
+        if (policies.isEmpty()) {
+            policies.addAll(findTypedResources(model, "policy"));
+        }
+        if (tests.isEmpty()) {
+            tests.addAll(findTypedResources(model, "validation", "test", "measure"));
+        }
+
+        if (!testsPerPolicy.isEmpty()) {
+            LOG.debug("Policy-to-test counts in current RDF file: {}", testsPerPolicy);
+        }
+        return new FileStats(policies.size(), tests.size());
+    }
+
+    private static Set<String> findTypedResources(Model model, String... typeTokens) {
+        Set<String> matches = new HashSet<>();
+        String rdfType = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+        var statements = model.listStatements(null, model.createProperty(rdfType), (RDFNode) null);
+        while (statements.hasNext()) {
+            var statement = statements.nextStatement();
+            if (!statement.getSubject().isResource() || !statement.getObject().isResource()) {
+                continue;
+            }
+            String typeId = resourceUri(statement.getResource());
+            String normalizedType = normalizeUriForMatch(typeId);
+            for (String token : typeTokens) {
+                if (normalizedType.contains(token.toLowerCase(Locale.ROOT))) {
+                    matches.add(resourceUri(statement.getSubject()));
+                    break;
+                }
+            }
+        }
+        return matches;
     }
 
     private static List<Lang> orderedLangCandidates(Path path) {
@@ -277,6 +346,9 @@ public class RdfPolicyResolverService implements PolicyResolverService {
         private String primaryPolicyId(String fallback) {
             return policyIds.isEmpty() ? fallback : policyIds.get(0);
         }
+    }
+
+    private record FileStats(int policyCount, int testCount) {
     }
 
 }
