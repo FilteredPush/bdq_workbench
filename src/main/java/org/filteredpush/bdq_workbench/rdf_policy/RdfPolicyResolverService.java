@@ -64,10 +64,24 @@ public class RdfPolicyResolverService implements PolicyResolverService {
         String query = """
                 PREFIX bdq: <https://rs.tdwg.org/bdqffdq/terms/>
                 SELECT DISTINCT ?test WHERE {
-                  VALUES ?policy { <%s> }
-                  { ?policy bdq:hasTest ?test . }
+                  VALUES ?selected { <%s> }
+                  {
+                    ?selected bdq:hasTest ?test .
+                  }
                   UNION
-                  { ?policy <http://rs.tdwg.org/dwc/terms/hasMeasurement> ?test . }
+                  {
+                    ?policy bdq:hasUseCase ?selected ;
+                            bdq:hasTest ?test .
+                  }
+                  UNION
+                  {
+                    ?selected <http://rs.tdwg.org/dwc/terms/hasMeasurement> ?test .
+                  }
+                  UNION
+                  {
+                    ?policy bdq:hasUseCase ?selected ;
+                            <http://rs.tdwg.org/dwc/terms/hasMeasurement> ?test .
+                  }
                 }
                 """.formatted(policyId);
         var qexec = org.apache.jena.query.QueryExecutionFactory.create(

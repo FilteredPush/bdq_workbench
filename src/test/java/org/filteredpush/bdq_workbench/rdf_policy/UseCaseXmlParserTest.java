@@ -73,6 +73,28 @@ class UseCaseXmlParserTest {
     }
 
     @Test
+    void parsesBdqucStyleRdfXmlUseCaseVersionLinks() throws Exception {
+        Path rdfXml = tempDir.resolve("bdquc.xml");
+        Files.writeString(rdfXml, """
+                <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+                         xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+                         xmlns:dcterms="http://purl.org/dc/terms/">
+                  <rdf:Description rdf:about="https://rs.tdwg.org/bdquc/terms/version/Alien-Species-2026-04-22">
+                    <rdf:type rdf:resource="https://rs.tdwg.org/bdqffdq/terms/UseCase"/>
+                    <rdfs:label>Alien-Species</rdfs:label>
+                    <dcterms:isVersionOf rdf:resource="https://rs.tdwg.org/bdquc/terms/Alien-Species"/>
+                  </rdf:Description>
+                </rdf:RDF>
+                """, StandardCharsets.UTF_8);
+
+        Map<String, UseCase> useCases = UseCaseXmlParser.loadUseCases(rdfXml);
+
+        assertThat(useCases).containsKey("https://rs.tdwg.org/bdquc/terms/version/Alien-Species-2026-04-22");
+        assertThat(useCases.get("https://rs.tdwg.org/bdquc/terms/version/Alien-Species-2026-04-22").policyId())
+                .isEqualTo("https://rs.tdwg.org/bdquc/terms/Alien-Species");
+    }
+
+    @Test
     void parsesTurtleAndJsonLdUseCases() throws Exception {
         Path turtle = tempDir.resolve("bdquc.ttl");
         Files.writeString(turtle, """

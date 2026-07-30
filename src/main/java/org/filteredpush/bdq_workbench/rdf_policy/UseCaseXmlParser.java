@@ -215,16 +215,22 @@ public final class UseCaseXmlParser {
                 Resource object = statement.getResource();
                 String objectId = object.getURI() == null ? object.toString() : object.getURI();
                 if (predicate.contains("policy") || predicate.contains("profile")
+                        || predicate.contains("isversionof")
+                        || predicate.contains("usecase")
                         || normalizedName(objectId).contains("policy")
-                        || normalizedName(objectId).contains("profile")) {
+                        || normalizedName(objectId).contains("profile")
+                        || normalizedName(objectId).contains("bdquc/terms/")) {
                     return objectId;
                 }
             }
             if (statement.getObject().isLiteral()) {
                 String literal = statement.getString().trim();
                 if (predicate.contains("policy") || predicate.contains("profile")
+                        || predicate.contains("isversionof")
+                        || predicate.contains("usecase")
                         || normalizedName(literal).contains("policy")
-                        || normalizedName(literal).contains("profile")) {
+                        || normalizedName(literal).contains("profile")
+                        || normalizedName(literal).contains("bdquc/terms/")) {
                     return literal;
                 }
             }
@@ -246,8 +252,8 @@ public final class UseCaseXmlParser {
 
     private static String extractPolicy(Element element) {
         return firstNonBlank(
-                getAttributeAny(element, "policy", "profile", "qualityprofile", "policyid", "policyref"),
-                childResourceOrText(element, Set.of("policy", "profile", "qualityprofile")),
+                getAttributeAny(element, "policy", "profile", "qualityprofile", "policyid", "policyref", "isversionof"),
+                childResourceOrText(element, Set.of("policy", "profile", "qualityprofile", "isversionof")),
                 firstResourceByObjectHint(element));
     }
 
@@ -311,7 +317,8 @@ public final class UseCaseXmlParser {
                 continue;
             }
             String normalized = normalizedName(resource);
-            if (normalized.contains("policy") || normalized.contains("profile")) {
+            if (normalized.contains("policy") || normalized.contains("profile")
+                    || normalized.contains("bdquc/terms/")) {
                 return resource;
             }
         }
