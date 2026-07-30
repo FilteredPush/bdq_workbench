@@ -1,13 +1,22 @@
 package org.filteredpush.bdq_workbench.app;
 
 import java.awt.BorderLayout;
+import java.awt.CardLayout;
+import java.awt.FileDialog;
 import java.awt.FlowLayout;
+import java.awt.Frame;
+import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.HashMap;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import javax.swing.BorderFactory;
 import javax.swing.BoxLayout;
 import javax.swing.JButton;
+import javax.swing.JCheckBox;
+import javax.swing.JComboBox;
+import javax.swing.JFileChooser;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
@@ -18,10 +27,29 @@ import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
+import javax.xml.parsers.DocumentBuilderFactory;
+import org.filteredpush.bdq_workbench.execution.ParallelPhaseExecutionService;
+import org.filteredpush.bdq_workbench.execution.ReflectionExecutionAdapter;
+import org.filteredpush.bdq_workbench.ingest.DefaultIngestService;
+import org.filteredpush.bdq_workbench.model.ExecutionPlan;
 import org.filteredpush.bdq_workbench.model.ExecutionSummary;
+import org.filteredpush.bdq_workbench.model.UseCase;
+import org.filteredpush.bdq_workbench.rdf_policy.RdfPolicyResolverService;
+import org.filteredpush.bdq_workbench.reporting.ReportingService;
+import org.filteredpush.bdq_workbench.reporting.SummaryReportExporter;
+import org.filteredpush.bdq_workbench.reporting.XlsCompatibilityExporter;
+import org.filteredpush.bdq_workbench.test_discovery.ClasspathAnnotationTestDiscoveryService;
+import org.filteredpush.bdq_workbench.test_discovery.DefaultTestBindingService;
+import org.filteredpush.bdq_workbench.test_discovery.TestBindingResult;
+import org.w3c.dom.Element;
+import org.w3c.dom.NodeList;
 
-/** Minimal desktop launcher for collecting startup parameters and monitoring execution progress. */
+/** Desktop launcher for collecting startup parameters and monitoring execution progress. */
 final class BdqWorkbenchGui {
+
+    private static final String DEFAULT_USECASE_SOURCE = "https://bdq.tdwg.org/draft/dist/bdqdim.xml";
+    private static final String DEFAULT_TEST_DEFINITIONS_SOURCE = "https://bdq.tdwg.org/draft/dist/bdqtest.ttl";
+    private static final String DEFAULT_ONTOLOGY_SOURCE = "https://bdq.tdwg.org/draft/vocabulary/bdqffdq.ttl";
 
     private BdqWorkbenchGui() {
     }
@@ -31,7 +59,7 @@ final class BdqWorkbenchGui {
             try {
                 ConfigLoader loader = new ConfigLoader();
                 AppConfig defaults = loader.load(Map.of());
-                createFrame(loader, defaults).setVisible(true);
+                createFrame(defaults).setVisible(true);
             } catch (Exception e) {
                 JOptionPane.showMessageDialog(
                         null,
@@ -42,76 +70,218 @@ final class BdqWorkbenchGui {
         });
     }
 
-    private static JFrame createFrame(ConfigLoader loader, AppConfig defaults) {
+    private static JFrame createFrame(AppConfig defaults) {
         JFrame frame = new JFrame("BDQ Workbench");
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        frame.setSize(900, 500);
+        frame.setSize(980, 640);
+
+        CachedResourceResolver resolver = new CachedResourceResolver();
 
         JPanel root = new JPanel(new BorderLayout(10, 10));
         root.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
         frame.setContentPane(root);
 
-        JPanel form = new JPanel();
-        form.setLayout(new BoxLayout(form, BoxLayout.Y_AXIS));
+        CardLayout cards = new CardLayout();
+        JPanel cardPanel = new JPanel(cards);
 
-        JTextField dataset = addField(form, "Dataset", defaults.datasetPath().toString());
-        JTextField useCaseFile = addField(form, "Use case XML", defaults.useCaseXml().toString());
-        JTextField rdfFiles = addField(form, "RDF files (comma-separated)", joinPaths(defaults.rdfDefinitions()));
-        JTextField useCaseId = addField(form, "Use case ID", defaults.useCaseId());
-        JTextField discoveryPackages = addField(
-                form,
-                "Discovery packages (comma-separated)",
-                String.join(",", defaults.implementationPackages()));
-        JTextField threads = addField(form, "Threads", Integer.toString(defaults.threadCount()));
+        JTextArea statusArea = new JTextArea();
+        statusArea.setEditable(false);
+        statusArea.setLineWrap(true);
+        statusArea.setWrapStyleWord(true);
 
-        root.add(form, BorderLayout.NORTH);
-
-        JTextArea status = new JTextArea();
-        status.setEditable(false);
-        status.setLineWrap(true);
-        status.setWrapStyleWord(true);
-        root.add(new JScrollPane(status), BorderLayout.CENTER);
-
-        JPanel bottom = new JPanel(new BorderLayout(10, 10));
+        JPanel monitorPanel = new JPanel(new BorderLayout(8, 8));
+        monitorPanel.add(new JScrollPane(statusArea), BorderLayout.CENTER);
         JProgressBar progress = new JProgressBar();
         progress.setIndeterminate(true);
         progress.setVisible(false);
-        bottom.add(progress, BorderLayout.CENTER);
+        monitorPanel.add(progress, BorderLayout.NORTH);
 
-        JPanel controls = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        JPanel monitorControls = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        JButton backToSetup = new JButton("Back to Setup");
+        JButton startRun = new JButton("Start Run");
+        startRun.setEnabled(false);
+        JButton closeButton = new JButton("Quit");
+        monitorControls.add(backToSetup);
+        monitorControls.add(startRun);
+        monitorControls.add(closeButton);
+        monitorPanel.add(monitorControls, BorderLayout.SOUTH);
+
+        JPanel setupPanel = new JPanel(new BorderLayout(10, 10));
+        JPanel form = new JPanel();
+        form.setLayout(new BoxLayout(form, BoxLayout.Y_AXIS));
+
+        PickerField dataset = addPickerField(form, frame, "Dataset", defaults.datasetPath().toString());
+
+        JComboBox<UseCaseChoice> useCaseChoice = new JComboBox<>();
+        addComboRow(form, "Use case", useCaseChoice);
+
+        JButton toggleAdvanced = new JButton("Show Advanced Options");
+        JPanel toggleRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        toggleRow.add(toggleAdvanced);
+        form.add(toggleRow);
+
+        JPanel advanced = new JPanel();
+        advanced.setLayout(new BoxLayout(advanced, BoxLayout.Y_AXIS));
+        advanced.setVisible(false);
+
+        JTextField useCaseSource = addField(advanced, "Use case file/URL", DEFAULT_USECASE_SOURCE);
+        JButton loadUseCases = new JButton("Load use cases");
+        JButton pickUseCaseFile = new JButton("Pick use case file");
+        JPanel useCaseButtons = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        useCaseButtons.add(loadUseCases);
+        useCaseButtons.add(pickUseCaseFile);
+        advanced.add(useCaseButtons);
+
+        JTextField additionalTestDefinitions = addField(advanced, "Additional test definition files/URLs (comma-separated)", "");
+        JTextField ontologySource = addField(advanced, "BDQ FFDQ ontology file/URL", DEFAULT_ONTOLOGY_SOURCE);
+        JTextField discoveryPackages = addField(
+                advanced,
+                "Discovery packages (comma-separated)",
+                String.join(",", defaults.implementationPackages()));
+        JTextField threads = addField(
+                advanced,
+                "Threads",
+                Integer.toString(Math.max(1, Runtime.getRuntime().availableProcessors())));
+
+        JCheckBox runWithAvailableOnly = new JCheckBox("Continue when some tests are unresolved", true);
+        advanced.add(runWithAvailableOnly);
+
+        setupPanel.add(form, BorderLayout.NORTH);
+
+        JTextArea setupInfo = new JTextArea();
+        setupInfo.setEditable(false);
+        setupInfo.setLineWrap(true);
+        setupInfo.setWrapStyleWord(true);
+        setupInfo.setText("Default test definitions are retrieved and cached from:\n"
+                + "  " + DEFAULT_TEST_DEFINITIONS_SOURCE + "\n"
+                + "Use advanced options to add more test definition files or change ontology source.");
+        setupPanel.add(new JScrollPane(setupInfo), BorderLayout.CENTER);
+
+        JPanel setupControls = new JPanel(new FlowLayout(FlowLayout.RIGHT));
         JButton run = new JButton("Run");
-        controls.add(run);
-        bottom.add(controls, BorderLayout.EAST);
-        root.add(bottom, BorderLayout.SOUTH);
+        JButton exit = new JButton("Quit");
+        setupControls.add(run);
+        setupControls.add(exit);
+        setupPanel.add(setupControls, BorderLayout.SOUTH);
+
+        cardPanel.add(setupPanel, "setup");
+        cardPanel.add(monitorPanel, "monitor");
+        root.add(cardPanel, BorderLayout.CENTER);
+
+        final PreflightState[] state = new PreflightState[1];
+
+        toggleAdvanced.addActionListener(e -> {
+            advanced.setVisible(!advanced.isVisible());
+            toggleAdvanced.setText(advanced.isVisible() ? "Hide Advanced Options" : "Show Advanced Options");
+            setupPanel.revalidate();
+            setupPanel.repaint();
+        });
+        form.add(advanced);
+
+        loadUseCases.addActionListener(e -> loadUseCasesIntoCombo(
+                useCaseSource.getText().trim(),
+                resolver,
+                useCaseChoice,
+                statusArea,
+                defaults.useCaseId()));
+
+        pickUseCaseFile.addActionListener(e -> {
+            String selected = chooseFile(frame, "Select use case XML");
+            if (selected != null) {
+                useCaseSource.setText(selected);
+                loadUseCasesIntoCombo(selected, resolver, useCaseChoice, statusArea, defaults.useCaseId());
+            }
+        });
+
+        exit.addActionListener(e -> frame.dispose());
+        closeButton.addActionListener(e -> frame.dispose());
+
+        backToSetup.addActionListener(e -> {
+            if (!progress.isVisible()) {
+                cards.show(cardPanel, "setup");
+            }
+        });
 
         run.addActionListener(e -> {
             run.setEnabled(false);
+            cards.show(cardPanel, "monitor");
+            statusArea.setText("Preparing run configuration...\n");
             progress.setVisible(true);
-            status.append("Starting BDQ Workbench...\n");
-            Map<String, String> overrides = new HashMap<>();
-            overrides.put("bdq.dataset", dataset.getText().trim());
-            overrides.put("bdq.usecase.file", useCaseFile.getText().trim());
-            overrides.put("bdq.rdf.files", rdfFiles.getText().trim());
-            overrides.put("bdq.usecase.id", useCaseId.getText().trim());
-            overrides.put("bdq.discovery.packages", discoveryPackages.getText().trim());
-            overrides.put("bdq.threads", threads.getText().trim());
+            startRun.setEnabled(false);
+
+            SwingWorker<PreflightState, Void> preflight = new SwingWorker<>() {
+                @Override
+                protected PreflightState doInBackground() {
+                    AppConfig config = buildConfig(
+                            dataset.field().getText().trim(),
+                            selectedUseCaseId(useCaseChoice),
+                            useCaseSource.getText().trim(),
+                            additionalTestDefinitions.getText().trim(),
+                            ontologySource.getText().trim(),
+                            discoveryPackages.getText().trim(),
+                            threads.getText().trim(),
+                            resolver,
+                            defaults);
+                    BdqWorkbenchApplication.validateStartupConfig(config);
+
+                    RdfPolicyResolverService policyResolver = new RdfPolicyResolverService(config.useCaseXml(), config.rdfDefinitions());
+                    ExecutionPlan plan = policyResolver.resolve(config.useCaseId());
+                    var discovery = new ClasspathAnnotationTestDiscoveryService(config.implementationPackages());
+                    var discovered = discovery.discover();
+                    TestBindingResult binding = new DefaultTestBindingService().bind(plan.tests(), discovered, Map.of());
+
+                    return new PreflightState(config, plan, discovered.size(), binding);
+                }
+
+                @Override
+                protected void done() {
+                    try {
+                        state[0] = get();
+                        statusArea.setText(renderPreflightMessage(state[0]));
+                        boolean complete = state[0].isFullyResolved();
+                        if (!complete && !runWithAvailableOnly.isSelected()) {
+                            statusArea.append("\nRun is blocked until unresolved tests are handled.\n");
+                            startRun.setEnabled(false);
+                        } else {
+                            startRun.setText(complete ? "Start Run" : "Start Available Tests");
+                            startRun.setEnabled(true);
+                        }
+                    } catch (Exception ex) {
+                        Throwable cause = ex.getCause() == null ? ex : ex.getCause();
+                        statusArea.setText("Failed to prepare run: " + cause.getMessage() + "\n");
+                        startRun.setEnabled(false);
+                    } finally {
+                        progress.setVisible(false);
+                        run.setEnabled(true);
+                    }
+                }
+            };
+            preflight.execute();
+        });
+
+        startRun.addActionListener(e -> {
+            if (state[0] == null) {
+                return;
+            }
+            startRun.setEnabled(false);
+            backToSetup.setEnabled(false);
+            progress.setVisible(true);
+            statusArea.append("\nStarting execution...\n");
 
             SwingWorker<ExecutionSummary, Void> worker = new SwingWorker<>() {
                 @Override
                 protected ExecutionSummary doInBackground() {
-                    AppConfig config = loader.load(Map.copyOf(overrides));
-                    BdqWorkbenchApplication.validateStartupConfig(config);
-                    return BdqWorkbenchApplication.execute(config);
+                    return runWorkbench(state[0].config());
                 }
 
                 @Override
                 protected void done() {
                     try {
                         ExecutionSummary summary = get();
-                        status.append("Completed: " + summary.responses().size() + " outcomes\n");
+                        statusArea.append("Completed: " + summary.responses().size() + " outcomes\n");
                     } catch (Exception ex) {
                         Throwable cause = ex.getCause() == null ? ex : ex.getCause();
-                        status.append("Failed: " + cause.getMessage() + "\n");
+                        statusArea.append("Failed: " + cause.getMessage() + "\n");
                         JOptionPane.showMessageDialog(
                                 frame,
                                 "BDQ Workbench failed: " + cause.getMessage(),
@@ -119,14 +289,200 @@ final class BdqWorkbenchGui {
                                 JOptionPane.ERROR_MESSAGE);
                     } finally {
                         progress.setVisible(false);
-                        run.setEnabled(true);
+                        backToSetup.setEnabled(true);
                     }
                 }
             };
             worker.execute();
         });
 
+        loadUseCasesIntoCombo(
+                useCaseSource.getText().trim(),
+                resolver,
+                useCaseChoice,
+                statusArea,
+                defaults.useCaseId());
+
         return frame;
+    }
+
+    private static ExecutionSummary runWorkbench(AppConfig config) {
+        WorkbenchFacade facade = new WorkbenchFacade(
+                new DefaultIngestService(),
+                new RdfPolicyResolverService(config.useCaseXml(), config.rdfDefinitions()),
+                new ClasspathAnnotationTestDiscoveryService(config.implementationPackages()),
+                new DefaultTestBindingService(),
+                new ParallelPhaseExecutionService(config.threadCount(), new ReflectionExecutionAdapter()),
+                new ReportingService(List.of(new SummaryReportExporter(), new XlsCompatibilityExporter())));
+        return facade.run(config);
+    }
+
+    private static AppConfig buildConfig(
+            String dataset,
+            String selectedUseCaseId,
+            String useCaseSource,
+            String additionalTestDefinitions,
+            String ontologySource,
+            String discoveryPackages,
+            String threads,
+            CachedResourceResolver resolver,
+            AppConfig defaults) {
+
+        Path useCaseXml = resolver.resolve(useCaseSource, "bdqdim.xml");
+        Path defaultTestDefinitions = resolver.resolve(DEFAULT_TEST_DEFINITIONS_SOURCE, "bdqtest.ttl");
+        Path ontology = resolver.resolve(ontologySource, "bdqffdq.ttl");
+
+        List<Path> rdfFiles = new ArrayList<>();
+        rdfFiles.add(defaultTestDefinitions);
+        rdfFiles.add(ontology);
+        for (String extra : splitCsv(additionalTestDefinitions)) {
+            rdfFiles.add(resolver.resolve(extra, cacheNameFor(extra)));
+        }
+
+        List<String> packages = splitCsv(discoveryPackages);
+        if (packages.isEmpty()) {
+            packages = defaults.implementationPackages();
+        }
+
+        return new AppConfig(
+                useCaseXml,
+                List.copyOf(rdfFiles),
+                Path.of(dataset),
+                selectedUseCaseId,
+                List.copyOf(packages),
+                parseThreads(threads));
+    }
+
+    private static int parseThreads(String raw) {
+        try {
+            int parsed = Integer.parseInt(raw);
+            if (parsed < 1) {
+                throw new AppException("Invalid thread count: bdq.threads must be >= 1");
+            }
+            return parsed;
+        } catch (NumberFormatException e) {
+            throw new AppException("Invalid thread count: bdq.threads must be a whole number", e);
+        }
+    }
+
+    private static String renderPreflightMessage(PreflightState state) {
+        int policyResolved = state.plan().tests().size();
+        int policyUnresolved = state.plan().unresolvedTests().size();
+        int bindingUnresolved = state.binding().unresolved().size();
+        int runnable = state.binding().bindings().size();
+        int policyTotal = policyResolved + policyUnresolved;
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("Use case preflight mapping\n");
+        sb.append("Policy tests total: ").append(policyTotal).append('\n');
+        sb.append("Policy tests resolved from definitions: ").append(policyResolved).append('\n');
+        sb.append("Policy tests unresolved in definitions: ").append(policyUnresolved).append('\n');
+        sb.append("Discovered implementation methods: ").append(state.discoveredCount()).append('\n');
+        sb.append("Runnable mapped tests: ").append(runnable).append('\n');
+        sb.append("Tests without discovered implementation: ").append(bindingUnresolved).append("\n\n");
+
+        if (!state.plan().unresolvedTests().isEmpty()) {
+            sb.append("Unresolved policy definitions:\n");
+            state.plan().unresolvedTests().forEach(t -> sb.append(" - ").append(t.id()).append('\n'));
+        }
+        if (!state.binding().unresolved().isEmpty()) {
+            sb.append("Unresolved library mappings:\n");
+            state.binding().unresolved().forEach(t -> sb.append(" - ").append(t.id()).append('\n'));
+        }
+
+        sb.append("\nNote: multi-record measures need explicit implementation in this framework and are not discovered automatically.\n");
+        if (!state.isFullyResolved()) {
+            sb.append("You can continue with available tests.\n");
+        }
+        return sb.toString();
+    }
+
+    private static void loadUseCasesIntoCombo(
+            String source,
+            CachedResourceResolver resolver,
+            JComboBox<UseCaseChoice> combo,
+            JTextArea status,
+            String defaultUseCaseId) {
+        combo.removeAllItems();
+        try {
+            Path useCaseXml = resolver.resolve(source, "bdqdim.xml");
+            List<UseCase> useCases = loadUseCases(useCaseXml);
+            if (useCases.isEmpty()) {
+                throw new AppException("No use cases found in " + useCaseXml);
+            }
+            UseCaseChoice defaultChoice = null;
+            for (UseCase useCase : useCases) {
+                UseCaseChoice option = new UseCaseChoice(useCase.id(), useCase.label());
+                combo.addItem(option);
+                if (defaultChoice == null || useCase.id().equals(defaultUseCaseId)) {
+                    defaultChoice = option;
+                }
+            }
+            if (defaultChoice != null) {
+                combo.setSelectedItem(defaultChoice);
+            }
+            status.setText("Loaded " + useCases.size() + " use cases from " + useCaseXml + "\n");
+        } catch (Exception e) {
+            status.setText("Unable to load use cases: " + e.getMessage() + "\n");
+        }
+    }
+
+    private static List<UseCase> loadUseCases(Path xmlPath) {
+        if (Files.notExists(xmlPath)) {
+            throw new AppException("Use case file not found: " + xmlPath);
+        }
+        try {
+            var builderFactory = DocumentBuilderFactory.newInstance();
+            var doc = builderFactory.newDocumentBuilder().parse(xmlPath.toFile());
+            NodeList useCaseNodes = doc.getElementsByTagName("usecase");
+            Map<String, UseCase> result = new LinkedHashMap<>();
+            for (int i = 0; i < useCaseNodes.getLength(); i++) {
+                Element e = (Element) useCaseNodes.item(i);
+                String id = e.getAttribute("id");
+                String label = e.getAttribute("name");
+                String policy = e.getAttribute("policy");
+                if (!id.isBlank() && !policy.isBlank()) {
+                    result.put(id, new UseCase(id, label.isBlank() ? id : label, policy));
+                }
+            }
+            return result.values().stream().toList();
+        } catch (Exception e) {
+            throw new AppException("Unable to parse use cases from " + xmlPath, e);
+        }
+    }
+
+    private static List<String> splitCsv(String value) {
+        if (value == null || value.isBlank()) {
+            return List.of();
+        }
+        return java.util.Arrays.stream(value.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .toList();
+    }
+
+    private static String selectedUseCaseId(JComboBox<UseCaseChoice> combo) {
+        Object selected = combo.getSelectedItem();
+        return selected instanceof UseCaseChoice choice ? choice.id() : "";
+    }
+
+    private static String chooseFile(JFrame frame, String title) {
+        try {
+            FileDialog dialog = new FileDialog((Frame) SwingUtilities.getWindowAncestor(frame), title, FileDialog.LOAD);
+            dialog.setVisible(true);
+            if (dialog.getFile() != null) {
+                return Path.of(dialog.getDirectory(), dialog.getFile()).toString();
+            }
+        } catch (Exception ignored) {
+            // fall through to JFileChooser
+        }
+        JFileChooser chooser = new JFileChooser();
+        chooser.setDialogTitle(title);
+        int result = chooser.showOpenDialog(frame);
+        if (result == JFileChooser.APPROVE_OPTION && chooser.getSelectedFile() != null) {
+            return chooser.getSelectedFile().getAbsolutePath();
+        }
+        return null;
     }
 
     private static JTextField addField(JPanel panel, String label, String defaultValue) {
@@ -139,7 +495,50 @@ final class BdqWorkbenchGui {
         return field;
     }
 
-    private static String joinPaths(java.util.List<Path> paths) {
-        return paths.stream().map(Path::toString).reduce((left, right) -> left + "," + right).orElse("");
+    private static PickerField addPickerField(JPanel panel, JFrame frame, String label, String defaultValue) {
+        JPanel row = new JPanel(new BorderLayout(8, 8));
+        row.add(new JLabel(label), BorderLayout.WEST);
+        JTextField field = new JTextField(defaultValue == null ? "" : defaultValue);
+        row.add(field, BorderLayout.CENTER);
+        JButton button = new JButton("Browse...");
+        row.add(button, BorderLayout.EAST);
+        button.addActionListener(e -> {
+            String selected = chooseFile(frame, "Select " + label);
+            if (selected != null) {
+                field.setText(selected);
+            }
+        });
+        row.setBorder(BorderFactory.createEmptyBorder(2, 0, 2, 0));
+        panel.add(row);
+        return new PickerField(field, button);
+    }
+
+    private static void addComboRow(JPanel panel, String label, JComboBox<UseCaseChoice> combo) {
+        JPanel row = new JPanel(new BorderLayout(8, 8));
+        row.add(new JLabel(label), BorderLayout.WEST);
+        row.add(combo, BorderLayout.CENTER);
+        row.setBorder(BorderFactory.createEmptyBorder(2, 0, 2, 0));
+        panel.add(row);
+    }
+
+    private static String cacheNameFor(String source) {
+        int hash = Math.abs(source.hashCode());
+        return "extra-" + hash + ".ttl";
+    }
+
+    private record UseCaseChoice(String id, String label) {
+        @Override
+        public String toString() {
+            return label + " (" + id + ")";
+        }
+    }
+
+    private record PickerField(JTextField field, JButton button) {
+    }
+
+    private record PreflightState(AppConfig config, ExecutionPlan plan, int discoveredCount, TestBindingResult binding) {
+        boolean isFullyResolved() {
+            return plan.unresolvedTests().isEmpty() && binding.unresolved().isEmpty();
+        }
     }
 }
