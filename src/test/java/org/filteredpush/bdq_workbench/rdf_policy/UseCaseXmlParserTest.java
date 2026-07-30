@@ -1,11 +1,13 @@
 package org.filteredpush.bdq_workbench.rdf_policy;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
+import org.filteredpush.bdq_workbench.app.AppException;
 import org.filteredpush.bdq_workbench.model.UseCase;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -108,5 +110,24 @@ class UseCaseXmlParserTest {
         assertThat(jsonLdUseCases).containsKey("https://example.org/usecase/uc5");
         assertThat(jsonLdUseCases.get("https://example.org/usecase/uc5").policyId())
                 .isEqualTo("https://example.org/policy/p5");
+    }
+
+    @Test
+    void reportsTargetedErrorForMalformedRdfXmlUseCaseSource() throws Exception {
+        Path rdfXml = tempDir.resolve("bdquc.xml");
+        Files.writeString(rdfXml, """
+                <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+                         xmlns:bdq="https://rs.tdwg.org/bdq/terms/">
+                  <rdf:Description rdf:about="https://example.org/usecase/uc6">
+                    invalid text before nested element
+                    <rdf:type rdf:resource="https://example.org/ontology#UseCase"/>
+                  </rdf:Description>
+                </rdf:RDF>
+                """, StandardCharsets.UTF_8);
+
+        assertThatThrownBy(() -> UseCaseXmlParser.loadUseCases(rdfXml))
+                .isInstanceOf(AppException.class)
+                .hasMessageContaining("malformed or invalid RDF/XML")
+                .hasMessageContaining("bdquc.xml");
     }
 }

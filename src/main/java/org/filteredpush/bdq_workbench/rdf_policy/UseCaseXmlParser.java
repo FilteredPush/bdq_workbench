@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -41,31 +42,37 @@ public final class UseCaseXmlParser {
         }
         LOG.debug("Loading use cases from {}", xmlPath.toAbsolutePath());
         boolean xmlLike = isXmlLike(xmlPath);
+        ParseAttempt xmlAttempt = ParseAttempt.empty();
+        ParseAttempt rdfAttempt = ParseAttempt.empty();
         if (xmlLike) {
-            Map<String, UseCase> xmlUseCases = loadUseCasesFromXml(xmlPath);
-            if (!xmlUseCases.isEmpty()) {
-                LOG.debug("Loaded {} use cases from XML parsing: {}", xmlUseCases.size(), xmlPath);
-                return xmlUseCases;
+            xmlAttempt = loadUseCasesFromXml(xmlPath);
+            if (!xmlAttempt.useCases().isEmpty()) {
+                LOG.debug("Loaded {} use cases from XML parsing: {}", xmlAttempt.useCases().size(), xmlPath);
+                return xmlAttempt.useCases();
             }
         }
 
-        Map<String, UseCase> rdfUseCases = loadUseCasesFromRdf(xmlPath);
-        if (!rdfUseCases.isEmpty()) {
-            LOG.debug("Loaded {} use cases from RDF parsing: {}", rdfUseCases.size(), xmlPath);
-            return rdfUseCases;
+        rdfAttempt = loadUseCasesFromRdf(xmlPath);
+        if (!rdfAttempt.useCases().isEmpty()) {
+            LOG.debug("Loaded {} use cases from RDF parsing: {}", rdfAttempt.useCases().size(), xmlPath);
+            return rdfAttempt.useCases();
         }
 
         if (!xmlLike) {
-            Map<String, UseCase> xmlUseCases = loadUseCasesFromXml(xmlPath);
-            if (!xmlUseCases.isEmpty()) {
-                LOG.debug("Loaded {} use cases from XML fallback parsing: {}", xmlUseCases.size(), xmlPath);
-                return xmlUseCases;
+            xmlAttempt = loadUseCasesFromXml(xmlPath);
+            if (!xmlAttempt.useCases().isEmpty()) {
+                LOG.debug("Loaded {} use cases from XML fallback parsing: {}", xmlAttempt.useCases().size(), xmlPath);
+                return xmlAttempt.useCases();
             }
+        }
+        AppException parseFailure = targetedParseFailure(xmlPath, xmlAttempt, rdfAttempt);
+        if (parseFailure != null) {
+            throw parseFailure;
         }
         return Map.of();
     }
 
-    private static Map<String, UseCase> loadUseCasesFromXml(Path xmlPath) {
+    private static ParseAttempt loadUseCasesFromXml(Path xmlPath) {
         try {
             DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
             factory.setNamespaceAware(true);
@@ -95,20 +102,21 @@ public final class UseCaseXmlParser {
                         id);
                 result.putIfAbsent(id, new UseCase(id, label, policy));
             }
-            return result;
+            return new ParseAttempt(result, null);
         } catch (Exception e) {
-            return Map.of();
+            return new ParseAttempt(Map.of(), new AppException(
+                    "Unable to parse use case XML from " + xmlPath + ": " + conciseMessage(e), e));
         }
     }
 
-    private static Map<String, UseCase> loadUseCasesFromRdf(Path rdfPath) {
+    private static ParseAttempt loadUseCasesFromRdf(Path rdfPath) {
         Model model;
         try {
             LOG.debug("Attempting RDF parse for use cases: {}", rdfPath.toAbsolutePath());
             model = readModel(rdfPath);
         } catch (AppException e) {
             LOG.debug("RDF parse failed for {}: {}", rdfPath, e.getMessage());
-            return Map.of();
+            return new ParseAttempt(Map.of(), e);
         }
 
         Map<String, UseCase> result = new LinkedHashMap<>();
@@ -128,7 +136,7 @@ public final class UseCaseXmlParser {
                     id);
             result.putIfAbsent(id, new UseCase(id, label, policy));
         }
-        return result;
+        return new ParseAttempt(result, null);
     }
 
     private static Model readModel(Path rdfPath) {
@@ -152,7 +160,7 @@ public final class UseCaseXmlParser {
         if (lastIo != null) {
             throw new AppException("Unable to read use case RDF from " + rdfPath, lastIo);
         }
-        throw new AppException("Unable to parse use case RDF from " + rdfPath, lastRiot);
+        throw new AppException("Unable to parse use case RDF from " + rdfPath + ": " + conciseMessage(lastRiot), lastRiot);
     }
 
     private static List<Lang> orderedLangCandidates(Path path) {
@@ -375,5 +383,41 @@ public final class UseCaseXmlParser {
     private static boolean isXmlLike(Path path) {
         String name = path.getFileName().toString().toLowerCase(Locale.ROOT);
         return name.endsWith(".xml") || name.endsWith(".rdf") || name.endsWith(".owl");
+    }
+
+    private static AppException targetedParseFailure(Path path, ParseAttempt xmlAttempt, ParseAttempt rdfAttempt) {
+        boolean looksLikeRdfXml = isXmlLike(path) && containsRdfXmlMarkers(path);
+        if (looksLikeRdfXml && rdfAttempt.error() != null) {
+            return new AppException(
+                    "Use case source appears malformed or invalid RDF/XML: " + path + ". "
+                            + conciseMessage(rdfAttempt.error()),
+                    rdfAttempt.error());
+        }
+        if (xmlAttempt.error() != null) {
+            return xmlAttempt.error();
+        }
+        return null;
+    }
+
+    private static boolean containsRdfXmlMarkers(Path path) {
+        try {
+            String content = Files.readString(path, StandardCharsets.UTF_8).toLowerCase(Locale.ROOT);
+            return content.contains("<rdf:rdf") || content.contains("xmlns:rdf=");
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    private static String conciseMessage(Throwable throwable) {
+        if (throwable == null || throwable.getMessage() == null || throwable.getMessage().isBlank()) {
+            return "no parser details available";
+        }
+        return throwable.getMessage().replaceAll("\\s+", " ").trim();
+    }
+
+    private record ParseAttempt(Map<String, UseCase> useCases, AppException error) {
+        private static ParseAttempt empty() {
+            return new ParseAttempt(Map.of(), null);
+        }
     }
 }
