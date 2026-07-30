@@ -248,7 +248,9 @@ final class BdqWorkbenchGui {
                         LOG.debug("Preflight mapping complete: {} runnable, {} unresolved",
                                 state[0].binding().bindings().size(),
                                 state[0].binding().unresolved().size());
-                        statusArea.setText(renderPreflightMessage(state[0]));
+                        String preflightMessage = renderPreflightMessage(state[0]);
+                        statusArea.setText(preflightMessage);
+                        LOG.info("{}", preflightMessage);
                         boolean complete = state[0].isFullyResolved();
                         if (!complete && !runWithAvailableOnly.isSelected()) {
                             statusArea.append("\nRun is blocked until unresolved tests are handled.\n");
@@ -393,7 +395,7 @@ final class BdqWorkbenchGui {
         sb.append("Use case preflight mapping\n");
         sb.append("Selected use case: ").append(state.plan().useCase().id()).append(" (")
                 .append(state.plan().useCase().label()).append(")\n");
-        sb.append("Selected policy: ").append(state.plan().useCase().policyId()).append('\n');
+        sb.append("Selected use case reference: ").append(state.plan().useCase().policyId()).append('\n');
         sb.append("Policy tests total: ").append(policyTotal).append('\n');
         sb.append("Policy tests resolved from definitions: ").append(policyResolved).append('\n');
         sb.append("Policy tests unresolved in definitions: ").append(policyUnresolved).append('\n');

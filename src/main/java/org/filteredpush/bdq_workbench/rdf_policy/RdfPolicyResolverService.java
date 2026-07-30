@@ -5,9 +5,11 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import org.apache.jena.rdf.model.Model;
 import org.apache.jena.rdf.model.ModelFactory;
 import org.apache.jena.rdf.model.Resource;
@@ -41,7 +43,8 @@ public class RdfPolicyResolverService implements PolicyResolverService {
         UseCase useCase = selectUseCase(useCases, selectedUseCaseId);
         Model rdf = loadRdf(rdfFiles);
 
-        List<String> linkedTestIds = resolveLinkedTests(rdf, useCase.policyId());
+        PolicyResolution resolution = resolveLinkedTests(rdf, useCase);
+        List<String> linkedTestIds = resolution.testIds();
         List<TestDefinition> resolved = new ArrayList<>();
         List<TestDefinition> unresolved = new ArrayList<>();
         for (String testId : linkedTestIds) {
@@ -55,55 +58,137 @@ public class RdfPolicyResolverService implements PolicyResolverService {
 
         return new ExecutionPlan(
                 useCase,
-                new Policy(useCase.policyId(), linkedTestIds),
+                new Policy(resolution.primaryPolicyId(useCase.policyId()), linkedTestIds),
                 resolved,
                 unresolved);
     }
 
-    private static List<String> resolveLinkedTests(Model model, String policyId) {
-        String query = """
-                PREFIX bdq: <https://rs.tdwg.org/bdqffdq/terms/>
-                SELECT DISTINCT ?test WHERE {
-                  VALUES ?selected { <%s> }
-                  {
-                    ?selected bdq:hasTest ?test .
-                  }
-                  UNION
-                  {
-                    ?policy bdq:hasUseCase ?selected ;
-                            bdq:hasTest ?test .
-                  }
-                  UNION
-                  {
-                    ?selected <http://rs.tdwg.org/dwc/terms/hasMeasurement> ?test .
-                  }
-                  UNION
-                  {
-                    ?policy bdq:hasUseCase ?selected ;
-                            <http://rs.tdwg.org/dwc/terms/hasMeasurement> ?test .
-                  }
-                }
-                """.formatted(policyId);
-        var qexec = org.apache.jena.query.QueryExecutionFactory.create(
-                org.apache.jena.query.QueryFactory.create(query),
-                model);
-        List<String> ids = new ArrayList<>();
-        try (qexec) {
-            qexec.execSelect().forEachRemaining(row -> ids.add(row.getResource("test").getURI()));
+    private static PolicyResolution resolveLinkedTests(Model model, UseCase useCase) {
+        Set<String> useCaseIds = candidateUseCaseIds(useCase);
+        Set<String> matchedPolicyIds = new LinkedHashSet<>();
+        Set<String> matchedTestIds = new LinkedHashSet<>();
+
+        var statements = model.listStatements();
+        while (statements.hasNext()) {
+            var statement = statements.nextStatement();
+            if (!isHasUseCasePredicate(statement.getPredicate().getLocalName())) {
+                continue;
+            }
+            if (!statement.getObject().isResource()) {
+                continue;
+            }
+            String linkedUseCaseId = resourceUri(statement.getResource());
+            if (!matchesAnyUri(linkedUseCaseId, useCaseIds)) {
+                continue;
+            }
+            String policyId = resourceUri(statement.getSubject());
+            matchedPolicyIds.add(policyId);
+            matchedTestIds.addAll(collectLinkedTests(statement.getSubject(), model));
         }
-        if (!ids.isEmpty()) {
-            return ids;
+
+        for (String useCaseId : useCaseIds) {
+            matchedTestIds.addAll(collectLinkedTests(model.getResource(useCaseId), model));
         }
-        Resource policy = model.getResource(policyId);
-        var iterator = policy.listProperties();
-        while (iterator.hasNext()) {
-            var statement = iterator.nextStatement();
-            if (statement.getPredicate().getLocalName().toLowerCase().contains("test")
-                    && statement.getObject().isResource()) {
-                ids.add(statement.getResource().getURI());
+
+        LOG.debug("Resolved {} policies and {} tests for use case {} (candidates: {})",
+                matchedPolicyIds.size(), matchedTestIds.size(), useCase.id(), useCaseIds);
+        return new PolicyResolution(List.copyOf(matchedPolicyIds), List.copyOf(matchedTestIds));
+    }
+
+    private static Set<String> candidateUseCaseIds(UseCase useCase) {
+        Set<String> candidates = new LinkedHashSet<>();
+        addEquivalentUriCandidates(candidates, useCase.id());
+        addEquivalentUriCandidates(candidates, useCase.policyId());
+        return candidates;
+    }
+
+    private static void addEquivalentUriCandidates(Set<String> candidates, String uri) {
+        if (uri == null || uri.isBlank()) {
+            return;
+        }
+        String trimmed = uri.trim();
+        candidates.add(trimmed);
+        if (trimmed.startsWith("https://")) {
+            candidates.add("http://" + trimmed.substring("https://".length()));
+        } else if (trimmed.startsWith("http://")) {
+            candidates.add("https://" + trimmed.substring("http://".length()));
+        }
+
+        String withoutVersionDate = trimmed.replaceFirst("(/terms/version/[^/]+)-\\d{4}-\\d{2}-\\d{2}$", "$1");
+        String unversioned = withoutVersionDate.replace("/terms/version/", "/terms/");
+        if (!unversioned.equals(trimmed)) {
+            candidates.add(unversioned);
+            if (unversioned.startsWith("https://")) {
+                candidates.add("http://" + unversioned.substring("https://".length()));
+            } else if (unversioned.startsWith("http://")) {
+                candidates.add("https://" + unversioned.substring("http://".length()));
             }
         }
-        return ids;
+    }
+
+    private static boolean matchesAnyUri(String candidate, Set<String> targets) {
+        if (candidate == null || candidate.isBlank()) {
+            return false;
+        }
+        String normalizedCandidate = normalizeUriForMatch(candidate);
+        for (String target : targets) {
+            if (candidate.equals(target) || normalizedCandidate.equals(normalizeUriForMatch(target))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String normalizeUriForMatch(String uri) {
+        String normalized = uri.trim();
+        if (normalized.startsWith("https://")) {
+            normalized = normalized.substring("https://".length());
+        } else if (normalized.startsWith("http://")) {
+            normalized = normalized.substring("http://".length());
+        }
+        if (normalized.endsWith("/")) {
+            normalized = normalized.substring(0, normalized.length() - 1);
+        }
+        return normalized;
+    }
+
+    private static boolean isHasUseCasePredicate(String localName) {
+        return normalizeName(localName).equals("hasusecase");
+    }
+
+    private static boolean isTestPredicate(String localName) {
+        String normalized = normalizeName(localName);
+        return normalized.equals("hastest") || normalized.equals("hasmeasurement");
+    }
+
+    private static String normalizeName(String localName) {
+        return localName == null ? "" : localName.toLowerCase(Locale.ROOT);
+    }
+
+    private static String resourceUri(Resource resource) {
+        if (resource == null) {
+            return "";
+        }
+        return resource.getURI() == null ? resource.toString() : resource.getURI();
+    }
+
+    private static List<String> collectLinkedTests(Resource subject, Model model) {
+        Set<String> testIds = new LinkedHashSet<>();
+        if (subject == null) {
+            return List.of();
+        }
+        var properties = model.listStatements(subject, null, (org.apache.jena.rdf.model.RDFNode) null);
+        while (properties.hasNext()) {
+            var property = properties.nextStatement();
+            if (!isTestPredicate(property.getPredicate().getLocalName()) || !property.getObject().isResource()) {
+                continue;
+            }
+            String testId = resourceUri(property.getResource());
+            if (!testId.isBlank()) {
+                testIds.add(testId);
+            }
+        }
+        return List.copyOf(testIds);
     }
 
     private static String resolveLabel(Model model, String uri) {
@@ -127,6 +212,12 @@ public class RdfPolicyResolverService implements PolicyResolverService {
     private static UseCase selectUseCase(Map<String, UseCase> useCases, String selectedUseCaseId) {
         if (selectedUseCaseId != null && !selectedUseCaseId.isBlank() && useCases.containsKey(selectedUseCaseId)) {
             return useCases.get(selectedUseCaseId);
+        }
+        if (selectedUseCaseId != null && !selectedUseCaseId.isBlank()) {
+            return useCases.values().stream()
+                    .filter(useCase -> matchesAnyUri(selectedUseCaseId, candidateUseCaseIds(useCase)))
+                    .findFirst()
+                    .orElseGet(() -> useCases.values().stream().findFirst().orElseThrow(() -> new AppException("No use cases found")));
         }
         return useCases.values().stream().findFirst().orElseThrow(() -> new AppException("No use cases found"));
     }
@@ -180,6 +271,12 @@ public class RdfPolicyResolverService implements PolicyResolverService {
             return List.of(Lang.JSONLD, Lang.TURTLE, Lang.RDFXML);
         }
         return List.of(Lang.TURTLE, Lang.RDFXML, Lang.JSONLD);
+    }
+
+    private record PolicyResolution(List<String> policyIds, List<String> testIds) {
+        private String primaryPolicyId(String fallback) {
+            return policyIds.isEmpty() ? fallback : policyIds.get(0);
+        }
     }
 
 }
