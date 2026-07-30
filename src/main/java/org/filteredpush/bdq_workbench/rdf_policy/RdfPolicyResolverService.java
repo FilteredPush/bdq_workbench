@@ -1,15 +1,19 @@
 package org.filteredpush.bdq_workbench.rdf_policy;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import org.apache.jena.rdf.model.Model;
 import org.apache.jena.rdf.model.ModelFactory;
 import org.apache.jena.rdf.model.Resource;
-import org.apache.jena.util.FileUtils;
+import org.apache.jena.riot.Lang;
+import org.apache.jena.riot.RDFParser;
+import org.apache.jena.riot.RiotException;
 import org.filteredpush.bdq_workbench.app.AppException;
 import org.filteredpush.bdq_workbench.model.ExecutionPlan;
 import org.filteredpush.bdq_workbench.model.Phase;
@@ -115,11 +119,46 @@ public class RdfPolicyResolverService implements PolicyResolverService {
             if (!Files.exists(path)) {
                 continue;
             }
-            String name = path.getFileName().toString().toLowerCase();
-            String lang = name.endsWith(".owl") || name.endsWith(".rdf") ? FileUtils.langXML : FileUtils.langTurtle;
-            model.read(path.toUri().toString(), lang);
+            readIntoModel(path, model);
         }
         return model;
+    }
+
+    private static void readIntoModel(Path path, Model model) {
+        List<Lang> languages = orderedLangCandidates(path);
+        RiotException lastRiot = null;
+        IOException lastIo = null;
+        for (Lang lang : languages) {
+            try (InputStream in = Files.newInputStream(path)) {
+                RDFParser.source(in)
+                        .base(path.toUri().toString())
+                        .lang(lang)
+                        .parse(model);
+                return;
+            } catch (RiotException e) {
+                lastRiot = e;
+            } catch (IOException e) {
+                lastIo = e;
+            }
+        }
+        if (lastIo != null) {
+            throw new AppException("Unable to read RDF definitions from " + path, lastIo);
+        }
+        throw new AppException("Unable to parse RDF definitions from " + path, lastRiot);
+    }
+
+    private static List<Lang> orderedLangCandidates(Path path) {
+        String name = path.getFileName().toString().toLowerCase(Locale.ROOT);
+        if (name.endsWith(".xml") || name.endsWith(".rdf") || name.endsWith(".owl")) {
+            return List.of(Lang.RDFXML, Lang.TURTLE, Lang.JSONLD);
+        }
+        if (name.endsWith(".ttl")) {
+            return List.of(Lang.TURTLE, Lang.RDFXML, Lang.JSONLD);
+        }
+        if (name.endsWith(".jsonld") || name.endsWith(".json")) {
+            return List.of(Lang.JSONLD, Lang.TURTLE, Lang.RDFXML);
+        }
+        return List.of(Lang.TURTLE, Lang.RDFXML, Lang.JSONLD);
     }
 
 }

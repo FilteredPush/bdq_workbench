@@ -143,7 +143,7 @@ final class BdqWorkbenchGui {
         JTextField threads = addField(
                 advanced,
                 "Threads",
-                Integer.toString(Math.max(1, Runtime.getRuntime().availableProcessors())));
+                Integer.toString(defaultThreadCount()));
 
         JCheckBox runWithAvailableOnly = new JCheckBox("Continue when some tests are unresolved", true);
         advanced.add(runWithAvailableOnly);
@@ -187,15 +187,15 @@ final class BdqWorkbenchGui {
                 defaults.useCaseId()));
 
         pickUseCaseFile.addActionListener(e -> {
-            String selected = chooseFile(frame, "Select use case XML");
+            String selected = chooseFile(frame, "Select use case RDF");
             if (selected != null) {
                 useCaseSource.setText(selected);
                 loadUseCasesIntoCombo(selected, resolver, useCaseChoice, useCaseLoadStatus, defaults.useCaseId());
             }
         });
 
-        exit.addActionListener(e -> frame.dispose());
-        closeButton.addActionListener(e -> frame.dispose());
+        exit.addActionListener(e -> exitApplication(frame));
+        closeButton.addActionListener(e -> exitApplication(frame));
 
         backToSetup.addActionListener(e -> {
             if (!progress.isVisible()) {
@@ -329,9 +329,11 @@ final class BdqWorkbenchGui {
             CachedResourceResolver resolver,
             AppConfig defaults) {
 
-        Path useCaseXml = resolver.resolve(useCaseSource, "bdquc.xml");
-        Path defaultTestDefinitions = resolver.resolve(DEFAULT_TEST_DEFINITIONS_SOURCE, "bdqtest.ttl");
-        Path ontology = resolver.resolve(ontologySource, "bdqffdq.ttl");
+        Path useCaseXml = resolver.resolve(useCaseSource, cacheNameFor(useCaseSource));
+        Path defaultTestDefinitions = resolver.resolve(
+                DEFAULT_TEST_DEFINITIONS_SOURCE,
+                cacheNameFor(DEFAULT_TEST_DEFINITIONS_SOURCE));
+        Path ontology = resolver.resolve(ontologySource, cacheNameFor(ontologySource));
 
         List<Path> rdfFiles = new ArrayList<>();
         rdfFiles.add(defaultTestDefinitions);
@@ -409,7 +411,7 @@ final class BdqWorkbenchGui {
             String defaultUseCaseId) {
         combo.removeAllItems();
         try {
-            Path useCaseXml = resolver.resolve(source, "bdquc.xml");
+            Path useCaseXml = resolver.resolve(source, cacheNameFor(source));
             List<UseCase> useCases = UseCaseXmlParser.loadUseCases(useCaseXml).values().stream().toList();
             if (useCases.isEmpty()) {
                 throw new AppException("No use cases found in " + useCaseXml);
@@ -465,6 +467,16 @@ final class BdqWorkbenchGui {
         return null;
     }
 
+    private static int defaultThreadCount() {
+        int cores = Runtime.getRuntime().availableProcessors();
+        return cores <= 1 ? 1 : cores - 1;
+    }
+
+    private static void exitApplication(JFrame frame) {
+        frame.dispose();
+        System.exit(0);
+    }
+
     private static JTextField addField(JPanel panel, String label, String defaultValue) {
         JPanel row = new JPanel(new BorderLayout(8, 8));
         row.add(new JLabel(label), BorderLayout.WEST);
@@ -503,7 +515,15 @@ final class BdqWorkbenchGui {
 
     private static String cacheNameFor(String source) {
         int hash = Math.abs(source.hashCode());
-        return "extra-" + hash + ".ttl";
+        String extension = ".rdf";
+        int dot = source.lastIndexOf('.');
+        if (dot >= 0 && dot < source.length() - 1) {
+            String candidate = source.substring(dot).toLowerCase();
+            if (candidate.matches("\\.[a-z0-9]{1,8}")) {
+                extension = candidate;
+            }
+        }
+        return "cached-" + hash + extension;
     }
 
     private record UseCaseChoice(String id, String label) {

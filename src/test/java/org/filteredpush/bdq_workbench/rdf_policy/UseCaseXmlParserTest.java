@@ -47,4 +47,66 @@ class UseCaseXmlParserTest {
         assertThat(useCases.get("https://example.org/usecase/uc2").policyId())
                 .isEqualTo("https://example.org/policy/p2");
     }
+
+    @Test
+    void parsesRdfXmlUseCases() throws Exception {
+        Path rdfXml = tempDir.resolve("bdquc.xml");
+        Files.writeString(rdfXml, """
+                <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+                         xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+                         xmlns:bdq="https://rs.tdwg.org/bdq/terms/">
+                  <rdf:Description rdf:about="https://example.org/usecase/uc3">
+                    <rdf:type rdf:resource="https://example.org/ontology#UseCase"/>
+                    <rdfs:label>Use Case Three</rdfs:label>
+                    <bdq:hasQualityProfile rdf:resource="https://example.org/policy/p3"/>
+                  </rdf:Description>
+                </rdf:RDF>
+                """, StandardCharsets.UTF_8);
+
+        Map<String, UseCase> useCases = UseCaseXmlParser.loadUseCases(rdfXml);
+
+        assertThat(useCases).containsKey("https://example.org/usecase/uc3");
+        assertThat(useCases.get("https://example.org/usecase/uc3").policyId())
+                .isEqualTo("https://example.org/policy/p3");
+    }
+
+    @Test
+    void parsesTurtleAndJsonLdUseCases() throws Exception {
+        Path turtle = tempDir.resolve("bdquc.ttl");
+        Files.writeString(turtle, """
+                @prefix ex: <https://example.org/> .
+                @prefix bdq: <https://rs.tdwg.org/bdq/terms/> .
+                @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+                ex:uc4 a ex:UseCase ;
+                    rdfs:label "Use Case Four" ;
+                    bdq:hasQualityProfile ex:p4 .
+                """, StandardCharsets.UTF_8);
+
+        Path jsonld = tempDir.resolve("bdquc.jsonld");
+        Files.writeString(jsonld, """
+                {
+                  "@context": {
+                    "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+                    "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+                    "bdq": "https://rs.tdwg.org/bdq/terms/"
+                  },
+                  "@id": "https://example.org/usecase/uc5",
+                  "@type": "https://example.org/ontology#UseCase",
+                  "rdfs:label": "Use Case Five",
+                  "bdq:hasQualityProfile": {
+                    "@id": "https://example.org/policy/p5"
+                  }
+                }
+                """, StandardCharsets.UTF_8);
+
+        Map<String, UseCase> turtleUseCases = UseCaseXmlParser.loadUseCases(turtle);
+        Map<String, UseCase> jsonLdUseCases = UseCaseXmlParser.loadUseCases(jsonld);
+
+        assertThat(turtleUseCases).containsKey("https://example.org/uc4");
+        assertThat(turtleUseCases.get("https://example.org/uc4").policyId())
+                .isEqualTo("https://example.org/p4");
+        assertThat(jsonLdUseCases).containsKey("https://example.org/usecase/uc5");
+        assertThat(jsonLdUseCases.get("https://example.org/usecase/uc5").policyId())
+                .isEqualTo("https://example.org/policy/p5");
+    }
 }

@@ -1,12 +1,23 @@
 package org.filteredpush.bdq_workbench.rdf_policy;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import javax.xml.parsers.DocumentBuilderFactory;
+import org.apache.jena.rdf.model.Model;
+import org.apache.jena.rdf.model.ModelFactory;
+import org.apache.jena.rdf.model.RDFNode;
+import org.apache.jena.rdf.model.Resource;
+import org.apache.jena.riot.Lang;
+import org.apache.jena.riot.RDFParser;
+import org.apache.jena.riot.RiotException;
+import org.apache.jena.vocabulary.RDFS;
 import org.filteredpush.bdq_workbench.app.AppException;
 import org.filteredpush.bdq_workbench.model.UseCase;
 import org.w3c.dom.Document;
@@ -14,7 +25,7 @@ import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 
-/** Parses use case definitions from bdquc-style XML files. */
+/** Parses use case definitions from bdquc-style RDF/XML and related RDF serializations. */
 public final class UseCaseXmlParser {
     private static final String RDF_NS = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 
@@ -24,6 +35,10 @@ public final class UseCaseXmlParser {
     public static Map<String, UseCase> loadUseCases(Path xmlPath) {
         if (Files.notExists(xmlPath)) {
             throw new AppException("Use case file not found: " + xmlPath);
+        }
+        Map<String, UseCase> rdfUseCases = loadUseCasesFromRdf(xmlPath);
+        if (!rdfUseCases.isEmpty()) {
+            return rdfUseCases;
         }
         try {
             DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
@@ -59,6 +74,127 @@ public final class UseCaseXmlParser {
         } catch (Exception e) {
             throw new AppException("Unable to parse use cases from " + xmlPath, e);
         }
+    }
+
+    private static Map<String, UseCase> loadUseCasesFromRdf(Path rdfPath) {
+        Model model;
+        try {
+            model = readModel(rdfPath);
+        } catch (AppException e) {
+            return Map.of();
+        }
+
+        Map<String, UseCase> result = new LinkedHashMap<>();
+        var subjects = model.listSubjects();
+        while (subjects.hasNext()) {
+            Resource subject = subjects.nextResource();
+            if (!isUseCaseResource(subject, model)) {
+                continue;
+            }
+            String policy = extractPolicy(subject);
+            if (policy.isBlank()) {
+                continue;
+            }
+            String id = firstNonBlank(subject.getURI(), subject.toString(), policy);
+            String label = firstNonBlank(
+                    literalValue(subject.getProperty(RDFS.label)),
+                    id);
+            result.putIfAbsent(id, new UseCase(id, label, policy));
+        }
+        return result;
+    }
+
+    private static Model readModel(Path rdfPath) {
+        List<Lang> languages = orderedLangCandidates(rdfPath);
+        RiotException lastRiot = null;
+        IOException lastIo = null;
+        for (Lang lang : languages) {
+            try (InputStream in = Files.newInputStream(rdfPath)) {
+                Model model = ModelFactory.createDefaultModel();
+                RDFParser.source(in)
+                        .base(rdfPath.toUri().toString())
+                        .lang(lang)
+                        .parse(model);
+                return model;
+            } catch (RiotException e) {
+                lastRiot = e;
+            } catch (IOException e) {
+                lastIo = e;
+            }
+        }
+        if (lastIo != null) {
+            throw new AppException("Unable to read use case RDF from " + rdfPath, lastIo);
+        }
+        throw new AppException("Unable to parse use case RDF from " + rdfPath, lastRiot);
+    }
+
+    private static List<Lang> orderedLangCandidates(Path path) {
+        String name = path.getFileName().toString().toLowerCase(Locale.ROOT);
+        if (name.endsWith(".xml") || name.endsWith(".rdf") || name.endsWith(".owl")) {
+            return List.of(Lang.RDFXML, Lang.TURTLE, Lang.JSONLD);
+        }
+        if (name.endsWith(".ttl")) {
+            return List.of(Lang.TURTLE, Lang.RDFXML, Lang.JSONLD);
+        }
+        if (name.endsWith(".jsonld") || name.endsWith(".json")) {
+            return List.of(Lang.JSONLD, Lang.TURTLE, Lang.RDFXML);
+        }
+        return List.of(Lang.RDFXML, Lang.TURTLE, Lang.JSONLD);
+    }
+
+    private static boolean isUseCaseResource(Resource resource, Model model) {
+        if (resource.getURI() != null && isUseCaseToken(resource.getURI())) {
+            return true;
+        }
+        var types = model.listObjectsOfProperty(resource, model.createProperty(
+                "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"));
+        while (types.hasNext()) {
+            RDFNode type = types.next();
+            if (type.isResource()) {
+                Resource typeResource = type.asResource();
+                if ((typeResource.getURI() != null && isUseCaseToken(typeResource.getURI()))
+                        || isUseCaseToken(typeResource.getLocalName())) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static boolean isUseCaseToken(String value) {
+        if (value == null || value.isBlank()) {
+            return false;
+        }
+        String normalized = normalizedName(value);
+        return normalized.contains("usecase") || normalized.contains("use_case") || normalized.contains("use-case");
+    }
+
+    private static String extractPolicy(Resource resource) {
+        var iterator = resource.listProperties();
+        while (iterator.hasNext()) {
+            var statement = iterator.nextStatement();
+            String predicate = normalizedName(statement.getPredicate().getLocalName() == null
+                    ? statement.getPredicate().getURI()
+                    : statement.getPredicate().getLocalName());
+            if (!(predicate.contains("policy") || predicate.contains("profile"))) {
+                continue;
+            }
+            if (statement.getObject().isResource()) {
+                Resource object = statement.getResource();
+                return object.getURI() == null ? object.toString() : object.getURI();
+            }
+            if (statement.getObject().isLiteral()) {
+                return statement.getString().trim();
+            }
+        }
+        return "";
+    }
+
+    private static String literalValue(org.apache.jena.rdf.model.Statement statement) {
+        if (statement == null || !statement.getObject().isLiteral()) {
+            return "";
+        }
+        return statement.getString();
     }
 
     private static boolean isUseCaseElement(Element element) {

@@ -65,4 +65,24 @@ class CachedResourceResolverTest {
                 .isInstanceOf(AppException.class)
                 .hasMessageContaining("Resource not found");
     }
+
+    @Test
+    void reportsHttpStatusForMissingRemoteResource() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/missing.ttl", exchange -> {
+            exchange.sendResponseHeaders(404, -1);
+            exchange.close();
+        });
+        server.start();
+        try {
+            CachedResourceResolver resolver = new CachedResourceResolver(tempDir.resolve("cache"), HttpClient.newHttpClient());
+            String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/missing.ttl";
+
+            assertThatThrownBy(() -> resolver.resolve(url, "missing.ttl"))
+                    .isInstanceOf(AppException.class)
+                    .hasMessageContaining("HTTP 404");
+        } finally {
+            server.stop(0);
+        }
+    }
 }
