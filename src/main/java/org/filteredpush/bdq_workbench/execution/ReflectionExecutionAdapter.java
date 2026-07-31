@@ -20,10 +20,13 @@ public class ReflectionExecutionAdapter implements ExecutionAdapter {
         try {
             Object result;
             if (implementation.method().getParameterCount() == 1) {
-                result = implementation.method().invoke(implementation.target(), record.terms());
+            	LOG.debug("Executing {}.{} for record {} with paramcount=1 terms {}", binding.implementationClass(), binding.implementationMethod(), record.id(), record.terms());
+            	result = implementation.method().invoke(implementation.target(), record.terms());
             } else if (implementation.method().getParameterCount() == 2) {
+            	LOG.debug("Executing {}.{} for record {} with paramcount=2 terms {} and parameters {}", binding.implementationClass(), binding.implementationMethod(), record.id(), record.terms(), binding.parameters());
                 result = implementation.method().invoke(implementation.target(), record.terms(), binding.parameters());
             } else {
+            	LOG.debug("Executing {}.{} for record {} with paramcount=0", binding.implementationClass(), binding.implementationMethod(), record.id());
                 result = implementation.method().invoke(implementation.target());
             }
             OutcomeStatus status = Boolean.FALSE.equals(result) ? OutcomeStatus.FAILED : OutcomeStatus.PASSED;
@@ -43,6 +46,7 @@ public class ReflectionExecutionAdapter implements ExecutionAdapter {
                     start,
                     Instant.now());
         } catch (Exception e) {
+        	LOG.error("Error executing {}.{} for record {}: {}", binding.implementationClass(), binding.implementationMethod(), record.id(), e.getMessage(), e);
             return new Response(
                     record.id(),
                     binding.testId(),
