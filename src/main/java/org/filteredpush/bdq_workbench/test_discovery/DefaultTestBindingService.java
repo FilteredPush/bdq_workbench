@@ -1,6 +1,7 @@
 package org.filteredpush.bdq_workbench.test_discovery;
 
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
@@ -24,6 +25,9 @@ public class DefaultTestBindingService implements TestBindingService {
             List<DiscoveredImplementation> discovered,
             Map<String, String> explicitMapping) {
 
+    	LOG.debug("Binding {} tests to {} discovered implementations with {} explicit mappings",
+				tests.size(), discovered.size(), explicitMapping.size());
+    	
         Map<String, List<DiscoveredImplementation>> byProvided = discovered.stream()
                 .filter(d -> d.providedTestId() != null && !d.providedTestId().isBlank())
                 .collect(Collectors.groupingBy(d -> normalize(d.providedTestId())));
@@ -64,8 +68,21 @@ public class DefaultTestBindingService implements TestBindingService {
                 continue;
             }
             String mappedMethod = explicitMapping.get(test.id());
+            LOG.debug("Mapped test {} ({}) to explicit method {}", test.id(), test.label(), mappedMethod);
             if (mappedMethod != null && byMethodKey.containsKey(mappedMethod)) {
                 DiscoveredImplementation d = byMethodKey.get(mappedMethod);
+                LOG.debug("Mapped test {} ({}) to {}#{} with parameters {}",
+						test.id(), test.label(), d.implementationClass(), d.implementationMethod(), d.parameters());
+                Iterator<String> paramKeys = d.parameters().keySet().iterator();
+                while (paramKeys.hasNext()) {
+					String key = paramKeys.next();
+					LOG.debug("Checking if test {} ({}) has parameter {} for mapped implementation {}#{}",
+							test.id(), test.label(), key, d.implementationClass(), d.implementationMethod());
+					if (!test.parameters().containsKey(key)) {
+						LOG.warn("Mapped test {} ({}) to {}#{} but missing parameter {}",
+								test.id(), test.label(), d.implementationClass(), d.implementationMethod(), key);
+					}
+				}
                 bindings.add(new ImplementationBinding(test.id(), d.implementationClass(), d.implementationMethod(), d.phase(), d.parameters()));
             } else {
                 unresolved.add(test);

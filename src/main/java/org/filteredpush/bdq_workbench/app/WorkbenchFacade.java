@@ -48,6 +48,7 @@ public class WorkbenchFacade {
         var dataset = ingestService.ingest(config.datasetPath());
         ExecutionPlan plan = policyResolverService.resolve(config.useCaseId());
         List<DiscoveredImplementation> discovered = testDiscoveryService.discover();
+        // TODO: explicitMapping not implemented yet, so passing empty map for now
         TestBindingResult bindingResult = testBindingService.bind(plan.tests(), discovered, java.util.Map.of());
 
         LOG.info("Executing {} tests with {} discovered implementations",

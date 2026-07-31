@@ -19,3 +19,4 @@ buildNumber.properties
 
 # bdq_workbench default report output
 reports/
+output.log
