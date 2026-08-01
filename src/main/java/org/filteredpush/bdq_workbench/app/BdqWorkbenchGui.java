@@ -23,19 +23,24 @@ import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JProgressBar;
 import javax.swing.JScrollPane;
+import javax.swing.JSplitPane;
+import javax.swing.JTable;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
+import org.filteredpush.bdq_workbench.execution.ExecutionProgressListener;
 import org.filteredpush.bdq_workbench.execution.ParallelPhaseExecutionService;
 import org.filteredpush.bdq_workbench.execution.ReflectionExecutionAdapter;
 import org.filteredpush.bdq_workbench.ingest.DefaultIngestService;
-import org.filteredpush.bdq_workbench.model.ExecutionPlan;
 import org.filteredpush.bdq_workbench.model.ExecutionSummary;
+import org.filteredpush.bdq_workbench.model.PreparedRun;
 import org.filteredpush.bdq_workbench.model.Response;
+import org.filteredpush.bdq_workbench.model.TestDefinition;
 import org.filteredpush.bdq_workbench.model.UseCase;
 import org.filteredpush.bdq_workbench.rdf_policy.RdfPolicyResolverService;
 import org.filteredpush.bdq_workbench.rdf_policy.UseCaseXmlParser;
+import org.filteredpush.bdq_workbench.reporting.DetailedResponseStreamExporter;
 import org.filteredpush.bdq_workbench.reporting.ReportingService;
 import org.filteredpush.bdq_workbench.reporting.SummaryReportExporter;
 import org.filteredpush.bdq_workbench.reporting.XlsCompatibilityExporter;
@@ -93,11 +98,22 @@ final class BdqWorkbenchGui {
         statusArea.setEditable(false);
         statusArea.setLineWrap(true);
         statusArea.setWrapStyleWord(true);
+        JTable bindingGrid = new JTable(new BindingReviewTableModel(List.of()));
+        JTextArea resultSummaryArea = new JTextArea();
+        resultSummaryArea.setEditable(false);
+        resultSummaryArea.setLineWrap(true);
+        resultSummaryArea.setWrapStyleWord(true);
 
         JPanel monitorPanel = new JPanel(new BorderLayout(8, 8));
-        monitorPanel.add(new JScrollPane(statusArea), BorderLayout.CENTER);
+        JSplitPane monitorSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT,
+                new JScrollPane(statusArea),
+                new JSplitPane(JSplitPane.VERTICAL_SPLIT,
+                        new JScrollPane(bindingGrid),
+                        new JScrollPane(resultSummaryArea)));
+        monitorSplit.setResizeWeight(0.45d);
+        monitorPanel.add(monitorSplit, BorderLayout.CENTER);
         JProgressBar progress = new JProgressBar();
-        progress.setIndeterminate(true);
+        progress.setStringPainted(true);
         progress.setVisible(false);
         monitorPanel.add(progress, BorderLayout.NORTH);
 
@@ -247,7 +263,6 @@ final class BdqWorkbenchGui {
             SwingWorker<PreflightState, Void> preflight = new SwingWorker<>() {
                 @Override
                 protected PreflightState doInBackground() {
-                    LOG.debug("Preparing preflight mapping");
                     AppConfig config = buildConfig(
                             dataset.field().getText().trim(),
                             selectedUseCaseId(useCaseChoice),
@@ -260,14 +275,8 @@ final class BdqWorkbenchGui {
                             resolver,
                             defaults);
                     BdqWorkbenchApplication.validateStartupConfig(config);
-
-                    RdfPolicyResolverService policyResolver = new RdfPolicyResolverService(config.useCaseXml(), config.rdfDefinitions());
-                    ExecutionPlan plan = policyResolver.resolve(config.useCaseId());
-                    var discovery = new ClasspathAnnotationTestDiscoveryService(config.implementationPackages());
-                    var discovered = discovery.discover();
-                    TestBindingResult binding = new DefaultTestBindingService().bind(plan.tests(), discovered, Map.of());
-
-                    return new PreflightState(config, plan, discovered.size(), binding);
+                    PreparedRun preparedRun = createFacade(config).prepare(config);
+                    return new PreflightState(preparedRun);
                 }
 
                 @Override
@@ -275,10 +284,12 @@ final class BdqWorkbenchGui {
                     try {
                         state[0] = get();
                         LOG.debug("Preflight mapping complete: {} runnable, {} unresolved",
-                                state[0].binding().bindings().size(),
-                                state[0].binding().unresolved().size());
+                                state[0].preparedRun().bindingResult().bindings().size(),
+                                state[0].preparedRun().bindingResult().unresolved().size());
                         String preflightMessage = renderPreflightMessage(state[0]);
                         setStatus(statusArea, preflightMessage);
+                        bindingGrid.setModel(new BindingReviewTableModel(state[0].preparedRun().bindingResult().reviews()));
+                        resultSummaryArea.setText("Parameter review ready. Edit parameter values or keep defaults before starting the run.");
                         boolean complete = state[0].isFullyResolved();
                         if (!complete && !runWithAvailableOnly.isSelected()) {
                             appendStatus(statusArea, "\nRun is blocked until unresolved tests are handled.\n");
@@ -308,13 +319,30 @@ final class BdqWorkbenchGui {
             startRun.setEnabled(false);
             backToSetup.setEnabled(false);
             progress.setVisible(true);
+            progress.setMinimum(0);
+            progress.setValue(0);
             appendStatus(statusArea, "\nStarting execution...\n");
 
             SwingWorker<ExecutionSummary, Void> worker = new SwingWorker<>() {
                 @Override
                 protected ExecutionSummary doInBackground() {
                     LOG.info("Starting BDQ Workbench execution");
-                    return runWorkbench(state[0].config());
+                    BindingReviewTableModel reviewModel = (BindingReviewTableModel) bindingGrid.getModel();
+                    PreparedRun editedRun = applyParameterEdits(state[0].preparedRun(), reviewModel);
+                    ExecutionProgressTracker tracker = new ExecutionProgressTracker();
+                    return runWorkbench(editedRun, tracker, snapshot -> SwingUtilities.invokeLater(() -> {
+                        int max = Math.max(1, snapshot.total());
+                        progress.setMaximum(max);
+                        progress.setValue(snapshot.completed());
+                        progress.setString(String.format(
+                                "%s queued=%d running=%d completed=%d/%d",
+                                snapshot.phase(),
+                                snapshot.queued(),
+                                snapshot.running(),
+                                snapshot.completed(),
+                                snapshot.total()));
+                        resultSummaryArea.setText(renderProgressSnapshot(snapshot));
+                    }));
                 }
 
                 @Override
@@ -323,12 +351,15 @@ final class BdqWorkbenchGui {
                         ExecutionSummary summary = get();
                         LOG.info("BDQ Workbench execution complete: {} outcomes", summary.responses().size());
                         appendStatus(statusArea, "Completed: " + summary.responses().size() + " outcomes\n");
+                        resultSummaryArea.setText(renderResultSummary(ExecutionResultSummary.from(summary)));
                         Iterator <Response> i = summary.responses().iterator();
                         while (i.hasNext()) {
 							Response r = i.next();
 							appendStatus(statusArea, String.format(
-									" - %s: %s -> %s (%s)\n",
+									" - %s [%s/%s]: %s -> %s (%s)\n",
 									r.testId(),
+                                    r.phase(),
+                                    r.responseStatus(),
 									r.recordId(),
 									r.status(),
 									r.message()));
@@ -366,15 +397,47 @@ final class BdqWorkbenchGui {
         return frame;
     }
 
-    private static ExecutionSummary runWorkbench(AppConfig config) {
-        WorkbenchFacade facade = new WorkbenchFacade(
+    private static ExecutionSummary runWorkbench(
+            PreparedRun preparedRun,
+            ExecutionProgressTracker tracker,
+            java.util.function.Consumer<ExecutionProgressSnapshot> progressConsumer) {
+        WorkbenchFacade facade = createFacade(preparedRun.config(), new ExecutionProgressListener() {
+            @Override
+            public void onPhaseStarted(org.filteredpush.bdq_workbench.model.Phase phase, int total) {
+                tracker.onPhaseStarted(phase, total);
+                progressConsumer.accept(tracker.snapshot());
+            }
+
+            @Override
+            public void onResponse(org.filteredpush.bdq_workbench.model.Phase phase, Response response, int completed, int total) {
+                tracker.onResponse(phase, response, completed, total);
+                progressConsumer.accept(tracker.snapshot());
+            }
+
+            @Override
+            public void onPhaseCompleted(org.filteredpush.bdq_workbench.model.Phase phase, int completed, int total) {
+                progressConsumer.accept(tracker.snapshot());
+            }
+        });
+        return facade.runPrepared(preparedRun);
+    }
+
+    private static WorkbenchFacade createFacade(AppConfig config) {
+        return createFacade(config, new ExecutionProgressListener() {
+        });
+    }
+
+    private static WorkbenchFacade createFacade(AppConfig config, ExecutionProgressListener progressListener) {
+        return new WorkbenchFacade(
                 new DefaultIngestService(),
                 new RdfPolicyResolverService(config.useCaseXml(), config.rdfDefinitions()),
                 new ClasspathAnnotationTestDiscoveryService(config.implementationPackages()),
                 new DefaultTestBindingService(),
-                new ParallelPhaseExecutionService(config.threadCount(), new ReflectionExecutionAdapter()),
-                new ReportingService(List.of(new SummaryReportExporter(), new XlsCompatibilityExporter())));
-        return facade.run(config);
+                new ParallelPhaseExecutionService(config.threadCount(), new ReflectionExecutionAdapter(), progressListener),
+                new ReportingService(List.of(
+                        new SummaryReportExporter(),
+                        new DetailedResponseStreamExporter(),
+                        new XlsCompatibilityExporter())));
     }
 
     private static AppConfig buildConfig(
@@ -427,48 +490,53 @@ final class BdqWorkbenchGui {
     }
 
     private static String renderPreflightMessage(PreflightState state) {
-        int policyResolved = state.plan().tests().size();
-        int policyUnresolved = state.plan().unresolvedTests().size();
-        int bindingUnresolved = state.binding().unresolved().size();
-        int runnable = state.binding().bindings().size();
+        int policyResolved = state.preparedRun().plan().tests().size();
+        int policyUnresolved = state.preparedRun().plan().unresolvedTests().size();
+        int bindingUnresolved = state.preparedRun().bindingResult().unresolved().size();
+        int runnable = state.preparedRun().bindingResult().bindings().size();
         int policyTotal = policyResolved + policyUnresolved;
 
         StringBuilder sb = new StringBuilder();
         sb.append("Use case preflight mapping\n");
-        sb.append("Selected use case: ").append(state.plan().useCase().id()).append(" (")
-                .append(state.plan().useCase().label()).append(")\n");
-        sb.append("Selected use case reference: ").append(state.plan().useCase().policyId()).append('\n');
+        sb.append("Selected use case: ").append(state.preparedRun().plan().useCase().id()).append(" (")
+                .append(state.preparedRun().plan().useCase().label()).append(")\n");
+        sb.append("Selected use case reference: ").append(state.preparedRun().plan().useCase().policyId()).append('\n');
         sb.append("Policy tests total: ").append(policyTotal).append('\n');
         sb.append("Policy tests resolved from definitions: ").append(policyResolved).append('\n');
         sb.append("Policy tests unresolved in definitions: ").append(policyUnresolved).append('\n');
-        sb.append("Discovered implementation methods: ").append(state.discoveredCount()).append('\n');
+        sb.append("Discovered implementation methods: ").append(state.preparedRun().discovered().size()).append('\n');
         sb.append("Runnable mapped tests: ").append(runnable).append('\n');
         sb.append("Tests without discovered implementation: ").append(bindingUnresolved).append("\n\n");
 
         Map<String, String> labelsByTestId = new LinkedHashMap<>();
-        state.plan().tests().forEach(t -> labelsByTestId.put(t.id(), t.label()));
-        state.plan().unresolvedTests().forEach(t -> labelsByTestId.put(t.id(), t.label()));
-        state.binding().unresolved().forEach(t -> labelsByTestId.put(t.id(), t.label()));
+        state.preparedRun().plan().tests().forEach(t -> labelsByTestId.put(t.id(), t.label()));
+        state.preparedRun().plan().unresolvedTests().forEach(t -> labelsByTestId.put(t.id(), t.label()));
+        state.preparedRun().bindingResult().unresolved().forEach(t -> labelsByTestId.put(t.id(), t.label()));
 
-        if (!state.binding().bindings().isEmpty()) {
+        if (!state.preparedRun().bindingResult().bindings().isEmpty()) {
             sb.append("Matched library mappings:\n");
-            state.binding().bindings().forEach(b -> sb.append(" - ")
+            state.preparedRun().bindingResult().bindings().forEach(b -> sb.append(" - ")
                     .append(formatTestIdWithLabel(b.testId(), labelsByTestId.get(b.testId())))
                     .append(" -> ")
                     .append(b.implementationClass())
                     .append("#")
                     .append(b.implementationMethod())
+                    .append(" [")
+                    .append(b.bindingStatus())
+                    .append(", ")
+                    .append(b.methodSelection())
+                    .append("]")
                     .append('\n'));
         }
-        if (!state.plan().unresolvedTests().isEmpty()) {
+        if (!state.preparedRun().plan().unresolvedTests().isEmpty()) {
             sb.append("Unresolved policy definitions:\n");
-            state.plan().unresolvedTests().forEach(t -> sb.append(" - ")
+            state.preparedRun().plan().unresolvedTests().forEach(t -> sb.append(" - ")
                     .append(formatTestIdWithLabel(t.id(), t.label()))
                     .append('\n'));
         }
-        if (!state.binding().unresolved().isEmpty()) {
+        if (!state.preparedRun().bindingResult().unresolved().isEmpty()) {
             sb.append("Unresolved library mappings:\n");
-            state.binding().unresolved().forEach(t -> sb.append(" - ")
+            state.preparedRun().bindingResult().unresolved().forEach(t -> sb.append(" - ")
                     .append(formatTestIdWithLabel(t.id(), t.label()))
                     .append('\n'));
         }
@@ -695,6 +763,54 @@ final class BdqWorkbenchGui {
         LOG.info("{}", message);
     }
 
+    private static PreparedRun applyParameterEdits(PreparedRun preparedRun, BindingReviewTableModel reviewModel) {
+        List<TestDefinition> updatedTests = preparedRun.plan().tests().stream()
+                .map(test -> new TestDefinition(
+                        test.id(),
+                        test.label(),
+                        test.type(),
+                        test.phase(),
+                        reviewModel.editedParametersFor(test.id()).isEmpty()
+                                ? test.parameters()
+                                : reviewModel.editedParametersFor(test.id())))
+                .toList();
+        TestBindingResult rebound = new DefaultTestBindingService().bind(
+                updatedTests,
+                preparedRun.discovered(),
+                Map.of(),
+                collectAvailableTerms(preparedRun.dataset()));
+        return new PreparedRun(
+                preparedRun.config(),
+                preparedRun.dataset().copy(),
+                preparedRun.plan(),
+                preparedRun.discovered(),
+                rebound);
+    }
+
+    private static java.util.Set<String> collectAvailableTerms(org.filteredpush.bdq_workbench.model.RecordDataset dataset) {
+        java.util.Set<String> terms = new java.util.LinkedHashSet<>();
+        dataset.records().forEach(record -> terms.addAll(record.terms().keySet()));
+        return terms;
+    }
+
+    private static String renderProgressSnapshot(ExecutionProgressSnapshot snapshot) {
+        return "Execution progress\n"
+                + "Phase: " + snapshot.phase() + "\n"
+                + "Queued: " + snapshot.queued() + "\n"
+                + "Running: " + snapshot.running() + "\n"
+                + "Completed: " + snapshot.completed() + "/" + snapshot.total() + "\n"
+                + "Status counts: " + snapshot.statusCounts() + "\n"
+                + "Result counts: " + snapshot.resultCounts() + "\n";
+    }
+
+    private static String renderResultSummary(ExecutionResultSummary summary) {
+        return "Results summary\n"
+                + "Phase counts: " + summary.phaseCounts() + "\n"
+                + "Response status counts: " + summary.responseStatusCounts() + "\n"
+                + "Response result counts: " + summary.responseResultCounts() + "\n"
+                + "Saved files: reports/bdq-report-summary.txt, reports/bdq-report-xls-hook.txt\n";
+    }
+
     private record UseCaseChoice(String id, String label) {
         @Override
         public String toString() {
@@ -705,9 +821,10 @@ final class BdqWorkbenchGui {
     private record PickerField(JTextField field, JButton button) {
     }
 
-    private record PreflightState(AppConfig config, ExecutionPlan plan, int discoveredCount, TestBindingResult binding) {
+    private record PreflightState(PreparedRun preparedRun) {
         boolean isFullyResolved() {
-            return plan.unresolvedTests().isEmpty() && binding.unresolved().isEmpty();
+            return preparedRun.plan().unresolvedTests().isEmpty()
+                    && preparedRun.bindingResult().unresolved().isEmpty();
         }
     }
 }

@@ -1,12 +1,15 @@
 package org.filteredpush.bdq_workbench.app;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import org.filteredpush.bdq_workbench.execution.TestExecutionService;
 import org.filteredpush.bdq_workbench.ingest.IngestService;
 import org.filteredpush.bdq_workbench.model.ExecutionPlan;
 import org.filteredpush.bdq_workbench.model.ExecutionSummary;
 import org.filteredpush.bdq_workbench.model.OutcomeStatus;
+import org.filteredpush.bdq_workbench.model.PreparedRun;
 import org.filteredpush.bdq_workbench.model.Response;
 import org.filteredpush.bdq_workbench.rdf_policy.PolicyResolverService;
 import org.filteredpush.bdq_workbench.reporting.ReportingService;
@@ -44,17 +47,32 @@ public class WorkbenchFacade {
         this.reportingService = reportingService;
     }
 
-    public ExecutionSummary run(AppConfig config) {
+    public PreparedRun prepare(AppConfig config) {
         var dataset = ingestService.ingest(config.datasetPath());
         ExecutionPlan plan = policyResolverService.resolve(config.useCaseId());
         List<DiscoveredImplementation> discovered = testDiscoveryService.discover();
-        // TODO: explicitMapping not implemented yet, so passing empty map for now
-        TestBindingResult bindingResult = testBindingService.bind(plan.tests(), discovered, java.util.Map.of());
+        TestBindingResult bindingResult = testBindingService.bind(
+                plan.tests(),
+                discovered,
+                java.util.Map.of(),
+                collectAvailableTerms(dataset));
+        return new PreparedRun(config, dataset, plan, List.copyOf(discovered), bindingResult);
+    }
+
+    public ExecutionSummary run(AppConfig config) {
+        return runPrepared(prepare(config));
+    }
+
+    public ExecutionSummary runPrepared(PreparedRun preparedRun) {
+        var dataset = preparedRun.dataset();
+        ExecutionPlan plan = preparedRun.plan();
+        List<DiscoveredImplementation> discovered = preparedRun.discovered();
+        TestBindingResult bindingResult = preparedRun.bindingResult();
 
         LOG.info("Executing {} tests with {} discovered implementations",
-				bindingResult.bindings().size(),
-				discovered.size());
-        
+                bindingResult.bindings().size(),
+                discovered.size());
+
         List<Response> responses = new ArrayList<>(executionService.execute(
                 dataset,
                 bindingResult.bindings(),
@@ -64,12 +82,17 @@ public class WorkbenchFacade {
             responses.add(new Response(
                     "*",
                     unresolved.id(),
+                    unresolved.type(),
                     "",
                     "",
                     unresolved.phase(),
                     unresolved.parameters(),
                     OutcomeStatus.NOT_IMPLEMENTED,
+                    "NOT_IMPLEMENTED",
+                    null,
                     "Unresolved in policy resolution",
+                    "Unresolved in policy resolution",
+                    java.util.Map.of(),
                     java.time.Instant.now(),
                     java.time.Instant.now()));
         }
@@ -77,12 +100,17 @@ public class WorkbenchFacade {
             responses.add(new Response(
                     "*",
                     unresolved.id(),
+                    unresolved.type(),
                     "",
                     "",
                     unresolved.phase(),
                     unresolved.parameters(),
                     OutcomeStatus.NOT_IMPLEMENTED,
+                    "NOT_IMPLEMENTED",
+                    null,
                     "No implementation discovered",
+                    "No implementation discovered",
+                    java.util.Map.of(),
                     java.time.Instant.now(),
                     java.time.Instant.now()));
         }
@@ -94,5 +122,11 @@ public class WorkbenchFacade {
         ExecutionSummary summary = new ExecutionSummary(List.copyOf(responses));
         reportingService.export(summary);
         return summary;
+    }
+
+    private static Set<String> collectAvailableTerms(org.filteredpush.bdq_workbench.model.RecordDataset dataset) {
+        Set<String> terms = new LinkedHashSet<>();
+        dataset.records().forEach(record -> terms.addAll(record.terms().keySet()));
+        return terms;
     }
 }

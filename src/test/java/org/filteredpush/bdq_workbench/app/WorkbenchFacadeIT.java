@@ -10,8 +10,12 @@ import org.filteredpush.bdq_workbench.execution.ParallelPhaseExecutionService;
 import org.filteredpush.bdq_workbench.execution.ReflectionExecutionAdapter;
 import org.filteredpush.bdq_workbench.ingest.DefaultIngestService;
 import org.filteredpush.bdq_workbench.model.ExecutionSummary;
+import org.filteredpush.bdq_workbench.model.MethodParameter;
+import org.filteredpush.bdq_workbench.model.ParameterRole;
 import org.filteredpush.bdq_workbench.model.Phase;
+import org.filteredpush.bdq_workbench.model.TestType;
 import org.filteredpush.bdq_workbench.rdf_policy.RdfPolicyResolverService;
+import org.filteredpush.bdq_workbench.reporting.DetailedResponseStreamExporter;
 import org.filteredpush.bdq_workbench.reporting.ReportingService;
 import org.filteredpush.bdq_workbench.reporting.SummaryReportExporter;
 import org.filteredpush.bdq_workbench.test_discovery.DefaultTestBindingService;
@@ -31,10 +35,12 @@ class WorkbenchFacadeIT {
                 return List.of(new DiscoveredImplementation(
                         "urn:test:validate",
                         null,
+                        TestType.VALIDATION,
                         Phase.PRE_AMENDMENT,
                         StubImpl.class.getName(),
                         "validate",
-                        Map.of(),
+                        null,
+                        List.of(new MethodParameter(0, "record", ParameterRole.LEGACY_RECORD, "record", Map.class.getName(), true)),
                         new StubImpl(),
                         m));
             } catch (NoSuchMethodException e) {
@@ -47,7 +53,7 @@ class WorkbenchFacadeIT {
                 discovery,
                 new DefaultTestBindingService(),
                 new ParallelPhaseExecutionService(1, new ReflectionExecutionAdapter()),
-                new ReportingService(List.of(new SummaryReportExporter())));
+                new ReportingService(List.of(new SummaryReportExporter(), new DetailedResponseStreamExporter())));
 
         ExecutionSummary summary = facade.run(new AppConfig(
                 base.resolve("bdquc.xml"),
@@ -59,11 +65,60 @@ class WorkbenchFacadeIT {
 
         assertThat(summary.responses()).isNotEmpty();
         assertThat(summary.responses()).anyMatch(r -> r.testId().equals("urn:test:validate"));
+        assertThat(summary.responses()).anyMatch(r -> "RUN_HAS_RESULT".equals(r.responseStatus()));
     }
 
     public static class StubImpl {
-        public boolean validate(Map<String, String> record) {
-            return record.containsKey("occurrenceID");
+        public StubDQResponse validate(Map<String, String> record) {
+            return new StubDQResponse("RUN_HAS_RESULT", "COMPLIANT", record.get("occurrenceID"));
+        }
+    }
+
+    public static class StubDQResponse {
+        private final StubResultState resultState;
+        private final StubResultValue value;
+        private final String comment;
+
+        StubDQResponse(String status, Object value, String comment) {
+            this.resultState = new StubResultState(status);
+            this.value = new StubResultValue(value);
+            this.comment = comment;
+        }
+
+        public StubResultState getResultState() {
+            return resultState;
+        }
+
+        public StubResultValue getValue() {
+            return value;
+        }
+
+        public String getComment() {
+            return comment;
+        }
+    }
+
+    public static class StubResultState {
+        private final String label;
+
+        StubResultState(String label) {
+            this.label = label;
+        }
+
+        public String getLabel() {
+            return label;
+        }
+    }
+
+    public static class StubResultValue {
+        private final Object object;
+
+        StubResultValue(Object object) {
+            this.object = object;
+        }
+
+        public Object getObject() {
+            return object;
         }
     }
 }

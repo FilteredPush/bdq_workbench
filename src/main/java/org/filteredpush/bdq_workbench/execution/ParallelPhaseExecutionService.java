@@ -18,10 +18,20 @@ import org.filteredpush.bdq_workbench.test_discovery.DiscoveredImplementation;
 public class ParallelPhaseExecutionService implements TestExecutionService {
     private final int threadCount;
     private final ExecutionAdapter executionAdapter;
+    private final ExecutionProgressListener progressListener;
 
     public ParallelPhaseExecutionService(int threadCount, ExecutionAdapter executionAdapter) {
+        this(threadCount, executionAdapter, new ExecutionProgressListener() {
+        });
+    }
+
+    public ParallelPhaseExecutionService(
+            int threadCount,
+            ExecutionAdapter executionAdapter,
+            ExecutionProgressListener progressListener) {
         this.threadCount = Math.max(1, threadCount);
         this.executionAdapter = executionAdapter;
+        this.progressListener = progressListener;
     }
 
     @Override
@@ -58,6 +68,8 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
         if (phaseBindings.isEmpty()) {
             return List.of();
         }
+        int total = dataset.records().size() * phaseBindings.size();
+        progressListener.onPhaseStarted(phase, total);
         ExecutorService executor = Executors.newFixedThreadPool(threadCount);
         try {
             List<Future<Response>> futures = new ArrayList<>();
@@ -70,14 +82,32 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
                 }
             }
             List<Response> responses = new ArrayList<>();
+            int completed = 0;
             for (Future<Response> future : futures) {
-                responses.add(future.get());
+                Response response = future.get();
+                responses.add(response);
+                completed++;
+                if (phase == Phase.AMENDMENT) {
+                    applyAmendments(dataset, response);
+                }
+                progressListener.onResponse(phase, response, completed, total);
             }
+            progressListener.onPhaseCompleted(phase, completed, total);
             return responses;
         } catch (Exception e) {
             throw new RuntimeException("Execution failed in phase " + phase, e);
         } finally {
             executor.shutdownNow();
         }
+    }
+
+    private static void applyAmendments(RecordDataset dataset, Response response) {
+        if (response.amendments().isEmpty()) {
+            return;
+        }
+        dataset.records().stream()
+                .filter(record -> record.id().equals(response.recordId()))
+                .findFirst()
+                .ifPresent(record -> response.amendments().forEach(record.terms()::put));
     }
 }

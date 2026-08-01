@@ -4,8 +4,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import org.filteredpush.bdq_workbench.model.BindingStatus;
+import org.filteredpush.bdq_workbench.model.MethodParameter;
+import org.filteredpush.bdq_workbench.model.ParameterRole;
+import org.filteredpush.bdq_workbench.model.ParameterizationCapability;
 import org.filteredpush.bdq_workbench.model.Phase;
 import org.filteredpush.bdq_workbench.model.TestDefinition;
+import org.filteredpush.bdq_workbench.model.TestType;
 import org.junit.jupiter.api.Test;
 
 class DefaultTestBindingServiceTest {
@@ -17,34 +23,39 @@ class DefaultTestBindingServiceTest {
         DiscoveredImplementation discoveredProvided = new DiscoveredImplementation(
                 "urn:test:1",
                 null,
+                TestType.VALIDATION,
                 Phase.PRE_AMENDMENT,
                 Dummy.class.getName(),
                 "validate",
-                Map.of(),
+                null,
+                List.of(),
                 new Dummy(),
                 Dummy.class.getMethod("validate"));
 
         DiscoveredImplementation discoveredMapped = new DiscoveredImplementation(
                 "urn:test:unused",
                 null,
+                TestType.VALIDATION,
                 Phase.POST_AMENDMENT,
                 Dummy.class.getName(),
                 "post",
-                Map.of(),
+                null,
+                List.of(),
                 new Dummy(),
                 Dummy.class.getMethod("post"));
 
         TestBindingResult result = service.bind(
                 List.of(
-                        new TestDefinition("urn:test:1", "A", Phase.PRE_AMENDMENT, Map.of()),
-                        new TestDefinition("urn:test:2", "B", Phase.POST_AMENDMENT, Map.of()),
-                        new TestDefinition("urn:test:3", "C", Phase.PRE_AMENDMENT, Map.of())),
+                        new TestDefinition("urn:test:1", "A", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of()),
+                        new TestDefinition("urn:test:2", "B", TestType.VALIDATION, Phase.POST_AMENDMENT, Map.of()),
+                        new TestDefinition("urn:test:3", "C", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of())),
                 List.of(discoveredProvided, discoveredMapped),
                 Map.of("urn:test:2", Dummy.class.getName() + "#post"));
 
         assertThat(result.bindings()).hasSize(2);
         assertThat(result.bindings()).extracting("testId").containsExactlyInAnyOrder("urn:test:1", "urn:test:2");
         assertThat(result.unresolved()).extracting(TestDefinition::id).containsExactly("urn:test:3");
+        assertThat(result.reviews()).hasSize(3);
     }
 
     @Test
@@ -54,20 +65,24 @@ class DefaultTestBindingServiceTest {
         DiscoveredImplementation exactVersion = new DiscoveredImplementation(
                 "3cff4dc4-72e9-4abe-9bf3-8a30f1618432",
                 "https://rs.tdwg.org/bdqtest/terms/3cff4dc4-72e9-4abe-9bf3-8a30f1618432-2025-03-06",
+                TestType.VALIDATION,
                 Phase.PRE_AMENDMENT,
                 Dummy.class.getName(),
                 "validate",
-                Map.of(),
+                null,
+                List.of(),
                 new Dummy(),
                 Dummy.class.getMethod("validate"));
 
         DiscoveredImplementation fallbackOnly = new DiscoveredImplementation(
                 "3cff4dc4-72e9-4abe-9bf3-8a30f1618432",
                 "https://rs.tdwg.org/bdqtest/terms/3cff4dc4-72e9-4abe-9bf3-8a30f1618432-2025-01-01",
+                TestType.VALIDATION,
                 Phase.PRE_AMENDMENT,
                 Dummy.class.getName(),
                 "post",
-                Map.of(),
+                null,
+                List.of(),
                 new Dummy(),
                 Dummy.class.getMethod("post"));
 
@@ -75,6 +90,7 @@ class DefaultTestBindingServiceTest {
                 List.of(new TestDefinition(
                         "https://rs.tdwg.org/bdqtest/terms/3cff4dc4-72e9-4abe-9bf3-8a30f1618432-2025-03-06",
                         "VALIDATION_EVENTTEMPORAL_NOTEMPTY",
+                        TestType.VALIDATION,
                         Phase.PRE_AMENDMENT,
                         Map.of())),
                 List.of(exactVersion, fallbackOnly),
@@ -86,32 +102,82 @@ class DefaultTestBindingServiceTest {
     }
 
     @Test
-    void allowsProvidesFallbackWhenVersionDoesNotMatch() throws Exception {
+    void prefersParameterizedMethodWhenUserProvidesValues() throws Exception {
         DefaultTestBindingService service = new DefaultTestBindingService();
 
-        DiscoveredImplementation discovered = new DiscoveredImplementation(
-                "3cff4dc4-72e9-4abe-9bf3-8a30f1618432",
-                "https://rs.tdwg.org/bdqtest/terms/3cff4dc4-72e9-4abe-9bf3-8a30f1618432-2025-01-01",
+        DiscoveredImplementation defaultMethod = new DiscoveredImplementation(
+                "urn:test:param",
+                null,
+                TestType.VALIDATION,
                 Phase.PRE_AMENDMENT,
                 Dummy.class.getName(),
                 "validate",
+                null,
+                List.of(parameter(0, ParameterRole.ACTED_UPON, "dwc:eventDate", String.class)),
+                new Dummy(),
+                Dummy.class.getMethod("validate"));
+        DiscoveredImplementation parameterizedMethod = new DiscoveredImplementation(
+                "urn:test:param",
+                null,
+                TestType.VALIDATION,
+                Phase.PRE_AMENDMENT,
+                Dummy.class.getName(),
+                "parameterized",
+                null,
+                List.of(
+                        parameter(0, ParameterRole.ACTED_UPON, "dwc:eventDate", String.class),
+                        parameter(1, ParameterRole.PARAMETER, "bdq:latestValidDate", Integer.class)),
+                new Dummy(),
+                Dummy.class.getMethod("parameterized", String.class, Integer.class));
+
+        TestBindingResult result = service.bind(
+                List.of(new TestDefinition(
+                        "urn:test:param",
+                        "Test",
+                        TestType.VALIDATION,
+                        Phase.PRE_AMENDMENT,
+                        Map.of("bdq:latestValidDate", "2026"))),
+                List.of(defaultMethod, parameterizedMethod),
                 Map.of(),
+                Set.of("dwc:eventDate"));
+
+        assertThat(result.bindings()).singleElement().satisfies(binding -> {
+            assertThat(binding.implementationMethod()).isEqualTo("parameterized");
+            assertThat(binding.parameterizationCapability()).isEqualTo(ParameterizationCapability.BOTH);
+            assertThat(binding.bindingStatus()).isEqualTo(BindingStatus.BOUND);
+        });
+    }
+
+    @Test
+    void reportsMissingDwCTermAsUnboundDiagnostic() throws Exception {
+        DefaultTestBindingService service = new DefaultTestBindingService();
+
+        DiscoveredImplementation discovered = new DiscoveredImplementation(
+                "urn:test:missing-term",
+                null,
+                TestType.VALIDATION,
+                Phase.PRE_AMENDMENT,
+                Dummy.class.getName(),
+                "validate",
+                null,
+                List.of(parameter(0, ParameterRole.ACTED_UPON, "dwc:eventDate", String.class)),
                 new Dummy(),
                 Dummy.class.getMethod("validate"));
 
         TestBindingResult result = service.bind(
-                List.of(new TestDefinition(
-                        "https://rs.tdwg.org/bdqtest/terms/3cff4dc4-72e9-4abe-9bf3-8a30f1618432-2025-03-06",
-                        "VALIDATION_EVENTTEMPORAL_NOTEMPTY",
-                        Phase.PRE_AMENDMENT,
-                        Map.of())),
+                List.of(new TestDefinition("urn:test:missing-term", "Test", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of())),
                 List.of(discovered),
-                Map.of());
+                Map.of(),
+                Set.of("dwc:scientificName"));
 
-        assertThat(result.bindings()).hasSize(1);
-        assertThat(result.bindings()).extracting("testId")
-                .containsExactly("https://rs.tdwg.org/bdqtest/terms/3cff4dc4-72e9-4abe-9bf3-8a30f1618432-2025-03-06");
-        assertThat(result.unresolved()).isEmpty();
+        assertThat(result.bindings()).singleElement().satisfies(binding -> {
+            assertThat(binding.bindingStatus()).isEqualTo(BindingStatus.UNBOUND);
+            assertThat(binding.diagnostics()).anyMatch(message -> message.contains("Missing acted_upon term dwc:eventDate"));
+        });
+    }
+
+    private static MethodParameter parameter(int index, ParameterRole role, String source, Class<?> type) {
+        return new MethodParameter(index, "p" + index, role, source, type.getName(), true);
     }
 
     static class Dummy {
@@ -121,6 +187,10 @@ class DefaultTestBindingServiceTest {
 
         public boolean post() {
             return true;
+        }
+
+        public boolean parameterized(String value, Integer latestValidDate) {
+            return value != null && latestValidDate != null;
         }
     }
 }

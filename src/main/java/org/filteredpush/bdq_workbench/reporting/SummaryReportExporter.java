@@ -24,6 +24,9 @@ public class SummaryReportExporter implements ReportExporter {
         for (OutcomeStatus status : OutcomeStatus.values()) {
             builder.append(status.name()).append(':').append(' ').append(counts.getOrDefault(status, 0L)).append('\n');
         }
+        builder.append("By phase: ").append(summary.countsByPhase()).append('\n');
+        builder.append("By response status: ").append(summary.countsByResponseStatus()).append('\n');
+        builder.append("By response result: ").append(summary.countsByResponseResult()).append('\n');
         outputStream.write(builder.toString().getBytes(StandardCharsets.UTF_8));
     }
 }
