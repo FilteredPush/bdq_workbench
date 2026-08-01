@@ -177,7 +177,7 @@ public class ClasspathAnnotationTestDiscoveryService implements TestDiscoverySer
                         ParameterRole.PARAMETER,
                         readAnnotationProperty(annotation, "name"),
                         parameter.getType().getName(),
-                        true);
+                        parameter.getType().isPrimitive());
             }
         }
         return null;

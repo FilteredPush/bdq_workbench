@@ -149,6 +149,46 @@ class DefaultTestBindingServiceTest {
     }
 
     @Test
+    void bindsParameterizedOnlyMethodWhenReferenceParametersUseImplementationDefaults() throws Exception {
+        DefaultTestBindingService service = new DefaultTestBindingService();
+
+        DiscoveredImplementation parameterizedMethod = new DiscoveredImplementation(
+                "urn:test:param-defaults",
+                null,
+                TestType.VALIDATION,
+                Phase.PRE_AMENDMENT,
+                Dummy.class.getName(),
+                "parameterizedStringDefaults",
+                null,
+                List.of(
+                        parameter(0, ParameterRole.ACTED_UPON, "dwc:eventDate", String.class),
+                        parameter(1, ParameterRole.PARAMETER, "bdq:earliestValidDate", String.class),
+                        parameter(2, ParameterRole.PARAMETER, "bdq:latestValidDate", String.class)),
+                new Dummy(),
+                Dummy.class.getMethod("parameterizedStringDefaults", String.class, String.class, String.class));
+
+        TestBindingResult result = service.bind(
+                List.of(new TestDefinition(
+                        "urn:test:param-defaults",
+                        "Test",
+                        TestType.VALIDATION,
+                        Phase.PRE_AMENDMENT,
+                        Map.of())),
+                List.of(parameterizedMethod),
+                Map.of(),
+                Set.of("dwc:eventDate"));
+
+        assertThat(result.bindings()).singleElement().satisfies(binding -> {
+            assertThat(binding.implementationMethod()).isEqualTo("parameterizedStringDefaults");
+            assertThat(binding.bindingStatus()).isEqualTo(BindingStatus.BOUND);
+            assertThat(binding.usingDefaultParameters()).isTrue();
+            assertThat(binding.diagnostics())
+                    .contains("BOUND: all parameters compatible");
+        });
+        assertThat(result.unresolved()).isEmpty();
+    }
+
+    @Test
     void reportsMissingDwCTermAsUnboundDiagnostic() throws Exception {
         DefaultTestBindingService service = new DefaultTestBindingService();
 
@@ -191,6 +231,10 @@ class DefaultTestBindingServiceTest {
 
         public boolean parameterized(String value, Integer latestValidDate) {
             return value != null && latestValidDate != null;
+        }
+
+        public boolean parameterizedStringDefaults(String value, String earliestValidDate, String latestValidDate) {
+            return value != null;
         }
     }
 }

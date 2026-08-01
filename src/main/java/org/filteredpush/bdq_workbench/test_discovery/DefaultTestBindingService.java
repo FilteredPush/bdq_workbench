@@ -167,6 +167,15 @@ public class DefaultTestBindingService implements TestBindingService {
         if (parameter.role() == ParameterRole.PARAMETER) {
             String providedValue = resolveParameterValue(test.parameters(), parameter.source());
             if (providedValue == null) {
+                if (canUseImplementationDefault(parameter)) {
+                    return new BoundMethodParameter(
+                            parameter,
+                            parameter.source(),
+                            null,
+                            true,
+                            "No parameter value supplied for " + parameter.source()
+                                    + "; invoking with null to allow implementation defaults");
+                }
                 return new BoundMethodParameter(
                         parameter,
                         parameter.source(),
@@ -315,6 +324,18 @@ public class DefaultTestBindingService implements TestBindingService {
                 || typeName.equals(Boolean.class.getName())
                 || typeName.equals("boolean")
                 || typeName.equals(Float.class.getName())
+                || typeName.equals("float");
+    }
+
+    private static boolean canUseImplementationDefault(MethodParameter parameter) {
+        return isSupportedScalarType(parameter.typeName()) && !isPrimitiveType(parameter.typeName());
+    }
+
+    private static boolean isPrimitiveType(String typeName) {
+        return typeName.equals("int")
+                || typeName.equals("long")
+                || typeName.equals("double")
+                || typeName.equals("boolean")
                 || typeName.equals("float");
     }
 
