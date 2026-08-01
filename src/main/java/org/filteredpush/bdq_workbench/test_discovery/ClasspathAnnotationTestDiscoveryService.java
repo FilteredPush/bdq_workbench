@@ -30,21 +30,45 @@ public class ClasspathAnnotationTestDiscoveryService implements TestDiscoverySer
 
     @Override
     public List<DiscoveredImplementation> discover() {
-        List<DiscoveredImplementation> discovered = new ArrayList<>();
         LOG.debug("Scanning packages for test implementations: {}", scanPackages);
         ClassLoader cl = Thread.currentThread().getContextClassLoader();
-        try (var scanResult = new ClassGraph()
-                .overrideClassLoaders(cl)
+        List<DiscoveredImplementation> discovered = discoverWith(cl);
+        if (discovered.isEmpty() && cl != null) {
+            LOG.debug("No test implementations found via context class loader {}; retrying default classpath scan", cl);
+            discovered = discoverWith(null);
+        }
+        LOG.debug("Discovered {} implementation methods for scan packages {}", discovered.size(), scanPackages);
+        return discovered;
+    }
+
+    private List<DiscoveredImplementation> discoverWith(ClassLoader classLoader) {
+        List<DiscoveredImplementation> discovered = new ArrayList<>();
+        ClassGraph classGraph = new ClassGraph()
                 .ignoreClassVisibility()
                 .ignoreMethodVisibility()
                 .enableAllInfo()
-                .acceptPackages(scanPackages.toArray(String[]::new))
-                .scan()) {
+                .acceptPackages(scanPackages.toArray(String[]::new));
+        if (classLoader != null) {
+            classGraph = classGraph.overrideClassLoaders(classLoader);
+        }
+        try (var scanResult = classGraph.scan()) {
             for (ClassInfo classInfo : scanResult.getAllClasses()) {
-                Class<?> clazz = classInfo.loadClass();
+                Class<?> clazz;
+                try {
+                    clazz = classInfo.loadClass();
+                } catch (LinkageError | RuntimeException e) {
+                    LOG.debug("Skipping unloadable class during discovery: {}", classInfo.getName(), e);
+                    continue;
+                }
                 Object target = null;
                 for (MethodInfo methodInfo : classInfo.getDeclaredMethodInfo()) {
-                    Method method = methodInfo.loadClassAndGetMethod();
+                    Method method;
+                    try {
+                        method = methodInfo.loadClassAndGetMethod();
+                    } catch (LinkageError | RuntimeException e) {
+                        LOG.debug("Skipping unloadable method during discovery: {}#{}", classInfo.getName(), methodInfo.getName(), e);
+                        continue;
+                    }
                     String providedId = readProvides(method.getAnnotations());
                     if (providedId == null) {
                         continue;
