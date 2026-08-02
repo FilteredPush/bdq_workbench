@@ -155,8 +155,8 @@ class ReflectionExecutionAdapterTest {
             return new StubDQResponse("RUN_HAS_RESULT", "COMPLIANT", "checked");
         }
 
-        public StubDQResponseWithoutValue prerequisiteOnly(String eventDate) {
-            return new StubDQResponseWithoutValue("INTERNAL_PREREQUISITES_NOT_MET", "{}", null);
+        public StubDQResponse.StubDQResponseWithoutValue prerequisiteOnly(String eventDate) {
+            return new StubDQResponse.StubDQResponseWithoutValue("INTERNAL_PREREQUISITES_NOT_MET", "{}", null);
         }
     }
 
