@@ -2,18 +2,21 @@ package org.filteredpush.bdq_workbench.execution;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-import org.filteredpush.bdq_workbench.model.ImplementationBinding;
 import org.filteredpush.bdq_workbench.model.BuiltInMeasureSpec;
+import org.filteredpush.bdq_workbench.model.ImplementationBinding;
 import org.filteredpush.bdq_workbench.model.OutcomeStatus;
 import org.filteredpush.bdq_workbench.model.Phase;
 import org.filteredpush.bdq_workbench.model.RecordDataset;
 import org.filteredpush.bdq_workbench.model.Response;
+import org.filteredpush.bdq_workbench.model.TestType;
 import org.filteredpush.bdq_workbench.test_discovery.DiscoveredImplementation;
 
 /** Executes policy bindings in pre/amendment/post phases with deterministic ordering. */
@@ -48,9 +51,9 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
         RecordDataset immutableSource = dataset.copy();
         RecordDataset amendmentCopy = dataset.copy();
 
-        results.addAll(executePhase(Phase.PRE_AMENDMENT, immutableSource, bindings, discoveredByKey));
-        results.addAll(executePhase(Phase.AMENDMENT, amendmentCopy, bindings, discoveredByKey));
-        results.addAll(executePhase(Phase.POST_AMENDMENT, amendmentCopy, bindings, discoveredByKey));
+        results.addAll(executePhase(Phase.PRE_AMENDMENT, immutableSource, bindingsForPhase(Phase.PRE_AMENDMENT, bindings), discoveredByKey));
+        results.addAll(executePhase(Phase.AMENDMENT, amendmentCopy, bindingsForPhase(Phase.AMENDMENT, bindings), discoveredByKey));
+        results.addAll(executePhase(Phase.POST_AMENDMENT, amendmentCopy, bindingsForPhase(Phase.POST_AMENDMENT, bindings), discoveredByKey));
 
         results.sort(Comparator
                 .comparing(Response::phase)
@@ -67,14 +70,13 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
             List<ImplementationBinding> bindings,
             Map<String, DiscoveredImplementation> discoveredByKey) {
         List<ImplementationBinding> phaseBindings = bindings.stream()
-                .filter(binding -> binding.phase() == phase)
                 .filter(binding -> !BuiltInMeasureSpec.isBuiltIn(binding))
                 .toList();
         List<ImplementationBinding> builtInMeasures = phase == Phase.AMENDMENT
                 ? List.of()
                 : bindings.stream()
                         .filter(BuiltInMeasureSpec::isBuiltIn)
-                        .filter(binding -> hasTargetBindingForPhase(binding, phase, bindings))
+                        .filter(binding -> hasTargetBindingForPhase(binding, phaseBindings))
                         .toList();
         if (phaseBindings.isEmpty() && builtInMeasures.isEmpty()) {
             return List.of();
@@ -118,14 +120,58 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
         }
     }
 
+    private static List<ImplementationBinding> bindingsForPhase(Phase phase, List<ImplementationBinding> bindings) {
+        if (phase == Phase.AMENDMENT) {
+            return bindings.stream()
+                    .filter(binding -> binding.phase() == Phase.AMENDMENT)
+                    .toList();
+        }
+        if (phase == Phase.PRE_AMENDMENT) {
+            return bindings.stream()
+                    .filter(binding -> binding.phase() == Phase.PRE_AMENDMENT)
+                    .toList();
+        }
+        Set<String> explicitPostTestIds = bindings.stream()
+                .filter(binding -> binding.phase() == Phase.POST_AMENDMENT)
+                .map(ImplementationBinding::testId)
+                .collect(java.util.stream.Collectors.toSet());
+        List<ImplementationBinding> reboundPreBindings = bindings.stream()
+                .filter(binding -> binding.phase() == Phase.PRE_AMENDMENT)
+                .filter(binding -> binding.testType() != TestType.AMENDMENT)
+                .filter(binding -> !explicitPostTestIds.contains(binding.testId()))
+                .map(binding -> copyWithPhase(binding, Phase.POST_AMENDMENT))
+                .toList();
+        List<ImplementationBinding> explicitPost = bindings.stream()
+                .filter(binding -> binding.phase() == Phase.POST_AMENDMENT)
+                .toList();
+        List<ImplementationBinding> merged = new ArrayList<>(explicitPost);
+        merged.addAll(reboundPreBindings);
+        return List.copyOf(merged);
+    }
+
+    private static ImplementationBinding copyWithPhase(ImplementationBinding binding, Phase phase) {
+        return new ImplementationBinding(
+                binding.testId(),
+                binding.testType(),
+                binding.implementationClass(),
+                binding.implementationMethod(),
+                phase,
+                binding.parameters(),
+                binding.bindingStatus(),
+                binding.parameterizationCapability(),
+                binding.methodSelection(),
+                binding.usingDefaultParameters(),
+                binding.parameterBindings(),
+                binding.diagnostics());
+    }
+
     private static boolean hasTargetBindingForPhase(
             ImplementationBinding measureBinding,
-            Phase phase,
-            List<ImplementationBinding> allBindings) {
+            List<ImplementationBinding> directPhaseBindings) {
         return BuiltInMeasureSpec.from(measureBinding)
-                .map(spec -> allBindings.stream()
+                .map(spec -> directPhaseBindings.stream()
                         .filter(binding -> !BuiltInMeasureSpec.isBuiltIn(binding))
-                        .anyMatch(binding -> binding.phase() == phase && spec.targetTestId().equals(binding.testId())))
+                        .anyMatch(binding -> spec.targetTestId().equals(binding.testId())))
                 .orElse(false);
     }
 
@@ -136,13 +182,24 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
             List<Response> phaseResponses) {
         BuiltInMeasureSpec spec = BuiltInMeasureSpec.from(measureBinding)
                 .orElseThrow(() -> new IllegalArgumentException("Not a built-in measure binding: " + measureBinding.testId()));
+        java.time.Instant finishedAt = java.time.Instant.now();
+        return spec.kind() == BuiltInMeasureSpec.MeasureKind.COUNT
+                ? synthesizeCountMeasure(phase, measureBinding, spec, phaseResponses, dataset.records().size(), finishedAt)
+                : synthesizeQaMeasure(phase, measureBinding, spec, phaseResponses, dataset.records().size(), finishedAt);
+    }
+
+    private static Response synthesizeCountMeasure(
+            Phase phase,
+            ImplementationBinding measureBinding,
+            BuiltInMeasureSpec spec,
+            List<Response> phaseResponses,
+            int totalRecords,
+            java.time.Instant finishedAt) {
         long matchingCount = phaseResponses.stream()
                 .filter(response -> spec.targetTestId().equals(response.testId()))
                 .filter(response -> spec.responseResult().equals(response.responseResult()))
                 .count();
-        int totalRecords = dataset.records().size();
         double percentage = totalRecords == 0 ? 0.0d : (matchingCount * 100.0d) / totalRecords;
-        java.time.Instant finishedAt = java.time.Instant.now();
         String message = String.format(
                 "%d/%d records matched %s for %s (%.1f%%)",
                 matchingCount,
@@ -150,6 +207,10 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
                 spec.responseResult(),
                 spec.targetTestLabel(),
                 percentage);
+        Map<String, String> parameters = new LinkedHashMap<>(measureBinding.parameters());
+        parameters.put(BuiltInMeasureSpec.MATCHING_COUNT_KEY, Long.toString(matchingCount));
+        parameters.put(BuiltInMeasureSpec.TOTAL_RECORDS_KEY, Integer.toString(totalRecords));
+        parameters.put(BuiltInMeasureSpec.PERCENTAGE_KEY, String.format("%.1f", percentage));
         return new Response(
                 "MULTIRECORD",
                 measureBinding.testId(),
@@ -157,10 +218,63 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
                 measureBinding.implementationClass(),
                 measureBinding.implementationMethod(),
                 phase,
-                Map.of(),
+                Map.copyOf(parameters),
                 OutcomeStatus.PASSED,
                 "RUN_HAS_RESULT",
                 Long.toString(matchingCount),
+                message,
+                message,
+                Map.of(),
+                finishedAt,
+                finishedAt);
+    }
+
+    private static Response synthesizeQaMeasure(
+            Phase phase,
+            ImplementationBinding measureBinding,
+            BuiltInMeasureSpec spec,
+            List<Response> phaseResponses,
+            int totalRecords,
+            java.time.Instant finishedAt) {
+        long eligibleCount = phaseResponses.stream()
+                .filter(response -> spec.targetTestId().equals(response.testId()))
+                .count();
+        long matchingCount = phaseResponses.stream()
+                .filter(response -> spec.targetTestId().equals(response.testId()))
+                .filter(spec::matchesQaCondition)
+                .count();
+        boolean complete = eligibleCount == matchingCount;
+        String responseResult = complete ? "COMPLETE" : "NOT_COMPLETE";
+        String message = complete
+                ? String.format(
+                        "%s for %s: %d/%d responses satisfied the QA criteria",
+                        responseResult,
+                        spec.targetTestLabel(),
+                        matchingCount,
+                        Math.max(totalRecords, (int) eligibleCount))
+                : String.format(
+                        "%s for %s: %d/%d responses satisfied the QA criteria",
+                        responseResult,
+                        spec.targetTestLabel(),
+                        matchingCount,
+                        Math.max(totalRecords, (int) eligibleCount));
+        Map<String, String> parameters = new LinkedHashMap<>(measureBinding.parameters());
+        parameters.put(BuiltInMeasureSpec.MATCHING_COUNT_KEY, Long.toString(matchingCount));
+        parameters.put(BuiltInMeasureSpec.TOTAL_RECORDS_KEY, Integer.toString(totalRecords));
+        parameters.put(BuiltInMeasureSpec.PERCENTAGE_KEY, totalRecords == 0
+                ? "0.0"
+                : String.format("%.1f", matchingCount * 100.0d / totalRecords));
+        return new Response(
+                "MULTIRECORD",
+                measureBinding.testId(),
+                measureBinding.testType(),
+                measureBinding.implementationClass(),
+                measureBinding.implementationMethod(),
+                phase,
+                Map.copyOf(parameters),
+                complete ? OutcomeStatus.PASSED : OutcomeStatus.FAILED,
+                "RUN_HAS_RESULT",
+                responseResult,
                 message,
                 message,
                 Map.of(),

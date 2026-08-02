@@ -49,6 +49,20 @@ public record ExecutionSummary(List<Response> responses) {
                 .collect(Collectors.groupingBy(Response::phase, Collectors.counting()));
     }
 
+    public List<Response> multiRecordMeasureResponses() {
+        return responses.stream()
+                .filter(response -> response.testType() == TestType.MEASURE)
+                .filter(response -> "MULTIRECORD".equals(response.recordId()))
+                .toList();
+    }
+
+    public Map<String, Map<Phase, Response>> multiRecordMeasureResponsesByTestAndPhase() {
+        return multiRecordMeasureResponses().stream()
+                .collect(Collectors.groupingBy(
+                        Response::testId,
+                        Collectors.toMap(Response::phase, response -> response, (left, right) -> right)));
+    }
+
     private List<Response> filter(Predicate<Response> predicate) {
         return responses.stream().filter(predicate).toList();
     }

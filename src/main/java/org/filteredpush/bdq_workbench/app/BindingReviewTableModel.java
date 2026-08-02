@@ -18,7 +18,8 @@ public class BindingReviewTableModel extends AbstractTableModel {
             "Chosen Method",
             "Use Defaults",
             "Parameter Values",
-            "Run Output"
+            "Pre-Amendment",
+            "Post-amendment"
     };
 
     private final List<RowState> rows = new ArrayList<>();
@@ -66,7 +67,8 @@ public class BindingReviewTableModel extends AbstractTableModel {
             case 5 -> row.review.chosenImplementationMethod();
             case 6 -> supportsParameterEditing(rowIndex) ? row.useDefaults : null;
             case 7 -> supportsParameterEditing(rowIndex) ? toDisplayValue(row.parameters) : "";
-            case 8 -> row.executionOutput;
+            case 8 -> row.preAmendmentOutput;
+            case 9 -> row.postAmendmentOutput;
             default -> "";
         };
     }
@@ -126,16 +128,21 @@ public class BindingReviewTableModel extends AbstractTableModel {
         }
     }
 
-    public void applyExecutionOutputs(Map<String, String> outputs) {
-        Map<String, String> safeOutputs = outputs == null ? Map.of() : outputs;
+    public void applyExecutionOutputs(Map<String, PhaseExecutionOutput> outputs) {
+        Map<String, PhaseExecutionOutput> safeOutputs = outputs == null ? Map.of() : outputs;
         for (int index = 0; index < rows.size(); index++) {
             RowState row = rows.get(index);
-            String next = safeOutputs.getOrDefault(row.review.test().id(), "");
-            if (!next.equals(row.executionOutput)) {
-                row.executionOutput = next;
+            PhaseExecutionOutput next = safeOutputs.getOrDefault(row.review.test().id(), new PhaseExecutionOutput("", ""));
+            if (!next.preAmendment().equals(row.preAmendmentOutput)
+                    || !next.postAmendment().equals(row.postAmendmentOutput)) {
+                row.preAmendmentOutput = next.preAmendment();
+                row.postAmendmentOutput = next.postAmendment();
                 fireTableRowsUpdated(index, index);
             }
         }
+    }
+
+    public record PhaseExecutionOutput(String preAmendment, String postAmendment) {
     }
 
     public record ParameterSettings(boolean useDefaults, Map<String, String> parameters) {
@@ -173,13 +180,15 @@ public class BindingReviewTableModel extends AbstractTableModel {
         private final BindingReview review;
         private boolean useDefaults;
         private Map<String, String> parameters;
-        private String executionOutput;
+        private String preAmendmentOutput;
+        private String postAmendmentOutput;
 
         private RowState(BindingReview review) {
             this.review = review;
             this.useDefaults = review.usingDefaultParameters();
             this.parameters = new LinkedHashMap<>(review.parameterValues());
-            this.executionOutput = "";
+            this.preAmendmentOutput = "";
+            this.postAmendmentOutput = "";
         }
 
         private ParameterSettings settings() {

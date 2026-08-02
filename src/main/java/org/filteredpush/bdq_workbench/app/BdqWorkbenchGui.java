@@ -1119,7 +1119,8 @@ final class BdqWorkbenchGui {
                         test.label(),
                         test.type(),
                         test.phase(),
-                        parameterValuesFor(test, reviewModel.settingsFor(test.id()))))
+                        parameterValuesFor(test, reviewModel.settingsFor(test.id())),
+                        test.metadata()))
                 .toList();
         TestBindingResult rebound = new DefaultTestBindingService().bind(
                 updatedTests,
@@ -1187,19 +1188,41 @@ final class BdqWorkbenchGui {
         if (!(bindingGrid.getModel() instanceof BindingReviewTableModel reviewModel)) {
             return;
         }
-        Map<String, String> outputs = new LinkedHashMap<>();
-        summary.responses().stream()
+        Map<String, BindingReviewTableModel.PhaseExecutionOutput> outputs = new LinkedHashMap<>();
+        summary.multiRecordMeasureResponses().stream()
                 .filter(response -> response.testType() == TestType.MEASURE)
                 .collect(java.util.stream.Collectors.groupingBy(
                         Response::testId,
                         LinkedHashMap::new,
                         java.util.stream.Collectors.toList()))
-                .forEach((testId, responses) -> outputs.put(testId, responses.stream()
-                        .sorted(java.util.Comparator.comparing(Response::phase))
-                        .map(response -> response.phase() + ": " + (response.message() == null ? "" : response.message()))
-                        .reduce((left, right) -> left + "; " + right)
-                        .orElse("")));
+                .forEach((testId, responses) -> {
+                    Map<Phase, Response> byPhase = responses.stream().collect(java.util.stream.Collectors.toMap(
+                            Response::phase,
+                            response -> response,
+                            (left, right) -> right,
+                            LinkedHashMap::new));
+                    outputs.put(testId, new BindingReviewTableModel.PhaseExecutionOutput(
+                            formatMeasureGridOutput(byPhase.get(Phase.PRE_AMENDMENT)),
+                            formatMeasureGridOutput(byPhase.get(Phase.POST_AMENDMENT))));
+                });
         reviewModel.applyExecutionOutputs(outputs);
+    }
+
+    private static String formatMeasureGridOutput(Response response) {
+        if (response == null) {
+            return "";
+        }
+        String kind = response.parameters().get(BuiltInMeasureSpec.KIND_KEY);
+        if ("COUNT".equals(kind)) {
+            String count = response.parameters().getOrDefault(BuiltInMeasureSpec.MATCHING_COUNT_KEY, response.responseResult());
+            String percentage = response.parameters().get(BuiltInMeasureSpec.PERCENTAGE_KEY);
+            return percentage == null || percentage.isBlank()
+                    ? count
+                    : count + " (" + percentage + "%)";
+        }
+        return response.responseResult() == null || response.responseResult().isBlank()
+                ? formatStructuredResponse(response)
+                : response.responseResult();
     }
 
     private static String renderBindingReviewDetails(BindingReview review, ImplementationBinding binding) {

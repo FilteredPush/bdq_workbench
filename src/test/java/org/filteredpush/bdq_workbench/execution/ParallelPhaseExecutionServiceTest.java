@@ -60,24 +60,26 @@ class ParallelPhaseExecutionServiceTest {
     void synthesizesBuiltInCountMeasureFromValidationResponses() throws Exception {
         ParallelPhaseExecutionService service = new ParallelPhaseExecutionService(2, new ReflectionExecutionAdapter());
         Method pre = CountImpl.class.getMethod("pre", String.class);
-        Method post = CountImpl.class.getMethod("post", String.class);
 
         List<DiscoveredImplementation> discovered = List.of(
                 new DiscoveredImplementation("urn:test:validation", null, TestType.VALIDATION, Phase.PRE_AMENDMENT, CountImpl.class.getName(), "pre", null,
-                        List.of(parameter(0, ParameterRole.ACTED_UPON, "dwc:eventDate", String.class)), new CountImpl(), pre),
-                new DiscoveredImplementation("urn:test:validation", null, TestType.VALIDATION, Phase.POST_AMENDMENT, CountImpl.class.getName(), "post", null,
-                        List.of(parameter(0, ParameterRole.ACTED_UPON, "dwc:eventDate", String.class)), new CountImpl(), post));
+                        List.of(parameter(0, ParameterRole.ACTED_UPON, "dwc:eventDate", String.class)), new CountImpl(), pre));
 
         List<ImplementationBinding> bindings = List.of(
                 binding("urn:test:validation", TestType.VALIDATION, CountImpl.class.getName(), "pre", Phase.PRE_AMENDMENT),
-                binding("urn:test:validation", TestType.VALIDATION, CountImpl.class.getName(), "post", Phase.POST_AMENDMENT),
                 new ImplementationBinding(
                         "urn:test:measure",
                         TestType.MEASURE,
                         BuiltInMeasureSpec.IMPLEMENTATION_CLASS,
                         BuiltInMeasureSpec.IMPLEMENTATION_METHOD,
                         Phase.PRE_AMENDMENT,
-                        new BuiltInMeasureSpec("VALIDATION_BASISOFRECORD_NOTEMPTY", "urn:test:validation", "COMPLIANT").asBindingParameters(),
+                        new BuiltInMeasureSpec(
+                                BuiltInMeasureSpec.MeasureKind.COUNT,
+                                "VALIDATION_BASISOFRECORD_NOTEMPTY",
+                                "urn:test:validation",
+                                "COMPLIANT",
+                                List.of(),
+                                List.of()).asBindingParameters(),
                         BindingStatus.BOUND,
                         ParameterizationCapability.DEFAULT_ONLY,
                         "built-in multi-record count",
@@ -102,8 +104,83 @@ class ParallelPhaseExecutionServiceTest {
                                 "1/2 records matched COMPLIANT for VALIDATION_BASISOFRECORD_NOTEMPTY (50.0%)"),
                         org.assertj.core.groups.Tuple.tuple(
                                 Phase.POST_AMENDMENT,
-                                "2",
-                                "2/2 records matched COMPLIANT for VALIDATION_BASISOFRECORD_NOTEMPTY (100.0%)"));
+                                "1",
+                                "1/2 records matched COMPLIANT for VALIDATION_BASISOFRECORD_NOTEMPTY (50.0%)"));
+    }
+
+    @Test
+    void rerunsPreAmendmentValidationAgainstAmendedDatasetInPostAmendmentPhase() throws Exception {
+        ParallelPhaseExecutionService service = new ParallelPhaseExecutionService(2, new ReflectionExecutionAdapter());
+        Method validate = AmendThenValidateImpl.class.getMethod("validate", String.class);
+        Method amend = AmendThenValidateImpl.class.getMethod("amend", String.class);
+
+        List<DiscoveredImplementation> discovered = List.of(
+                new DiscoveredImplementation("urn:test:validation", null, TestType.VALIDATION, Phase.PRE_AMENDMENT, AmendThenValidateImpl.class.getName(), "validate", null,
+                        List.of(parameter(0, ParameterRole.ACTED_UPON, "dwc:eventDate", String.class)), new AmendThenValidateImpl(), validate),
+                new DiscoveredImplementation("urn:test:amend", null, TestType.AMENDMENT, Phase.AMENDMENT, AmendThenValidateImpl.class.getName(), "amend", null,
+                        List.of(parameter(0, ParameterRole.ACTED_UPON, "dwc:eventDate", String.class)), new AmendThenValidateImpl(), amend));
+
+        List<ImplementationBinding> bindings = List.of(
+                binding("urn:test:validation", TestType.VALIDATION, AmendThenValidateImpl.class.getName(), "validate", Phase.PRE_AMENDMENT),
+                binding("urn:test:amend", TestType.AMENDMENT, AmendThenValidateImpl.class.getName(), "amend", Phase.AMENDMENT));
+
+        var responses = service.execute(
+                new RecordDataset(List.of(new CanonicalRecord("r1", Map.of("dwc:eventDate", "orig")))),
+                bindings,
+                discovered);
+
+        assertThat(responses.stream()
+                .filter(response -> response.testId().equals("urn:test:validation"))
+                .toList())
+                .extracting(Response::phase, Response::comment)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple(Phase.PRE_AMENDMENT, "orig"),
+                        org.assertj.core.groups.Tuple.tuple(Phase.POST_AMENDMENT, "changed"));
+    }
+
+    @Test
+    void synthesizesBuiltInQaMeasureFromValidationResponses() throws Exception {
+        ParallelPhaseExecutionService service = new ParallelPhaseExecutionService(2, new ReflectionExecutionAdapter());
+        Method pre = QaImpl.class.getMethod("pre", String.class);
+
+        List<DiscoveredImplementation> discovered = List.of(
+                new DiscoveredImplementation("urn:test:validation", null, TestType.VALIDATION, Phase.PRE_AMENDMENT, QaImpl.class.getName(), "pre", null,
+                        List.of(parameter(0, ParameterRole.ACTED_UPON, "dwc:eventDate", String.class)), new QaImpl(), pre));
+
+        List<ImplementationBinding> bindings = List.of(
+                binding("urn:test:validation", TestType.VALIDATION, QaImpl.class.getName(), "pre", Phase.PRE_AMENDMENT),
+                new ImplementationBinding(
+                        "urn:test:qa",
+                        TestType.MEASURE,
+                        BuiltInMeasureSpec.IMPLEMENTATION_CLASS,
+                        BuiltInMeasureSpec.IMPLEMENTATION_METHOD,
+                        Phase.PRE_AMENDMENT,
+                        new BuiltInMeasureSpec(
+                                BuiltInMeasureSpec.MeasureKind.QA,
+                                "VALIDATION_MINDEPTH_LESSTHAN_MAXDEPTH",
+                                "urn:test:validation",
+                                null,
+                                List.of("COMPLIANT"),
+                                List.of("INTERNAL_PREREQUISITES_NOT_MET")).asBindingParameters(),
+                        BindingStatus.BOUND,
+                        ParameterizationCapability.DEFAULT_ONLY,
+                        "built-in multi-record qa",
+                        true,
+                        List.of(),
+                        List.of("Built-in multi-record QA measure")));
+
+        var responses = service.execute(new RecordDataset(List.of(
+                new CanonicalRecord("r1", Map.of("dwc:eventDate", "compliant")),
+                new CanonicalRecord("r2", Map.of("dwc:eventDate", "prereq")),
+                new CanonicalRecord("r3", Map.of("dwc:eventDate", "bad")))), bindings, discovered);
+
+        assertThat(responses.stream()
+                .filter(response -> response.testId().equals("urn:test:qa"))
+                .toList())
+                .extracting(Response::phase, Response::responseResult)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple(Phase.PRE_AMENDMENT, "NOT_COMPLETE"),
+                        org.assertj.core.groups.Tuple.tuple(Phase.POST_AMENDMENT, "NOT_COMPLETE"));
     }
 
     private static MethodParameter parameter(int index, ParameterRole role, String source, Class<?> type) {
@@ -154,9 +231,25 @@ class ParallelPhaseExecutionServiceTest {
                     eventDate,
                     Map.of());
         }
+    }
 
-        public StubDQResponse post(String eventDate) {
+    static class AmendThenValidateImpl {
+        public StubDQResponse validate(String eventDate) {
             return new StubDQResponse("RUN_HAS_RESULT", "COMPLIANT", eventDate, Map.of());
+        }
+
+        public StubDQResponse amend(String eventDate) {
+            return new StubDQResponse("AMENDED", Map.of("dwc:eventDate", "changed"), "changed", Map.of("dwc:eventDate", "changed"));
+        }
+    }
+
+    static class QaImpl {
+        public StubDQResponse pre(String eventDate) {
+            return switch (eventDate) {
+                case "compliant" -> new StubDQResponse("RUN_HAS_RESULT", "COMPLIANT", eventDate, Map.of());
+                case "prereq" -> new StubDQResponse("INTERNAL_PREREQUISITES_NOT_MET", null, eventDate, Map.of());
+                default -> new StubDQResponse("RUN_HAS_RESULT", "NOT_COMPLIANT", eventDate, Map.of());
+            };
         }
     }
 

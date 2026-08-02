@@ -94,11 +94,16 @@ public class DefaultTestBindingService implements TestBindingService {
                     continue;
                 }
                 BuiltInMeasureSpec resolvedMeasure = new BuiltInMeasureSpec(
+                        builtInMeasure.get().kind(),
                         builtInMeasure.get().targetTestLabel(),
                         targetTest.id(),
-                        builtInMeasure.get().responseResult());
+                        builtInMeasure.get().responseResult(),
+                        builtInMeasure.get().acceptableResponseResults(),
+                        builtInMeasure.get().acceptableResponseStatuses());
+                Map<String, String> bindingParameters = new LinkedHashMap<>(resolvedMeasure.asBindingParameters());
+                bindingParameters.put(BuiltInMeasureSpec.MEASURE_LABEL_KEY, test.label());
                 List<String> diagnostics = List.of(
-                        "Built-in multi-record COUNT measure",
+                        "Built-in multi-record " + resolvedMeasure.kind().name() + " measure",
                         resolvedMeasure.description());
                 bindings.add(new ImplementationBinding(
                         test.id(),
@@ -106,10 +111,10 @@ public class DefaultTestBindingService implements TestBindingService {
                         BuiltInMeasureSpec.IMPLEMENTATION_CLASS,
                         BuiltInMeasureSpec.IMPLEMENTATION_METHOD,
                         test.phase(),
-                        resolvedMeasure.asBindingParameters(),
+                        Map.copyOf(bindingParameters),
                         BindingStatus.BOUND,
                         ParameterizationCapability.DEFAULT_ONLY,
-                        "built-in multi-record count",
+                        "built-in multi-record " + resolvedMeasure.kind().name().toLowerCase(),
                         true,
                         List.of(),
                         diagnostics));

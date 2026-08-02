@@ -371,10 +371,12 @@ class BdqWorkbenchGuiTest {
 
         model.applyExecutionOutputs(Map.of(
                 "urn:test:measure",
-                "PRE_AMENDMENT: 1/2 records matched COMPLIANT for VALIDATION_BASISOFRECORD_NOTEMPTY (50.0%)"));
+                new BindingReviewTableModel.PhaseExecutionOutput("1 (50.0%)", "2 (100.0%)")));
 
         assertThat(model.getValueAt(0, 8))
-                .isEqualTo("PRE_AMENDMENT: 1/2 records matched COMPLIANT for VALIDATION_BASISOFRECORD_NOTEMPTY (50.0%)");
+                .isEqualTo("1 (50.0%)");
+        assertThat(model.getValueAt(0, 9))
+                .isEqualTo("2 (100.0%)");
     }
 
     static class GuiDummy {

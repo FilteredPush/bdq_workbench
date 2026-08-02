@@ -270,6 +270,7 @@ class DefaultTestBindingServiceTest {
         assertThat(measureBinding.implementationClass()).isEqualTo(BuiltInMeasureSpec.IMPLEMENTATION_CLASS);
         assertThat(measureBinding.implementationMethod()).isEqualTo(BuiltInMeasureSpec.IMPLEMENTATION_METHOD);
         assertThat(measureBinding.parameters())
+                .containsEntry(BuiltInMeasureSpec.KIND_KEY, BuiltInMeasureSpec.MeasureKind.COUNT.name())
                 .containsEntry(BuiltInMeasureSpec.TARGET_TEST_ID_KEY, validation.id())
                 .containsEntry(BuiltInMeasureSpec.RESPONSE_RESULT_KEY, "COMPLIANT");
 
@@ -280,6 +281,53 @@ class DefaultTestBindingServiceTest {
         assertThat(measureReview.implementationStatus()).isEqualTo(ImplementationStatus.FOUND);
         assertThat(measureReview.bindingStatus()).isEqualTo(BindingStatus.BOUND);
         assertThat(measureReview.diagnostics()).contains("Built-in multi-record COUNT measure");
+    }
+
+    @Test
+    void bindsBuiltInQaMeasureUsingExpectedResponseMetadata() throws Exception {
+        DefaultTestBindingService service = new DefaultTestBindingService();
+        DiscoveredImplementation discovered = new DiscoveredImplementation(
+                "urn:test:validation",
+                null,
+                TestType.VALIDATION,
+                Phase.PRE_AMENDMENT,
+                Dummy.class.getName(),
+                "validate",
+                null,
+                List.of(),
+                new Dummy(),
+                Dummy.class.getMethod("validate"));
+
+        TestDefinition validation = new TestDefinition(
+                "urn:test:validation",
+                "VALIDATION_MINDEPTH_LESSTHAN_MAXDEPTH",
+                TestType.VALIDATION,
+                Phase.PRE_AMENDMENT,
+                Map.of());
+        TestDefinition measure = new TestDefinition(
+                "urn:test:qa",
+                "MULTIRECORD_MEASURE_QA_MINDEPTH_LESSTHAN_MAXDEPTH",
+                TestType.MEASURE,
+                Phase.PRE_AMENDMENT,
+                Map.of(),
+                Map.of(BuiltInMeasureSpec.EXPECTED_RESPONSE_METADATA_KEY,
+                        "COMPLETE if every VALIDATION_MINDEPTH_LESSTHAN_MAXDEPTH in the MultiRecord has Response.result=COMPLIANT or Response.status=INTERNAL_PREREQUISITES_NOT_MET, otherwise NOT_COMPLETE."));
+
+        TestBindingResult result = service.bind(
+                List.of(validation, measure),
+                List.of(discovered),
+                Map.of(),
+                Set.of());
+
+        var measureBinding = result.bindings().stream()
+                .filter(binding -> binding.testId().equals("urn:test:qa"))
+                .findFirst()
+                .orElseThrow();
+        assertThat(measureBinding.parameters())
+                .containsEntry(BuiltInMeasureSpec.KIND_KEY, BuiltInMeasureSpec.MeasureKind.QA.name())
+                .containsEntry(BuiltInMeasureSpec.TARGET_TEST_ID_KEY, validation.id())
+                .containsEntry(BuiltInMeasureSpec.ACCEPTABLE_RESPONSE_RESULTS_KEY, "COMPLIANT")
+                .containsEntry(BuiltInMeasureSpec.ACCEPTABLE_RESPONSE_STATUSES_KEY, "INTERNAL_PREREQUISITES_NOT_MET");
     }
 
     private static MethodParameter parameter(int index, ParameterRole role, String source, Class<?> type) {

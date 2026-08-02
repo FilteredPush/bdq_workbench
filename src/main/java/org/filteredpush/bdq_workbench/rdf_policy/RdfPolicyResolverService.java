@@ -36,6 +36,8 @@ public class RdfPolicyResolverService implements PolicyResolverService {
     private static final String RDF_TYPE_URI = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
     private static final String RDFS_SUBCLASS_OF_URI = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
     private static final String RDFS_RANGE_URI = "http://www.w3.org/2000/01/rdf-schema#range";
+    private static final String TEST_METADATA_EXPECTED_RESPONSE = "expectedResponse";
+    private static final String TEST_METADATA_NOTE = "note";
     private final Path useCaseXmlPath;
     private final List<Path> rdfFiles;
 
@@ -58,10 +60,11 @@ public class RdfPolicyResolverService implements PolicyResolverService {
         for (String testId : linkedTestIds) {
             String label = resolveLabel(rdf, testId);
             TestType testType = inferTestType(rdf, testId);
+            Map<String, String> metadata = resolveTestMetadata(rdf, testId);
             if (label == null) {
-                unresolved.add(new TestDefinition(testId, testId, testType, inferPhase(testType), Map.of()));
+                unresolved.add(new TestDefinition(testId, testId, testType, inferPhase(testType), Map.of(), metadata));
             } else {
-                resolved.add(new TestDefinition(testId, label, testType, inferPhase(testType), Map.of()));
+                resolved.add(new TestDefinition(testId, label, testType, inferPhase(testType), Map.of(), metadata));
             }
         }
 
@@ -269,6 +272,40 @@ public class RdfPolicyResolverService implements PolicyResolverService {
         }
         var stmt = r.getProperty(model.createProperty("http://www.w3.org/2000/01/rdf-schema#label"));
         return stmt == null ? null : stmt.getString();
+    }
+
+    private static Map<String, String> resolveTestMetadata(Model model, String uri) {
+        Resource resource = model.getResource(uri);
+        if (resource == null) {
+            return Map.of();
+        }
+        Map<String, String> metadata = new LinkedHashMap<>();
+        putIfPresent(metadata, TEST_METADATA_EXPECTED_RESPONSE,
+                resolveLiteralProperty(resource, Set.of("hasExpectedResponse", "expectedResponse")));
+        putIfPresent(metadata, TEST_METADATA_NOTE,
+                resolveLiteralProperty(resource, Set.of("note")));
+        return Map.copyOf(metadata);
+    }
+
+    private static void putIfPresent(Map<String, String> metadata, String key, String value) {
+        if (value != null && !value.isBlank()) {
+            metadata.put(key, value);
+        }
+    }
+
+    private static String resolveLiteralProperty(Resource resource, Set<String> candidateLocalNames) {
+        var statements = resource.listProperties();
+        while (statements.hasNext()) {
+            var statement = statements.nextStatement();
+            String localName = statement.getPredicate().getLocalName();
+            if (localName == null || !candidateLocalNames.contains(localName)) {
+                continue;
+            }
+            if (statement.getObject().isLiteral()) {
+                return statement.getString();
+            }
+        }
+        return null;
     }
 
     private static TestType inferTestType(Model model, String testId) {
