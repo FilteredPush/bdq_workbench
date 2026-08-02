@@ -6,7 +6,16 @@ import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 /** Summary of execution outputs including unresolved outcomes. */
-public record ExecutionSummary(List<Response> responses) {
+public record ExecutionSummary(List<Response> responses, ExecutionSummaryMetadata metadata) {
+
+    public ExecutionSummary {
+        responses = List.copyOf(responses);
+        metadata = metadata == null ? ExecutionSummaryMetadata.empty() : metadata;
+    }
+
+    public ExecutionSummary(List<Response> responses) {
+        this(responses, ExecutionSummaryMetadata.empty());
+    }
 
     public List<Response> responsesForPhase(Phase phase) {
         return filter(response -> response.phase() == phase);

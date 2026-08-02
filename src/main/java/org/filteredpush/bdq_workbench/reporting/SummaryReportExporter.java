@@ -24,18 +24,69 @@ public class SummaryReportExporter implements ReportExporter {
 
     @Override
     public void export(ExecutionSummary summary, OutputStream outputStream) throws IOException {
-        outputStream.write(renderSummaryText("BDQ Workbench Summary", ExecutionResultSummary.from(summary))
+        outputStream.write(renderSummaryText("BDQ Workbench Summary", summary)
                 .getBytes(StandardCharsets.UTF_8));
     }
 
-    public static String renderSummaryText(String title, ExecutionResultSummary summary) {
+    public static String renderSummaryText(String title, ExecutionSummary executionSummary) {
+        ExecutionResultSummary summary = ExecutionResultSummary.from(executionSummary);
         StringBuilder builder = new StringBuilder(title).append('\n');
+        appendExecutionContext(builder, executionSummary.metadata());
+        appendCountExplanation(builder);
         appendPhaseCounts(builder, summary.phaseCounts());
         appendCountSection(builder, "By response status", summary.responseStatusCounts());
         appendCountSection(builder, "By response result", summary.responseResultCounts());
         appendMeasureSection(builder, "Multi-record COUNT measures", summary, BuiltInMeasureSpec.MeasureKind.COUNT);
         appendMeasureSection(builder, "Multi-record QA measures", summary, BuiltInMeasureSpec.MeasureKind.QA);
+        appendTopValuesSection(
+                builder,
+                "Top filled-in amendment values",
+                executionSummary.metadata().filledInValueCounts());
+        appendTopValuesSection(
+                builder,
+                "Top amended original -> proposed values",
+                executionSummary.metadata().amendedValuePairCounts());
         return builder.toString();
+    }
+
+    private static void appendExecutionContext(
+            StringBuilder builder,
+            org.filteredpush.bdq_workbench.model.ExecutionSummaryMetadata metadata) {
+        builder.append("Use case: ")
+                .append(describeUseCase(metadata))
+                .append('\n');
+        builder.append("Input file: ")
+                .append(metadata.inputFile().isBlank() ? "<unknown>" : metadata.inputFile())
+                .append('\n');
+        builder.append("Darwin Core terms present in input file: ")
+                .append(metadata.darwinCoreTermCount())
+                .append('\n');
+        builder.append("SingleRecords in input file: ")
+                .append(metadata.singleRecordCount())
+                .append('\n');
+    }
+
+    private static String describeUseCase(org.filteredpush.bdq_workbench.model.ExecutionSummaryMetadata metadata) {
+        boolean hasId = metadata.useCaseId() != null && !metadata.useCaseId().isBlank();
+        boolean hasLabel = metadata.useCaseLabel() != null && !metadata.useCaseLabel().isBlank();
+        if (hasId && hasLabel) {
+            return metadata.useCaseId() + " (" + metadata.useCaseLabel() + ")";
+        }
+        if (hasId) {
+            return metadata.useCaseId();
+        }
+        if (hasLabel) {
+            return metadata.useCaseLabel();
+        }
+        return "<unknown>";
+    }
+
+    private static void appendCountExplanation(StringBuilder builder) {
+        builder.append("Counts represent normalized BDQ response rows emitted during execution:\n")
+                .append(" - By phase counts all response rows produced in each execution phase.\n")
+                .append(" - By response status counts the vocabulary response.status values across all phases.\n")
+                .append(" - By response result counts the vocabulary response.result values across all phases.\n")
+                .append(" - Single-record tests contribute one response row per record; multi-record measures contribute one row per phase.\n");
     }
 
     private static void appendPhaseCounts(StringBuilder builder, Map<Phase, Long> counts) {
@@ -104,6 +155,25 @@ public class SummaryReportExporter implements ReportExporter {
         if (!any) {
             builder.append(" - none\n");
         }
+    }
+
+    private static void appendTopValuesSection(StringBuilder builder, String title, Map<String, Long> counts) {
+        builder.append(title).append(":\n");
+        if (counts.isEmpty()) {
+            builder.append(" - none\n");
+            return;
+        }
+        List<Entry<String, Long>> entries = new ArrayList<>(counts.entrySet());
+        entries.sort(Comparator.<Entry<String, Long>>comparingLong(Entry::getValue)
+                .reversed()
+                .thenComparing(Entry::getKey, String.CASE_INSENSITIVE_ORDER));
+        entries.stream()
+                .limit(10)
+                .forEach(entry -> builder.append(" - ")
+                        .append(entry.getKey())
+                        .append(": ")
+                        .append(entry.getValue())
+                        .append('\n'));
     }
 
     private static String renderPhaseValue(Response response, BuiltInMeasureSpec.MeasureKind kind) {

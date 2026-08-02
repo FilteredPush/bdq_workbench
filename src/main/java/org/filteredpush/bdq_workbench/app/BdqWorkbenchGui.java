@@ -1178,7 +1178,7 @@ final class BdqWorkbenchGui {
     }
 
     private static String renderResultSummary(ExecutionSummary summary) {
-        return SummaryReportExporter.renderSummaryText("Results summary", ExecutionResultSummary.from(summary))
+        return SummaryReportExporter.renderSummaryText("Results summary", summary)
                 + "Saved files: reports/bdq-report-summary.txt, reports/bdq-report-response-stream.txt, reports/bdq-report-xls-hook.txt\n";
     }
 

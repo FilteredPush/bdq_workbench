@@ -8,6 +8,7 @@ import org.filteredpush.bdq_workbench.execution.TestExecutionService;
 import org.filteredpush.bdq_workbench.ingest.IngestService;
 import org.filteredpush.bdq_workbench.model.ExecutionPlan;
 import org.filteredpush.bdq_workbench.model.ExecutionSummary;
+import org.filteredpush.bdq_workbench.model.ExecutionSummaryMetadata;
 import org.filteredpush.bdq_workbench.model.OutcomeStatus;
 import org.filteredpush.bdq_workbench.model.PreparedRun;
 import org.filteredpush.bdq_workbench.model.Response;
@@ -125,9 +126,68 @@ public class WorkbenchFacade {
                 .comparing(Response::phase)
                 .thenComparing(Response::testId)
                 .thenComparing(Response::recordId));
-        ExecutionSummary summary = new ExecutionSummary(List.copyOf(responses));
+        ExecutionSummary summary = new ExecutionSummary(
+                List.copyOf(responses),
+                buildSummaryMetadata(preparedRun, responses));
         reportingService.export(summary);
         return summary;
+    }
+
+    private static ExecutionSummaryMetadata buildSummaryMetadata(PreparedRun preparedRun, List<Response> responses) {
+        var dataset = preparedRun.dataset();
+        var useCase = preparedRun.plan().useCase();
+        java.util.Map<String, java.util.Map<String, String>> sourceTermsByRecordId = dataset.records().stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        org.filteredpush.bdq_workbench.model.CanonicalRecord::id,
+                        record -> java.util.Map.copyOf(record.terms()),
+                        (left, right) -> left,
+                        java.util.LinkedHashMap::new));
+        return new ExecutionSummaryMetadata(
+                useCase.id(),
+                useCase.label(),
+                preparedRun.config() == null || preparedRun.config().datasetPath() == null
+                        ? ""
+                        : preparedRun.config().datasetPath().toString(),
+                collectAvailableTerms(dataset).size(),
+                dataset.records().size(),
+                summarizeFilledInValues(responses),
+                summarizeAmendedValuePairs(responses, sourceTermsByRecordId));
+    }
+
+    private static java.util.Map<String, Long> summarizeFilledInValues(List<Response> responses) {
+        java.util.Map<String, Long> counts = new java.util.LinkedHashMap<>();
+        responses.stream()
+                .filter(response -> "FILLED_IN".equals(response.responseStatus()))
+                .forEach(response -> response.amendments().forEach((term, amendedValue) -> counts.merge(
+                        term + "=" + describeValue(amendedValue),
+                        1L,
+                        Long::sum)));
+        return java.util.Map.copyOf(counts);
+    }
+
+    private static java.util.Map<String, Long> summarizeAmendedValuePairs(
+            List<Response> responses,
+            java.util.Map<String, java.util.Map<String, String>> sourceTermsByRecordId) {
+        java.util.Map<String, Long> counts = new java.util.LinkedHashMap<>();
+        responses.stream()
+                .filter(response -> "AMENDED".equals(response.responseStatus()))
+                .forEach(response -> {
+                    java.util.Map<String, String> sourceTerms = sourceTermsByRecordId.getOrDefault(
+                            response.recordId(),
+                            java.util.Map.of());
+                    response.amendments().forEach((term, amendedValue) -> counts.merge(
+                            term + ": "
+                                    + describeValue(sourceTerms.get(term))
+                                    + " -> "
+                                    + describeValue(amendedValue),
+                            1L,
+                            Long::sum));
+                });
+        return java.util.Map.copyOf(counts);
+    }
+
+    private static String describeValue(String value) {
+        return value == null || value.isBlank() ? "<empty>" : value;
     }
 
     private static Set<String> collectAvailableTerms(org.filteredpush.bdq_workbench.model.RecordDataset dataset) {

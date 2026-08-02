@@ -10,6 +10,7 @@ import java.util.Map;
 import org.filteredpush.bdq_workbench.model.BuiltInMeasureSpec;
 import org.filteredpush.bdq_workbench.model.ExecutionPlan;
 import org.filteredpush.bdq_workbench.model.ExecutionSummary;
+import org.filteredpush.bdq_workbench.model.ExecutionSummaryMetadata;
 import org.filteredpush.bdq_workbench.execution.ReflectionExecutionAdapter;
 import org.filteredpush.bdq_workbench.model.PreparedRun;
 import org.filteredpush.bdq_workbench.model.BindingReview;
@@ -260,48 +261,61 @@ class BdqWorkbenchGuiTest {
         Method renderSummary = BdqWorkbenchGui.class.getDeclaredMethod("renderResultSummary", ExecutionSummary.class);
         renderSummary.setAccessible(true);
 
-        ExecutionSummary summary = new ExecutionSummary(List.of(
-                new Response(
-                        "r1",
-                        "urn:test:validation",
-                        TestType.VALIDATION,
-                        "example",
-                        "validate",
-                        Phase.PRE_AMENDMENT,
-                        Map.of(),
-                        OutcomeStatus.PASSED,
-                        "RUN_HAS_RESULT",
-                        "COMPLIANT",
-                        "ok",
-                        "ok",
-                        Map.of(),
-                        Instant.now(),
-                        Instant.now()),
-                new Response(
-                        "MULTIRECORD",
-                        "urn:test:count",
-                        TestType.MEASURE,
-                        BuiltInMeasureSpec.IMPLEMENTATION_CLASS,
-                        BuiltInMeasureSpec.IMPLEMENTATION_METHOD,
-                        Phase.PRE_AMENDMENT,
-                        Map.of(
-                                BuiltInMeasureSpec.KIND_KEY, BuiltInMeasureSpec.MeasureKind.COUNT.name(),
-                                BuiltInMeasureSpec.MEASURE_LABEL_KEY, "MULTIRECORD_MEASURE_COUNT_COMPLIANT_BASISOFRECORD_NOTEMPTY",
-                                BuiltInMeasureSpec.MATCHING_COUNT_KEY, "1",
-                                BuiltInMeasureSpec.TOTAL_RECORDS_KEY, "2",
-                                BuiltInMeasureSpec.PERCENTAGE_KEY, "50.0"),
-                        OutcomeStatus.PASSED,
-                        "RUN_HAS_RESULT",
-                        "1",
-                        "1",
-                        "1",
-                        Map.of(),
-                        Instant.now(),
-                        Instant.now())));
+        ExecutionSummary summary = new ExecutionSummary(
+                List.of(
+                        new Response(
+                                "r1",
+                                "urn:test:validation",
+                                TestType.VALIDATION,
+                                "example",
+                                "validate",
+                                Phase.PRE_AMENDMENT,
+                                Map.of(),
+                                OutcomeStatus.PASSED,
+                                "RUN_HAS_RESULT",
+                                "COMPLIANT",
+                                "ok",
+                                "ok",
+                                Map.of(),
+                                Instant.now(),
+                                Instant.now()),
+                        new Response(
+                                "MULTIRECORD",
+                                "urn:test:count",
+                                TestType.MEASURE,
+                                BuiltInMeasureSpec.IMPLEMENTATION_CLASS,
+                                BuiltInMeasureSpec.IMPLEMENTATION_METHOD,
+                                Phase.PRE_AMENDMENT,
+                                Map.of(
+                                        BuiltInMeasureSpec.KIND_KEY, BuiltInMeasureSpec.MeasureKind.COUNT.name(),
+                                        BuiltInMeasureSpec.MEASURE_LABEL_KEY, "MULTIRECORD_MEASURE_COUNT_COMPLIANT_BASISOFRECORD_NOTEMPTY",
+                                        BuiltInMeasureSpec.MATCHING_COUNT_KEY, "1",
+                                        BuiltInMeasureSpec.TOTAL_RECORDS_KEY, "2",
+                                        BuiltInMeasureSpec.PERCENTAGE_KEY, "50.0"),
+                                OutcomeStatus.PASSED,
+                                "RUN_HAS_RESULT",
+                                "1",
+                                "1",
+                                "1",
+                                Map.of(),
+                                Instant.now(),
+                                Instant.now())),
+                new ExecutionSummaryMetadata(
+                        "urn:usecase:1",
+                        "Use Case One",
+                        "/tmp/input.csv",
+                        2,
+                        1,
+                        Map.of("dwc:countryCode=RU", 1L),
+                        Map.of("dwc:countryCode: SU -> RU", 1L)));
 
         String text = (String) renderSummary.invoke(null, summary);
 
         assertThat(text).contains("Results summary");
+        assertThat(text).contains("Use case: urn:usecase:1 (Use Case One)\n");
+        assertThat(text).contains("Input file: /tmp/input.csv\n");
+        assertThat(text).contains("Darwin Core terms present in input file: 2\n");
+        assertThat(text).contains("SingleRecords in input file: 1\n");
         assertThat(text).contains("By phase:\n - PRE_AMENDMENT: 2\n");
         assertThat(text).contains("By response status:\n - RUN_HAS_RESULT: 2\n");
         assertThat(text).contains("By response result:");
@@ -309,6 +323,8 @@ class BdqWorkbenchGuiTest {
         assertThat(text).doesNotContain(" - 1: 1");
         assertThat(text).contains("Multi-record COUNT measures:");
         assertThat(text).contains("Pre-amendment: 1/2 (50.0%)");
+        assertThat(text).contains("Top filled-in amendment values:");
+        assertThat(text).contains("Top amended original -> proposed values:");
         assertThat(text).doesNotContain("Phase counts: {");
         assertThat(text).doesNotContain("Response result counts: {");
     }
