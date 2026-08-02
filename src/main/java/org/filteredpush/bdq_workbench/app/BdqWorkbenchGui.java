@@ -666,7 +666,6 @@ final class BdqWorkbenchGui {
                         : "Built-in aggregate measure");
         JPanel controls = new JPanel(new FlowLayout(FlowLayout.RIGHT));
         JButton runButton = new JButton("Run Test");
-        JButton runButton = new JButton("Run Test");
         runButton.setEnabled(runnableInDialog);
         JButton closeButton = new JButton("Close");
         controls.add(runButton);
