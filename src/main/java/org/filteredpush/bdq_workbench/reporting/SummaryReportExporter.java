@@ -3,7 +3,12 @@ package org.filteredpush.bdq_workbench.reporting;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
+import org.filteredpush.bdq_workbench.app.ExecutionResultSummary;
 import org.filteredpush.bdq_workbench.model.ExecutionSummary;
 import org.filteredpush.bdq_workbench.model.BuiltInMeasureSpec;
 import org.filteredpush.bdq_workbench.model.Phase;
@@ -19,22 +24,67 @@ public class SummaryReportExporter implements ReportExporter {
 
     @Override
     public void export(ExecutionSummary summary, OutputStream outputStream) throws IOException {
-        StringBuilder builder = new StringBuilder("BDQ Workbench Summary\n");
-        builder.append("By phase: ").append(summary.countsByPhase()).append('\n');
-        builder.append("By response status: ").append(summary.countsByResponseStatus()).append('\n');
-        builder.append("By response result: ").append(summary.countsByResponseResult()).append('\n');
+        outputStream.write(renderSummaryText("BDQ Workbench Summary", ExecutionResultSummary.from(summary))
+                .getBytes(StandardCharsets.UTF_8));
+    }
+
+    public static String renderSummaryText(String title, ExecutionResultSummary summary) {
+        StringBuilder builder = new StringBuilder(title).append('\n');
+        appendPhaseCounts(builder, summary.phaseCounts());
+        appendCountSection(builder, "By response status", summary.responseStatusCounts());
+        appendCountSection(builder, "By response result", summary.responseResultCounts());
         appendMeasureSection(builder, "Multi-record COUNT measures", summary, BuiltInMeasureSpec.MeasureKind.COUNT);
         appendMeasureSection(builder, "Multi-record QA measures", summary, BuiltInMeasureSpec.MeasureKind.QA);
-        outputStream.write(builder.toString().getBytes(StandardCharsets.UTF_8));
+        return builder.toString();
+    }
+
+    private static void appendPhaseCounts(StringBuilder builder, Map<Phase, Long> counts) {
+        builder.append("By phase:\n");
+        if (counts.isEmpty()) {
+            builder.append(" - none\n");
+            return;
+        }
+        for (Phase phase : List.of(Phase.PRE_AMENDMENT, Phase.AMENDMENT, Phase.POST_AMENDMENT)) {
+            Long count = counts.get(phase);
+            if (count != null) {
+                builder.append(" - ").append(phase).append(": ").append(count).append('\n');
+            }
+        }
+        counts.entrySet().stream()
+                .filter(entry -> !List.of(Phase.PRE_AMENDMENT, Phase.AMENDMENT, Phase.POST_AMENDMENT)
+                        .contains(entry.getKey()))
+                .sorted(Comparator.comparing(entry -> entry.getKey().name()))
+                .forEach(entry -> builder.append(" - ")
+                        .append(entry.getKey())
+                        .append(": ")
+                        .append(entry.getValue())
+                        .append('\n'));
+    }
+
+    private static void appendCountSection(StringBuilder builder, String title, Map<String, Long> counts) {
+        builder.append(title).append(":\n");
+        if (counts.isEmpty()) {
+            builder.append(" - none\n");
+            return;
+        }
+        List<Entry<String, Long>> entries = new ArrayList<>(counts.entrySet());
+        entries.sort(Comparator.<Entry<String, Long>>comparingLong(Entry::getValue)
+                .reversed()
+                .thenComparing(Entry::getKey, String.CASE_INSENSITIVE_ORDER));
+        entries.forEach(entry -> builder.append(" - ")
+                .append(entry.getKey())
+                .append(": ")
+                .append(entry.getValue())
+                .append('\n'));
     }
 
     private static void appendMeasureSection(
             StringBuilder builder,
             String title,
-            ExecutionSummary summary,
+            ExecutionResultSummary summary,
             BuiltInMeasureSpec.MeasureKind kind) {
         builder.append(title).append(":\n");
-        Map<String, Map<Phase, Response>> byTest = summary.multiRecordMeasureResponsesByTestAndPhase();
+        Map<String, Map<Phase, Response>> byTest = summary.multiRecordMeasureOutputs();
         if (byTest.isEmpty()) {
             builder.append(" - none\n");
             return;

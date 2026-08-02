@@ -21,6 +21,22 @@ class SummaryReportExporterTest {
     void exportsPhaseSpecificCountAndQaMeasureSections() throws Exception {
         SummaryReportExporter exporter = new SummaryReportExporter();
         ExecutionSummary summary = new ExecutionSummary(List.of(
+                new Response(
+                        "r1",
+                        "urn:test:validation",
+                        TestType.VALIDATION,
+                        "example.Impl",
+                        "validate",
+                        Phase.PRE_AMENDMENT,
+                        Map.of(),
+                        OutcomeStatus.PASSED,
+                        "RUN_HAS_RESULT",
+                        "COMPLIANT",
+                        "ok",
+                        "ok",
+                        Map.of(),
+                        Instant.now(),
+                        Instant.now()),
                 measureResponse(
                         "urn:test:count",
                         "MULTIRECORD_MEASURE_COUNT_COMPLIANT_BASISOFRECORD_NOTEMPTY",
@@ -60,6 +76,14 @@ class SummaryReportExporterTest {
         exporter.export(summary, output);
         String report = output.toString(StandardCharsets.UTF_8);
 
+        assertThat(report).contains("By phase:\n - PRE_AMENDMENT: 3\n - POST_AMENDMENT: 2\n");
+        assertThat(report).contains("By response status:\n - RUN_HAS_RESULT: 5\n");
+        assertThat(report).contains("By response result:");
+        assertThat(report).contains(" - COMPLETE: 1");
+        assertThat(report).contains(" - COMPLIANT: 1");
+        assertThat(report).contains(" - NOT_COMPLETE: 1");
+        assertThat(report).doesNotContain(" - 1: 1");
+        assertThat(report).doesNotContain(" - 2: 1");
         assertThat(report).contains("Multi-record COUNT measures:");
         assertThat(report).contains("Pre-amendment: 1/2 (50.0%)");
         assertThat(report).contains("Post-amendment: 2/2 (100.0%)");

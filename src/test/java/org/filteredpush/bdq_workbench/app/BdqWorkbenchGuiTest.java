@@ -7,7 +7,9 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import org.filteredpush.bdq_workbench.model.BuiltInMeasureSpec;
 import org.filteredpush.bdq_workbench.model.ExecutionPlan;
+import org.filteredpush.bdq_workbench.model.ExecutionSummary;
 import org.filteredpush.bdq_workbench.execution.ReflectionExecutionAdapter;
 import org.filteredpush.bdq_workbench.model.PreparedRun;
 import org.filteredpush.bdq_workbench.model.BindingReview;
@@ -251,6 +253,64 @@ class BdqWorkbenchGuiTest {
 
         assertThat(traceText).contains("Response: INTERNAL_PREREQUISITES_NOT_MET");
         assertThat(traceText).doesNotContain("/ {}");
+    }
+
+    @Test
+    void resultSummaryUsesReadableMultiLineSections() throws Exception {
+        Method renderSummary = BdqWorkbenchGui.class.getDeclaredMethod("renderResultSummary", ExecutionSummary.class);
+        renderSummary.setAccessible(true);
+
+        ExecutionSummary summary = new ExecutionSummary(List.of(
+                new Response(
+                        "r1",
+                        "urn:test:validation",
+                        TestType.VALIDATION,
+                        "example",
+                        "validate",
+                        Phase.PRE_AMENDMENT,
+                        Map.of(),
+                        OutcomeStatus.PASSED,
+                        "RUN_HAS_RESULT",
+                        "COMPLIANT",
+                        "ok",
+                        "ok",
+                        Map.of(),
+                        Instant.now(),
+                        Instant.now()),
+                new Response(
+                        "MULTIRECORD",
+                        "urn:test:count",
+                        TestType.MEASURE,
+                        BuiltInMeasureSpec.IMPLEMENTATION_CLASS,
+                        BuiltInMeasureSpec.IMPLEMENTATION_METHOD,
+                        Phase.PRE_AMENDMENT,
+                        Map.of(
+                                BuiltInMeasureSpec.KIND_KEY, BuiltInMeasureSpec.MeasureKind.COUNT.name(),
+                                BuiltInMeasureSpec.MEASURE_LABEL_KEY, "MULTIRECORD_MEASURE_COUNT_COMPLIANT_BASISOFRECORD_NOTEMPTY",
+                                BuiltInMeasureSpec.MATCHING_COUNT_KEY, "1",
+                                BuiltInMeasureSpec.TOTAL_RECORDS_KEY, "2",
+                                BuiltInMeasureSpec.PERCENTAGE_KEY, "50.0"),
+                        OutcomeStatus.PASSED,
+                        "RUN_HAS_RESULT",
+                        "1",
+                        "1",
+                        "1",
+                        Map.of(),
+                        Instant.now(),
+                        Instant.now())));
+
+        String text = (String) renderSummary.invoke(null, summary);
+
+        assertThat(text).contains("Results summary");
+        assertThat(text).contains("By phase:\n - PRE_AMENDMENT: 2\n");
+        assertThat(text).contains("By response status:\n - RUN_HAS_RESULT: 2\n");
+        assertThat(text).contains("By response result:");
+        assertThat(text).contains(" - COMPLIANT: 1");
+        assertThat(text).doesNotContain(" - 1: 1");
+        assertThat(text).contains("Multi-record COUNT measures:");
+        assertThat(text).contains("Pre-amendment: 1/2 (50.0%)");
+        assertThat(text).doesNotContain("Phase counts: {");
+        assertThat(text).doesNotContain("Response result counts: {");
     }
 
     @Test

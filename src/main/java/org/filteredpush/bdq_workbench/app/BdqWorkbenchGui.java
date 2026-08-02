@@ -395,7 +395,7 @@ final class BdqWorkbenchGui {
                         ExecutionSummary summary = get();
                         LOG.info("BDQ Workbench execution complete: {} outcomes", summary.responses().size());
                         appendStatus(statusArea, "Completed: " + summary.responses().size() + " outcomes\n");
-                        resultSummaryArea.setText(renderResultSummary(ExecutionResultSummary.from(summary)));
+                        resultSummaryArea.setText(renderResultSummary(summary));
                         updateBindingGridExecutionOutputs(bindingGrid, summary);
                         Iterator <Response> i = summary.responses().iterator();
                         while (i.hasNext()) {
@@ -1177,11 +1177,8 @@ final class BdqWorkbenchGui {
                 + "Result counts: " + snapshot.resultCounts() + "\n";
     }
 
-    private static String renderResultSummary(ExecutionResultSummary summary) {
-        return "Results summary\n"
-                + "Phase counts: " + summary.phaseCounts() + "\n"
-                + "Response status counts: " + summary.responseStatusCounts() + "\n"
-                + "Response result counts: " + summary.responseResultCounts() + "\n"
+    private static String renderResultSummary(ExecutionSummary summary) {
+        return SummaryReportExporter.renderSummaryText("Results summary", ExecutionResultSummary.from(summary))
                 + "Saved files: reports/bdq-report-summary.txt, reports/bdq-report-response-stream.txt, reports/bdq-report-xls-hook.txt\n";
     }
 
