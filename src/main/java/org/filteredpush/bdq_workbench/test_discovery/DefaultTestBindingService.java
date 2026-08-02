@@ -14,6 +14,7 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.filteredpush.bdq_workbench.model.BindingReview;
 import org.filteredpush.bdq_workbench.model.BindingStatus;
+import org.filteredpush.bdq_workbench.model.BuiltInMeasureSpec;
 import org.filteredpush.bdq_workbench.model.BoundMethodParameter;
 import org.filteredpush.bdq_workbench.model.ImplementationBinding;
 import org.filteredpush.bdq_workbench.model.ImplementationStatus;
@@ -65,8 +66,64 @@ public class DefaultTestBindingService implements TestBindingService {
         List<ImplementationBinding> bindings = new ArrayList<>();
         List<TestDefinition> unresolved = new ArrayList<>();
         List<BindingReview> reviews = new ArrayList<>();
+        Map<String, TestDefinition> validationTestsByLabel = tests.stream()
+                .filter(test -> test.type() == TestType.VALIDATION)
+                .filter(test -> test.label() != null && !test.label().isBlank())
+                .collect(Collectors.toMap(
+                        TestDefinition::label,
+                        Function.identity(),
+                        (left, right) -> left,
+                        LinkedHashMap::new));
 
         for (TestDefinition test : tests) {
+            var builtInMeasure = BuiltInMeasureSpec.from(test);
+            if (builtInMeasure.isPresent()) {
+                TestDefinition targetTest = validationTestsByLabel.get(builtInMeasure.get().targetTestLabel());
+                if (targetTest == null) {
+                    unresolved.add(test);
+                    reviews.add(new BindingReview(
+                            test,
+                            ImplementationStatus.MISSING,
+                            BindingStatus.UNBOUND,
+                            ParameterizationCapability.DEFAULT_ONLY,
+                            "",
+                            Map.of(),
+                            true,
+                            List.of("No validation test found for built-in multi-record measure target "
+                                    + builtInMeasure.get().targetTestLabel())));
+                    continue;
+                }
+                BuiltInMeasureSpec resolvedMeasure = new BuiltInMeasureSpec(
+                        builtInMeasure.get().targetTestLabel(),
+                        targetTest.id(),
+                        builtInMeasure.get().responseResult());
+                List<String> diagnostics = List.of(
+                        "Built-in multi-record COUNT measure",
+                        resolvedMeasure.description());
+                bindings.add(new ImplementationBinding(
+                        test.id(),
+                        test.type(),
+                        BuiltInMeasureSpec.IMPLEMENTATION_CLASS,
+                        BuiltInMeasureSpec.IMPLEMENTATION_METHOD,
+                        test.phase(),
+                        resolvedMeasure.asBindingParameters(),
+                        BindingStatus.BOUND,
+                        ParameterizationCapability.DEFAULT_ONLY,
+                        "built-in multi-record count",
+                        true,
+                        List.of(),
+                        diagnostics));
+                reviews.add(new BindingReview(
+                        test,
+                        ImplementationStatus.FOUND,
+                        BindingStatus.BOUND,
+                        ParameterizationCapability.DEFAULT_ONLY,
+                        BuiltInMeasureSpec.IMPLEMENTATION_CLASS + "#" + BuiltInMeasureSpec.IMPLEMENTATION_METHOD,
+                        Map.of(),
+                        true,
+                        diagnostics));
+                continue;
+            }
             Selection selection = selectCandidate(test, explicitMapping, byMethodKey, byProvided, byVersion);
             if (selection.candidates().isEmpty()) {
                 unresolved.add(test);

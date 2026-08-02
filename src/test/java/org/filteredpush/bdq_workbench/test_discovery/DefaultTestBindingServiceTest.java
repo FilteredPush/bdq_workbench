@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import org.filteredpush.bdq_workbench.model.BindingStatus;
+import org.filteredpush.bdq_workbench.model.BuiltInMeasureSpec;
 import org.filteredpush.bdq_workbench.model.ImplementationStatus;
 import org.filteredpush.bdq_workbench.model.MethodParameter;
 import org.filteredpush.bdq_workbench.model.ParameterRole;
@@ -222,6 +223,63 @@ class DefaultTestBindingServiceTest {
                     && message.contains(
                     "Term acted_upon/consulted absent in input data: dwc:eventDate"));
         });
+    }
+
+    @Test
+    void resolvesSupportedCountMeasureAsBuiltInBinding() throws Exception {
+        DefaultTestBindingService service = new DefaultTestBindingService();
+
+        DiscoveredImplementation discovered = new DiscoveredImplementation(
+                "urn:test:validation",
+                null,
+                TestType.VALIDATION,
+                Phase.PRE_AMENDMENT,
+                Dummy.class.getName(),
+                "validate",
+                null,
+                List.of(),
+                new Dummy(),
+                Dummy.class.getMethod("validate"));
+
+        TestDefinition validation = new TestDefinition(
+                "urn:test:validation",
+                "VALIDATION_BASISOFRECORD_NOTEMPTY",
+                TestType.VALIDATION,
+                Phase.PRE_AMENDMENT,
+                Map.of());
+        TestDefinition measure = new TestDefinition(
+                "urn:test:measure",
+                "MULTIRECORD_MEASURE_COUNT_COMPLIANT_BASISOFRECORD_NOTEMPTY",
+                TestType.MEASURE,
+                Phase.PRE_AMENDMENT,
+                Map.of());
+
+        TestBindingResult result = service.bind(
+                List.of(validation, measure),
+                List.of(discovered),
+                Map.of(),
+                Set.of());
+
+        assertThat(result.unresolved()).isEmpty();
+        assertThat(result.bindings()).hasSize(2);
+        var measureBinding = result.bindings().stream()
+                .filter(binding -> binding.testId().equals("urn:test:measure"))
+                .findFirst()
+                .orElseThrow();
+        assertThat(measureBinding.bindingStatus()).isEqualTo(BindingStatus.BOUND);
+        assertThat(measureBinding.implementationClass()).isEqualTo(BuiltInMeasureSpec.IMPLEMENTATION_CLASS);
+        assertThat(measureBinding.implementationMethod()).isEqualTo(BuiltInMeasureSpec.IMPLEMENTATION_METHOD);
+        assertThat(measureBinding.parameters())
+                .containsEntry(BuiltInMeasureSpec.TARGET_TEST_ID_KEY, validation.id())
+                .containsEntry(BuiltInMeasureSpec.RESPONSE_RESULT_KEY, "COMPLIANT");
+
+        var measureReview = result.reviews().stream()
+                .filter(review -> review.test().id().equals("urn:test:measure"))
+                .findFirst()
+                .orElseThrow();
+        assertThat(measureReview.implementationStatus()).isEqualTo(ImplementationStatus.FOUND);
+        assertThat(measureReview.bindingStatus()).isEqualTo(BindingStatus.BOUND);
+        assertThat(measureReview.diagnostics()).contains("Built-in multi-record COUNT measure");
     }
 
     private static MethodParameter parameter(int index, ParameterRole role, String source, Class<?> type) {

@@ -6,6 +6,7 @@ import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
 import org.filteredpush.bdq_workbench.model.BindingStatus;
+import org.filteredpush.bdq_workbench.model.BuiltInMeasureSpec;
 import org.filteredpush.bdq_workbench.model.BoundMethodParameter;
 import org.filteredpush.bdq_workbench.model.ImplementationBinding;
 import org.filteredpush.bdq_workbench.model.MethodParameter;
@@ -55,17 +56,71 @@ class ParallelPhaseExecutionServiceTest {
         assertThat(dataset.records().get(0).terms()).containsEntry("dwc:eventDate", "orig");
     }
 
+    @Test
+    void synthesizesBuiltInCountMeasureFromValidationResponses() throws Exception {
+        ParallelPhaseExecutionService service = new ParallelPhaseExecutionService(2, new ReflectionExecutionAdapter());
+        Method pre = CountImpl.class.getMethod("pre", String.class);
+        Method post = CountImpl.class.getMethod("post", String.class);
+
+        List<DiscoveredImplementation> discovered = List.of(
+                new DiscoveredImplementation("urn:test:validation", null, TestType.VALIDATION, Phase.PRE_AMENDMENT, CountImpl.class.getName(), "pre", null,
+                        List.of(parameter(0, ParameterRole.ACTED_UPON, "dwc:eventDate", String.class)), new CountImpl(), pre),
+                new DiscoveredImplementation("urn:test:validation", null, TestType.VALIDATION, Phase.POST_AMENDMENT, CountImpl.class.getName(), "post", null,
+                        List.of(parameter(0, ParameterRole.ACTED_UPON, "dwc:eventDate", String.class)), new CountImpl(), post));
+
+        List<ImplementationBinding> bindings = List.of(
+                binding("urn:test:validation", TestType.VALIDATION, CountImpl.class.getName(), "pre", Phase.PRE_AMENDMENT),
+                binding("urn:test:validation", TestType.VALIDATION, CountImpl.class.getName(), "post", Phase.POST_AMENDMENT),
+                new ImplementationBinding(
+                        "urn:test:measure",
+                        TestType.MEASURE,
+                        BuiltInMeasureSpec.IMPLEMENTATION_CLASS,
+                        BuiltInMeasureSpec.IMPLEMENTATION_METHOD,
+                        Phase.PRE_AMENDMENT,
+                        new BuiltInMeasureSpec("VALIDATION_BASISOFRECORD_NOTEMPTY", "urn:test:validation", "COMPLIANT").asBindingParameters(),
+                        BindingStatus.BOUND,
+                        ParameterizationCapability.DEFAULT_ONLY,
+                        "built-in multi-record count",
+                        true,
+                        List.of(),
+                        List.of("Built-in multi-record COUNT measure")));
+
+        RecordDataset dataset = new RecordDataset(List.of(
+                new CanonicalRecord("r1", Map.of("dwc:eventDate", "match")),
+                new CanonicalRecord("r2", Map.of("dwc:eventDate", "miss"))));
+
+        var responses = service.execute(dataset, bindings, discovered);
+
+        assertThat(responses.stream()
+                .filter(response -> response.testId().equals("urn:test:measure"))
+                .toList())
+                .extracting(Response::phase, Response::responseResult, Response::message)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple(
+                                Phase.PRE_AMENDMENT,
+                                "1",
+                                "1/2 records matched COMPLIANT for VALIDATION_BASISOFRECORD_NOTEMPTY (50.0%)"),
+                        org.assertj.core.groups.Tuple.tuple(
+                                Phase.POST_AMENDMENT,
+                                "2",
+                                "2/2 records matched COMPLIANT for VALIDATION_BASISOFRECORD_NOTEMPTY (100.0%)"));
+    }
+
     private static MethodParameter parameter(int index, ParameterRole role, String source, Class<?> type) {
         return new MethodParameter(index, "p" + index, role, source, type.getName(), true);
     }
 
     private static ImplementationBinding binding(String testId, TestType testType, String method, Phase phase) {
+        return binding(testId, testType, Impl.class.getName(), method, phase);
+    }
+
+    private static ImplementationBinding binding(String testId, TestType testType, String implementationClass, String method, Phase phase) {
         MethodParameter parameter = parameter(0, ParameterRole.ACTED_UPON, "dwc:eventDate", String.class);
         BoundMethodParameter bound = new BoundMethodParameter(parameter, "dwc:eventDate", null, true, "Mapped");
         return new ImplementationBinding(
                 testId,
                 testType,
-                Impl.class.getName(),
+                implementationClass,
                 method,
                 phase,
                 Map.of(),
@@ -84,6 +139,20 @@ class ParallelPhaseExecutionServiceTest {
 
         public StubDQResponse amend(String eventDate) {
             return new StubDQResponse("AMENDED", Map.of("dwc:eventDate", "changed"), "updated", Map.of("dwc:eventDate", "changed"));
+        }
+
+        public StubDQResponse post(String eventDate) {
+            return new StubDQResponse("RUN_HAS_RESULT", "COMPLIANT", eventDate, Map.of());
+        }
+    }
+
+    static class CountImpl {
+        public StubDQResponse pre(String eventDate) {
+            return new StubDQResponse(
+                    "RUN_HAS_RESULT",
+                    "match".equals(eventDate) ? "COMPLIANT" : "NOT_COMPLIANT",
+                    eventDate,
+                    Map.of());
         }
 
         public StubDQResponse post(String eventDate) {

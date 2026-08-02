@@ -357,6 +357,26 @@ class BdqWorkbenchGuiTest {
         assertThat(loaded.get("urn:test").parameters()).containsEntry("bdq:limit", "10");
     }
 
+    @Test
+    void bindingReviewTableModelCanShowMeasureExecutionOutput() {
+        BindingReviewTableModel model = new BindingReviewTableModel(List.of(new BindingReview(
+                new TestDefinition("urn:test:measure", "MULTIRECORD_MEASURE_COUNT_COMPLIANT_BASISOFRECORD_NOTEMPTY", TestType.MEASURE, Phase.PRE_AMENDMENT, Map.of()),
+                ImplementationStatus.FOUND,
+                BindingStatus.BOUND,
+                ParameterizationCapability.DEFAULT_ONLY,
+                "built-in",
+                Map.of(),
+                true,
+                List.of("Built-in multi-record COUNT measure"))));
+
+        model.applyExecutionOutputs(Map.of(
+                "urn:test:measure",
+                "PRE_AMENDMENT: 1/2 records matched COMPLIANT for VALIDATION_BASISOFRECORD_NOTEMPTY (50.0%)"));
+
+        assertThat(model.getValueAt(0, 8))
+                .isEqualTo("PRE_AMENDMENT: 1/2 records matched COMPLIANT for VALIDATION_BASISOFRECORD_NOTEMPTY (50.0%)");
+    }
+
     static class GuiDummy {
         public boolean validate(String eventDate) {
             return eventDate != null;

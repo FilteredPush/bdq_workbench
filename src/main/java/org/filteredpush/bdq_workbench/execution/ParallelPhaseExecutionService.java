@@ -9,6 +9,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import org.filteredpush.bdq_workbench.model.ImplementationBinding;
+import org.filteredpush.bdq_workbench.model.BuiltInMeasureSpec;
+import org.filteredpush.bdq_workbench.model.OutcomeStatus;
 import org.filteredpush.bdq_workbench.model.Phase;
 import org.filteredpush.bdq_workbench.model.RecordDataset;
 import org.filteredpush.bdq_workbench.model.Response;
@@ -64,11 +66,20 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
             RecordDataset dataset,
             List<ImplementationBinding> bindings,
             Map<String, DiscoveredImplementation> discoveredByKey) {
-        List<ImplementationBinding> phaseBindings = bindings.stream().filter(b -> b.phase() == phase).toList();
-        if (phaseBindings.isEmpty()) {
+        List<ImplementationBinding> phaseBindings = bindings.stream()
+                .filter(binding -> binding.phase() == phase)
+                .filter(binding -> !BuiltInMeasureSpec.isBuiltIn(binding))
+                .toList();
+        List<ImplementationBinding> builtInMeasures = phase == Phase.AMENDMENT
+                ? List.of()
+                : bindings.stream()
+                        .filter(BuiltInMeasureSpec::isBuiltIn)
+                        .filter(binding -> hasTargetBindingForPhase(binding, phase, bindings))
+                        .toList();
+        if (phaseBindings.isEmpty() && builtInMeasures.isEmpty()) {
             return List.of();
         }
-        int total = dataset.records().size() * phaseBindings.size();
+        int total = dataset.records().size() * phaseBindings.size() + builtInMeasures.size();
         progressListener.onPhaseStarted(phase, total);
         ExecutorService executor = Executors.newFixedThreadPool(threadCount);
         try {
@@ -92,6 +103,12 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
                 }
                 progressListener.onResponse(phase, response, completed, total);
             }
+            for (ImplementationBinding measureBinding : builtInMeasures) {
+                Response response = synthesizeBuiltInMeasure(phase, dataset, measureBinding, responses);
+                responses.add(response);
+                completed++;
+                progressListener.onResponse(phase, response, completed, total);
+            }
             progressListener.onPhaseCompleted(phase, completed, total);
             return responses;
         } catch (Exception e) {
@@ -99,6 +116,56 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
         } finally {
             executor.shutdownNow();
         }
+    }
+
+    private static boolean hasTargetBindingForPhase(
+            ImplementationBinding measureBinding,
+            Phase phase,
+            List<ImplementationBinding> allBindings) {
+        return BuiltInMeasureSpec.from(measureBinding)
+                .map(spec -> allBindings.stream()
+                        .filter(binding -> !BuiltInMeasureSpec.isBuiltIn(binding))
+                        .anyMatch(binding -> binding.phase() == phase && spec.targetTestId().equals(binding.testId())))
+                .orElse(false);
+    }
+
+    private static Response synthesizeBuiltInMeasure(
+            Phase phase,
+            RecordDataset dataset,
+            ImplementationBinding measureBinding,
+            List<Response> phaseResponses) {
+        BuiltInMeasureSpec spec = BuiltInMeasureSpec.from(measureBinding)
+                .orElseThrow(() -> new IllegalArgumentException("Not a built-in measure binding: " + measureBinding.testId()));
+        long matchingCount = phaseResponses.stream()
+                .filter(response -> spec.targetTestId().equals(response.testId()))
+                .filter(response -> spec.responseResult().equals(response.responseResult()))
+                .count();
+        int totalRecords = dataset.records().size();
+        double percentage = totalRecords == 0 ? 0.0d : (matchingCount * 100.0d) / totalRecords;
+        java.time.Instant finishedAt = java.time.Instant.now();
+        String message = String.format(
+                "%d/%d records matched %s for %s (%.1f%%)",
+                matchingCount,
+                totalRecords,
+                spec.responseResult(),
+                spec.targetTestLabel(),
+                percentage);
+        return new Response(
+                "MULTIRECORD",
+                measureBinding.testId(),
+                measureBinding.testType(),
+                measureBinding.implementationClass(),
+                measureBinding.implementationMethod(),
+                phase,
+                Map.of(),
+                OutcomeStatus.PASSED,
+                "RUN_HAS_RESULT",
+                Long.toString(matchingCount),
+                message,
+                message,
+                Map.of(),
+                finishedAt,
+                finishedAt);
     }
 
     private static void applyAmendments(RecordDataset dataset, Response response) {

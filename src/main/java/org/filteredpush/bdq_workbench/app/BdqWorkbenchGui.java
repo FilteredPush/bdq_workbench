@@ -43,11 +43,13 @@ import org.filteredpush.bdq_workbench.execution.ParallelPhaseExecutionService;
 import org.filteredpush.bdq_workbench.execution.ReflectionExecutionAdapter;
 import org.filteredpush.bdq_workbench.ingest.DefaultIngestService;
 import org.filteredpush.bdq_workbench.model.BindingReview;
+import org.filteredpush.bdq_workbench.model.BuiltInMeasureSpec;
 import org.filteredpush.bdq_workbench.model.ExecutionSummary;
 import org.filteredpush.bdq_workbench.model.ImplementationBinding;
 import org.filteredpush.bdq_workbench.model.PreparedRun;
 import org.filteredpush.bdq_workbench.model.Response;
 import org.filteredpush.bdq_workbench.model.TestDefinition;
+import org.filteredpush.bdq_workbench.model.TestType;
 import org.filteredpush.bdq_workbench.model.UseCase;
 import org.filteredpush.bdq_workbench.rdf_policy.RdfPolicyResolverService;
 import org.filteredpush.bdq_workbench.rdf_policy.UseCaseXmlParser;
@@ -393,6 +395,7 @@ final class BdqWorkbenchGui {
                         LOG.info("BDQ Workbench execution complete: {} outcomes", summary.responses().size());
                         appendStatus(statusArea, "Completed: " + summary.responses().size() + " outcomes\n");
                         resultSummaryArea.setText(renderResultSummary(ExecutionResultSummary.from(summary)));
+                        updateBindingGridExecutionOutputs(bindingGrid, summary);
                         Iterator <Response> i = summary.responses().iterator();
                         while (i.hasNext()) {
 							Response r = i.next();
@@ -645,19 +648,26 @@ final class BdqWorkbenchGui {
         outputArea.setLineWrap(true);
         outputArea.setWrapStyleWord(true);
         installTextAreaClipboardSupport(outputArea);
+        boolean runnableInDialog = binding != null && !BuiltInMeasureSpec.isBuiltIn(binding);
         outputArea.setText(binding == null
                 ? "No runnable implementation is currently bound for this test.\n"
-                : "Use Run Test to execute this binding against each input record in isolation.\n");
+                : BuiltInMeasureSpec.isBuiltIn(binding)
+                        ? "This built-in multi-record measure is evaluated during the full run after matching validation responses are available.\n"
+                        : "Use Run Test to execute this binding against each input record in isolation.\n");
 
         JProgressBar dialogProgress = new JProgressBar(0, Math.max(1, editedRun.dataset().records().size()));
         dialogProgress.setStringPainted(true);
-        dialogProgress.setVisible(binding != null);
+        dialogProgress.setVisible(runnableInDialog);
         dialogProgress.setValue(0);
-        dialogProgress.setString(binding == null ? "No runnable binding" : "0/" + editedRun.dataset().records().size());
-
+        dialogProgress.setString(binding == null
+                ? "No runnable binding"
+                : runnableInDialog
+                        ? "0/" + editedRun.dataset().records().size()
+                        : "Built-in aggregate measure");
         JPanel controls = new JPanel(new FlowLayout(FlowLayout.RIGHT));
         JButton runButton = new JButton("Run Test");
-        runButton.setEnabled(binding != null);
+        JButton runButton = new JButton("Run Test");
+        runButton.setEnabled(runnableInDialog);
         JButton closeButton = new JButton("Close");
         controls.add(runButton);
         controls.add(closeButton);
@@ -860,7 +870,7 @@ final class BdqWorkbenchGui {
                     .append('\n'));
         }
 
-        sb.append("\nNote: multi-record measures need explicit implementation in this framework and are not discovered automatically.\n");
+        sb.append("\nNote: COUNT-based multi-record measures are synthesized from validation response streams; other multi-record measures still need explicit implementation.\n");
         if (!state.isFullyResolved()) {
             sb.append("You can continue with available tests.\n");
         }
@@ -1172,6 +1182,25 @@ final class BdqWorkbenchGui {
                 + "Response status counts: " + summary.responseStatusCounts() + "\n"
                 + "Response result counts: " + summary.responseResultCounts() + "\n"
                 + "Saved files: reports/bdq-report-summary.txt, reports/bdq-report-response-stream.txt, reports/bdq-report-xls-hook.txt\n";
+    }
+
+    private static void updateBindingGridExecutionOutputs(JTable bindingGrid, ExecutionSummary summary) {
+        if (!(bindingGrid.getModel() instanceof BindingReviewTableModel reviewModel)) {
+            return;
+        }
+        Map<String, String> outputs = new LinkedHashMap<>();
+        summary.responses().stream()
+                .filter(response -> response.testType() == TestType.MEASURE)
+                .collect(java.util.stream.Collectors.groupingBy(
+                        Response::testId,
+                        LinkedHashMap::new,
+                        java.util.stream.Collectors.toList()))
+                .forEach((testId, responses) -> outputs.put(testId, responses.stream()
+                        .sorted(java.util.Comparator.comparing(Response::phase))
+                        .map(response -> response.phase() + ": " + (response.message() == null ? "" : response.message()))
+                        .reduce((left, right) -> left + "; " + right)
+                        .orElse("")));
+        reviewModel.applyExecutionOutputs(outputs);
     }
 
     private static String renderBindingReviewDetails(BindingReview review, ImplementationBinding binding) {
