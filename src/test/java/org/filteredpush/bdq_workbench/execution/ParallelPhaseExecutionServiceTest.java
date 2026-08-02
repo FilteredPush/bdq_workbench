@@ -46,13 +46,19 @@ class ParallelPhaseExecutionServiceTest {
 
         var responses = service.execute(dataset, bindings, discovered);
 
-        assertThat(responses).hasSize(3);
-        assertThat(responses).extracting(Response::phase).containsExactly(Phase.PRE_AMENDMENT, Phase.AMENDMENT, Phase.POST_AMENDMENT);
+        assertThat(responses).hasSize(4);
+        assertThat(responses)
+                .extracting(Response::phase, Response::testId, Response::comment)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple(Phase.PRE_AMENDMENT, "t1", "ok"),
+                        org.assertj.core.groups.Tuple.tuple(Phase.AMENDMENT, "t2", "updated"),
+                        org.assertj.core.groups.Tuple.tuple(Phase.POST_AMENDMENT, "t1", "ok"),
+                        org.assertj.core.groups.Tuple.tuple(Phase.POST_AMENDMENT, "t3", "changed"));
         assertThat(responses.get(0).responseStatus()).isEqualTo("RUN_HAS_RESULT");
         assertThat(responses.get(0).responseResult()).isEqualTo("COMPLIANT");
-        assertThat(responses.get(0).comment()).isEqualTo("ok");
         assertThat(responses.get(1).amendments()).containsEntry("dwc:eventDate", "changed");
         assertThat(responses.get(2).responseResult()).isEqualTo("COMPLIANT");
+        assertThat(responses.get(3).responseResult()).isEqualTo("COMPLIANT");
         assertThat(dataset.records().get(0).terms()).containsEntry("dwc:eventDate", "orig");
     }
 
