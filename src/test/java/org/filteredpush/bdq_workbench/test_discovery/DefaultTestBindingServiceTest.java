@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import org.filteredpush.bdq_workbench.model.BindingStatus;
+import org.filteredpush.bdq_workbench.model.ImplementationStatus;
 import org.filteredpush.bdq_workbench.model.MethodParameter;
 import org.filteredpush.bdq_workbench.model.ParameterRole;
 import org.filteredpush.bdq_workbench.model.ParameterizationCapability;
@@ -146,6 +147,10 @@ class DefaultTestBindingServiceTest {
             assertThat(binding.parameterizationCapability()).isEqualTo(ParameterizationCapability.BOTH);
             assertThat(binding.bindingStatus()).isEqualTo(BindingStatus.BOUND);
         });
+        assertThat(result.reviews()).singleElement().satisfies(review -> {
+            assertThat(review.implementationStatus()).isEqualTo(ImplementationStatus.FOUND);
+            assertThat(review.diagnostics()).contains("Parameterized version available");
+        });
     }
 
     @Test
@@ -212,7 +217,8 @@ class DefaultTestBindingServiceTest {
 
         assertThat(result.bindings()).singleElement().satisfies(binding -> {
             assertThat(binding.bindingStatus()).isEqualTo(BindingStatus.UNBOUND);
-            assertThat(binding.diagnostics()).anyMatch(message -> message.contains("Missing acted_upon term dwc:eventDate"));
+            assertThat(binding.diagnostics()).anyMatch(message -> message.contains(
+                    "Term acted_upon/consulted absent in input data: dwc:eventDate"));
         });
     }
 

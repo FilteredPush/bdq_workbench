@@ -59,7 +59,9 @@ public class BindingReviewTableModel extends AbstractTableModel {
             case 1 -> row.review.test().type().name();
             case 2 -> row.review.implementationStatus().name();
             case 3 -> row.review.bindingStatus().name();
-            case 4 -> row.review.parameterizationCapability().name();
+            case 4 -> row.review.parameterizationCapability() == org.filteredpush.bdq_workbench.model.ParameterizationCapability.BOTH
+                    ? "PARAMETERIZED_VERSION_AVAILABLE"
+                    : row.review.parameterizationCapability().name();
             case 5 -> row.review.chosenImplementationMethod();
             case 6 -> row.useDefaults;
             case 7 -> toDisplayValue(row.parameters);
@@ -83,15 +85,45 @@ public class BindingReviewTableModel extends AbstractTableModel {
     }
 
     public Map<String, String> editedParametersFor(String testId) {
-        return rows.stream()
-                .filter(row -> row.review.test().id().equals(testId))
-                .findFirst()
-                .map(row -> Map.copyOf(row.parameters))
-                .orElse(Map.of());
+        return settingsFor(testId).parameters();
     }
 
     public BindingReview reviewAt(int rowIndex) {
         return rows.get(rowIndex).review;
+    }
+
+    public ParameterSettings settingsFor(String testId) {
+        return rows.stream()
+                .filter(row -> row.review.test().id().equals(testId))
+                .findFirst()
+                .map(RowState::settings)
+                .orElse(new ParameterSettings(true, Map.of()));
+    }
+
+    public Map<String, ParameterSettings> parameterSettings() {
+        Map<String, ParameterSettings> settings = new LinkedHashMap<>();
+        rows.forEach(row -> settings.put(row.review.test().id(), row.settings()));
+        return Map.copyOf(settings);
+    }
+
+    public void applyParameterSettings(Map<String, ParameterSettings> settings) {
+        if (settings == null || settings.isEmpty()) {
+            return;
+        }
+        for (int index = 0; index < rows.size(); index++) {
+            RowState row = rows.get(index);
+            ParameterSettings setting = settings.get(row.review.test().id());
+            if (setting != null) {
+                row.apply(setting);
+                fireTableRowsUpdated(index, index);
+            }
+        }
+    }
+
+    public record ParameterSettings(boolean useDefaults, Map<String, String> parameters) {
+        public ParameterSettings {
+            parameters = Map.copyOf(parameters == null ? Map.of() : new LinkedHashMap<>(parameters));
+        }
     }
 
     private static String toDisplayValue(Map<String, String> values) {
@@ -128,6 +160,18 @@ public class BindingReviewTableModel extends AbstractTableModel {
             this.review = review;
             this.useDefaults = review.usingDefaultParameters();
             this.parameters = new LinkedHashMap<>(review.parameterValues());
+        }
+
+        private ParameterSettings settings() {
+            return new ParameterSettings(useDefaults, Map.copyOf(parameters));
+        }
+
+        private void apply(ParameterSettings settings) {
+            this.useDefaults = settings.useDefaults();
+            this.parameters = new LinkedHashMap<>(settings.parameters());
+            if (this.useDefaults) {
+                this.parameters.clear();
+            }
         }
     }
 }

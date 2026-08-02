@@ -3,6 +3,7 @@ package org.filteredpush.bdq_workbench.app;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.lang.reflect.Method;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -21,6 +22,7 @@ import org.filteredpush.bdq_workbench.model.Response;
 import org.filteredpush.bdq_workbench.model.TestDefinition;
 import org.filteredpush.bdq_workbench.model.TestType;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 class BdqWorkbenchGuiTest {
 
@@ -67,6 +69,26 @@ class BdqWorkbenchGuiTest {
         BindingReviewTableModel model = new BindingReviewTableModel(List.of(review));
 
         assertThat(model.reviewAt(0)).isEqualTo(review);
+    }
+
+    @Test
+    void bindingReviewTableModelTracksDefaultSelectionInSettings() {
+        BindingReviewTableModel model = new BindingReviewTableModel(List.of(new BindingReview(
+                new TestDefinition("urn:test", "Test", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of("bdq:limit", "10")),
+                ImplementationStatus.FOUND,
+                BindingStatus.BOUND,
+                ParameterizationCapability.BOTH,
+                "example#method",
+                Map.of("bdq:limit", "10"),
+                false,
+                List.of())));
+
+        model.applyParameterSettings(Map.of(
+                "urn:test",
+                new BindingReviewTableModel.ParameterSettings(true, Map.of())));
+
+        assertThat(model.settingsFor("urn:test").useDefaults()).isTrue();
+        assertThat(model.settingsFor("urn:test").parameters()).isEmpty();
     }
 
     @Test
@@ -164,6 +186,38 @@ class BdqWorkbenchGuiTest {
 
         assertThat(traceText).contains("Record 1/3: r1");
         assertThat(traceText).contains("Raw return value: Result[COMPLIANT]");
-        assertThat(traceText).contains("Normalized response: PASSED / RUN_HAS_RESULT / COMPLIANT");
+        assertThat(traceText).contains("Vocabulary response: RUN_HAS_RESULT / COMPLIANT");
+        assertThat(traceText).contains("Execution state: PASSED");
+    }
+
+    @Test
+    void parameterSettingsRoundTripViaJson(@TempDir Path tempDir) throws Exception {
+        BindingReviewTableModel model = new BindingReviewTableModel(List.of(new BindingReview(
+                new TestDefinition("urn:test", "Test", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of("bdq:limit", "10")),
+                ImplementationStatus.FOUND,
+                BindingStatus.BOUND,
+                ParameterizationCapability.BOTH,
+                "example#method",
+                Map.of("bdq:limit", "10"),
+                false,
+                List.of())));
+        Path file = tempDir.resolve("settings.json");
+
+        Method saveMethod = BdqWorkbenchGui.class.getDeclaredMethod(
+                "writeParameterSettings",
+                Path.class,
+                Map.class);
+        saveMethod.setAccessible(true);
+        saveMethod.invoke(null, file, model.parameterSettings());
+
+        Method loadMethod = BdqWorkbenchGui.class.getDeclaredMethod("readParameterSettings", Path.class);
+        loadMethod.setAccessible(true);
+
+        @SuppressWarnings("unchecked")
+        Map<String, BindingReviewTableModel.ParameterSettings> loaded =
+                (Map<String, BindingReviewTableModel.ParameterSettings>) loadMethod.invoke(null, file);
+
+        assertThat(loaded).containsKey("urn:test");
+        assertThat(loaded.get("urn:test").parameters()).containsEntry("bdq:limit", "10");
     }
 }

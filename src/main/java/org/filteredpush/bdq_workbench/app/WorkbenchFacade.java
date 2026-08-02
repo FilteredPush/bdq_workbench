@@ -87,9 +87,9 @@ public class WorkbenchFacade {
                     "",
                     unresolved.phase(),
                     unresolved.parameters(),
-                    OutcomeStatus.NOT_IMPLEMENTED,
-                    "NOT_IMPLEMENTED",
-                    null,
+                    OutcomeStatus.UNABLE_TO_RUN,
+                    "UNABLE_TO_RUN",
+                    "UNABLE_TO_RUN",
                     "Unresolved in policy resolution",
                     "Unresolved in policy resolution",
                     java.util.Map.of(),
@@ -97,6 +97,12 @@ public class WorkbenchFacade {
                     java.time.Instant.now()));
         }
         for (var unresolved : bindingResult.unresolved()) {
+            String detail = bindingResult.reviews().stream()
+                    .filter(review -> review.test().id().equals(unresolved.id()))
+                    .findFirst()
+                    .map(review -> String.join("; ", review.diagnostics()))
+                    .filter(message -> !message.isBlank())
+                    .orElse("No implementation discovered");
             responses.add(new Response(
                     "*",
                     unresolved.id(),
@@ -105,11 +111,11 @@ public class WorkbenchFacade {
                     "",
                     unresolved.phase(),
                     unresolved.parameters(),
-                    OutcomeStatus.NOT_IMPLEMENTED,
-                    "NOT_IMPLEMENTED",
-                    null,
-                    "No implementation discovered",
-                    "No implementation discovered",
+                    OutcomeStatus.UNABLE_TO_RUN,
+                    "UNABLE_TO_RUN",
+                    "UNABLE_TO_RUN",
+                    detail,
+                    detail,
                     java.util.Map.of(),
                     java.time.Instant.now(),
                     java.time.Instant.now()));

@@ -85,7 +85,7 @@ public class DefaultTestBindingService implements TestBindingService {
             List<String> diagnostics = new ArrayList<>(selection.diagnostics());
             ParameterizationCapability capability = determineCapability(selection.candidates());
             ImplementationStatus implementationStatus =
-                    selection.candidates().size() > 1 ? ImplementationStatus.AMBIGUOUS : ImplementationStatus.FOUND;
+                    selection.ambiguous() ? ImplementationStatus.AMBIGUOUS : ImplementationStatus.FOUND;
 
             CandidateEvaluation evaluation = evaluateCandidate(
                     test,
@@ -200,7 +200,7 @@ public class DefaultTestBindingService implements TestBindingService {
                     parameter.source(),
                     null,
                     false,
-                    "Missing " + parameter.role().name().toLowerCase() + " term " + parameter.source());
+                    "Term acted_upon/consulted absent in input data: " + parameter.source());
         }
         if (!isSupportedScalarType(parameter.typeName())) {
             return new BoundMethodParameter(
@@ -238,10 +238,15 @@ public class DefaultTestBindingService implements TestBindingService {
         String mappedMethod = explicitMapping.get(test.id());
         if (mappedMethod != null && byMethodKey.containsKey(mappedMethod)) {
             diagnostics.add("Explicit mapping selected " + mappedMethod);
-            return new Selection(List.of(byMethodKey.get(mappedMethod)), byMethodKey.get(mappedMethod), "explicit mapping", diagnostics);
+            return new Selection(
+                    List.of(byMethodKey.get(mappedMethod)),
+                    byMethodKey.get(mappedMethod),
+                    "explicit mapping",
+                    diagnostics,
+                    false);
         }
         if (candidates.isEmpty()) {
-            return new Selection(List.of(), null, "no match", diagnostics);
+            return new Selection(List.of(), null, "no match", diagnostics, false);
         }
 
         List<DiscoveredImplementation> defaultCandidates = candidates.stream()
@@ -253,6 +258,7 @@ public class DefaultTestBindingService implements TestBindingService {
                 .sorted(implementationComparator())
                 .toList();
         boolean hasUserParameters = !test.parameters().isEmpty();
+        boolean parameterizedVersionAvailable = !defaultCandidates.isEmpty() && !parameterizedCandidates.isEmpty();
 
         DiscoveredImplementation chosen;
         String reason;
@@ -270,11 +276,15 @@ public class DefaultTestBindingService implements TestBindingService {
             reason = "default-only implementation available";
         }
 
-        if (candidates.size() > 1) {
+        boolean ambiguous = candidates.size() > 1 && !parameterizedVariantPair(defaultCandidates, parameterizedCandidates);
+        if (parameterizedVersionAvailable) {
+            diagnostics.add("Parameterized version available");
+        }
+        if (ambiguous) {
             diagnostics.add("Ambiguous candidates resolved deterministically by class and method ordering");
         }
         diagnostics.add(reason);
-        return new Selection(candidates, chosen, reason, diagnostics);
+        return new Selection(candidates, chosen, reason, diagnostics, ambiguous);
     }
 
     private static List<DiscoveredImplementation> lookupCandidates(
@@ -311,6 +321,12 @@ public class DefaultTestBindingService implements TestBindingService {
             return ParameterizationCapability.BOTH;
         }
         return hasParameterized ? ParameterizationCapability.PARAMETERIZED_ONLY : ParameterizationCapability.DEFAULT_ONLY;
+    }
+
+    private static boolean parameterizedVariantPair(
+            List<DiscoveredImplementation> defaultCandidates,
+            List<DiscoveredImplementation> parameterizedCandidates) {
+        return defaultCandidates.size() == 1 && parameterizedCandidates.size() == 1;
     }
 
     private static boolean isSupportedScalarType(String typeName) {
@@ -399,7 +415,8 @@ public class DefaultTestBindingService implements TestBindingService {
             List<DiscoveredImplementation> candidates,
             DiscoveredImplementation chosen,
             String selectionReason,
-            List<String> diagnostics) {
+            List<String> diagnostics,
+            boolean ambiguous) {
     }
 
     private record CandidateEvaluation(ImplementationBinding binding) {

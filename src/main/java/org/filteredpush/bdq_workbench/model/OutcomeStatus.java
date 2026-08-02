@@ -6,5 +6,6 @@ public enum OutcomeStatus {
     FAILED,
     AMENDED,
     NOT_IMPLEMENTED,
+    UNABLE_TO_RUN,
     ERROR
 }
