@@ -17,6 +17,7 @@ import org.filteredpush.bdq_workbench.model.RecordDataset;
 import org.filteredpush.bdq_workbench.model.Response;
 import org.filteredpush.bdq_workbench.model.TestType;
 import org.filteredpush.bdq_workbench.model.CanonicalRecord;
+import org.filteredpush.bdq_workbench.model.OutcomeStatus;
 import org.filteredpush.bdq_workbench.test_discovery.DiscoveredImplementation;
 import org.junit.jupiter.api.Test;
 
@@ -187,6 +188,49 @@ class ParallelPhaseExecutionServiceTest {
                 .containsExactly(
                         org.assertj.core.groups.Tuple.tuple(Phase.PRE_AMENDMENT, "NOT_COMPLETE"),
                         org.assertj.core.groups.Tuple.tuple(Phase.POST_AMENDMENT, "NOT_COMPLETE"));
+    }
+
+    @Test
+    void continuesPhaseWhenExecutionAdapterThrowsUnexpectedRuntimeException() {
+        ParallelPhaseExecutionService service = new ParallelPhaseExecutionService(1, (record, binding, implementation) -> {
+            if (binding.testId().equals("urn:test:bad")) {
+                throw new IllegalStateException("boom");
+            }
+            return new Response(
+                    record.id(),
+                    binding.testId(),
+                    binding.testType(),
+                    binding.implementationClass(),
+                    binding.implementationMethod(),
+                    binding.phase(),
+                    binding.parameters(),
+                    OutcomeStatus.PASSED,
+                    "RUN_HAS_RESULT",
+                    "COMPLIANT",
+                    "ok",
+                    "ok",
+                    Map.of(),
+                    java.time.Instant.now(),
+                    java.time.Instant.now());
+        });
+
+        List<ImplementationBinding> bindings = List.of(
+                binding("urn:test:good", TestType.VALIDATION, "pre", Phase.PRE_AMENDMENT),
+                binding("urn:test:bad", TestType.VALIDATION, "pre", Phase.PRE_AMENDMENT));
+
+        List<Response> responses = service.execute(
+                new RecordDataset(List.of(new CanonicalRecord("r1", Map.of("dwc:eventDate", "orig")))),
+                bindings,
+                List.of());
+
+        assertThat(responses).hasSize(4);
+        assertThat(responses.stream()
+                .filter(response -> response.phase() == Phase.PRE_AMENDMENT)
+                .toList())
+                .extracting(Response::testId, Response::status, Response::message)
+                .containsExactlyInAnyOrder(
+                        org.assertj.core.groups.Tuple.tuple("urn:test:good", OutcomeStatus.PASSED, "ok"),
+                        org.assertj.core.groups.Tuple.tuple("urn:test:bad", OutcomeStatus.ERROR, "IllegalStateException: boom"));
     }
 
     private static MethodParameter parameter(int index, ParameterRole role, String source, Class<?> type) {

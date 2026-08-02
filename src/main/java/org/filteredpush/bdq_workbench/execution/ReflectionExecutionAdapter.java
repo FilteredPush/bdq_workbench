@@ -33,8 +33,29 @@ public class ReflectionExecutionAdapter implements ExecutionAdapter {
         Instant start = Instant.now();
         Map<String, String> originalTerms = new LinkedHashMap<>(record.terms());
         Map<String, String> invocationTerms = new LinkedHashMap<>(record.terms());
-        InvocationPlan invocation = buildArguments(invocationTerms, binding);
+        InvocationPlan invocation = InvocationPlan.empty();
+        if (implementation == null) {
+            IllegalStateException error = new IllegalStateException(
+                    "No discovered implementation metadata available for "
+                            + binding.implementationClass()
+                            + "#"
+                            + binding.implementationMethod());
+            LOG.error("Unable to execute {}.{} for record {}: {}",
+                    binding.implementationClass(), binding.implementationMethod(), record.id(), error.getMessage(), error);
+            return new ExecutionTrace(
+                    errorResponse(record, binding, start, error),
+                    List.of(),
+                    null,
+                    null);
+        }
         try {
+            invocation = buildArguments(invocationTerms, binding);
+            LOG.debug("Invoking {}.{} for record {} in phase {} with arguments {}",
+                    binding.implementationClass(),
+                    binding.implementationMethod(),
+                    record.id(),
+                    binding.phase(),
+                    invocation.argumentTraces());
             Object result = implementation.method().invoke(implementation.target(), invocation.arguments());
             Map<String, String> amendments = extractAmendments(result, originalTerms, invocationTerms, binding);
             String responseStatus = extractResponseStatus(result, binding, amendments);
@@ -44,8 +65,14 @@ public class ReflectionExecutionAdapter implements ExecutionAdapter {
             String message = comment == null || comment.isBlank()
                     ? defaultMessage(responseStatus, responseResult, result)
                     : comment;
-            LOG.debug("Executed {}.{} for record {} with status {} / {}",
-                    binding.implementationClass(), binding.implementationMethod(), record.id(), status, responseStatus);
+            LOG.debug("Executed {}.{} for record {} with status {} / {}, result {}, comment {}",
+                    binding.implementationClass(),
+                    binding.implementationMethod(),
+                    record.id(),
+                    status,
+                    responseStatus,
+                    responseResult,
+                    comment);
             return new ExecutionTrace(new Response(
                     record.id(),
                     binding.testId(),
@@ -65,18 +92,41 @@ public class ReflectionExecutionAdapter implements ExecutionAdapter {
                     List.copyOf(invocation.argumentTraces()),
                     result == null ? null : result.getClass().getName(),
                     stringify(result));
+        } catch (ArgumentBindingException e) {
+            LOG.error("Error binding arguments for {}.{} on record {} with traces {}: {}",
+                    binding.implementationClass(),
+                    binding.implementationMethod(),
+                    record.id(),
+                    e.argumentTraces(),
+                    e.getMessage(),
+                    e);
+            return new ExecutionTrace(
+                    errorResponse(record, binding, start, e),
+                    e.argumentTraces(),
+                    null,
+                    null);
         } catch (InvocationTargetException e) {
             Throwable cause = e.getTargetException() == null ? e : e.getTargetException();
-            LOG.error("Error executing {}.{} for record {}: {}",
-                    binding.implementationClass(), binding.implementationMethod(), record.id(), cause.getMessage(), cause);
+            LOG.error("Error executing {}.{} for record {} with arguments {}: {}",
+                    binding.implementationClass(),
+                    binding.implementationMethod(),
+                    record.id(),
+                    invocation.argumentTraces(),
+                    cause.getMessage(),
+                    cause);
             return new ExecutionTrace(
                     errorResponse(record, binding, start, cause),
                     List.copyOf(invocation.argumentTraces()),
                     cause.getClass().getName(),
                     cause.toString());
         } catch (Exception e) {
-            LOG.error("Error executing {}.{} for record {}: {}",
-                    binding.implementationClass(), binding.implementationMethod(), record.id(), e.getMessage(), e);
+            LOG.error("Error executing {}.{} for record {} with arguments {}: {}",
+                    binding.implementationClass(),
+                    binding.implementationMethod(),
+                    record.id(),
+                    invocation.argumentTraces(),
+                    e.getMessage(),
+                    e);
             return new ExecutionTrace(
                     errorResponse(record, binding, start, e),
                     List.copyOf(invocation.argumentTraces()),
@@ -95,20 +145,37 @@ public class ReflectionExecutionAdapter implements ExecutionAdapter {
                 case LEGACY_RECORD -> recordTerms.toString();
                 case LEGACY_PARAMETERS -> binding.parameters().toString();
             };
-            Object argument = switch (parameter.parameter().role()) {
-                case ACTED_UPON, CONSULTED -> convertValue(rawValue, parameter.parameter().typeName());
-                case PARAMETER -> convertValue(rawValue, parameter.parameter().typeName());
-                case LEGACY_RECORD -> recordTerms;
-                case LEGACY_PARAMETERS -> binding.parameters();
-            };
-            arguments[parameter.parameter().index()] = argument;
-            argumentTraces.add(new ArgumentTrace(
-                    parameter.parameter().name(),
-                    parameter.parameter().role(),
-                    parameter.resolvedSource(),
-                    rawValue,
-                    stringify(argument),
-                    parameter.reason()));
+            try {
+                Object argument = switch (parameter.parameter().role()) {
+                    case ACTED_UPON, CONSULTED -> convertValue(rawValue, parameter.parameter().typeName());
+                    case PARAMETER -> convertValue(rawValue, parameter.parameter().typeName());
+                    case LEGACY_RECORD -> recordTerms;
+                    case LEGACY_PARAMETERS -> binding.parameters();
+                };
+                arguments[parameter.parameter().index()] = argument;
+                argumentTraces.add(new ArgumentTrace(
+                        parameter.parameter().name(),
+                        parameter.parameter().role(),
+                        parameter.resolvedSource(),
+                        rawValue,
+                        stringify(argument),
+                        parameter.reason()));
+            } catch (RuntimeException e) {
+                argumentTraces.add(new ArgumentTrace(
+                        parameter.parameter().name(),
+                        parameter.parameter().role(),
+                        parameter.resolvedSource(),
+                        rawValue,
+                        null,
+                        "Failed to convert value for " + parameter.resolvedSource()
+                                + " to " + parameter.parameter().typeName()
+                                + ": " + e.getMessage()));
+                throw new ArgumentBindingException(
+                        "Failed to convert bound value for " + parameter.resolvedSource()
+                                + " to " + parameter.parameter().typeName(),
+                        e,
+                        List.copyOf(argumentTraces));
+            }
         }
         return new InvocationPlan(arguments, List.copyOf(argumentTraces));
     }
@@ -230,6 +297,7 @@ public class ReflectionExecutionAdapter implements ExecutionAdapter {
     }
 
     private static Response errorResponse(CanonicalRecord record, ImplementationBinding binding, Instant start, Throwable error) {
+        String errorMessage = describeError(error);
         return new Response(
                 record.id(),
                 binding.testId(),
@@ -241,14 +309,24 @@ public class ReflectionExecutionAdapter implements ExecutionAdapter {
                 OutcomeStatus.ERROR,
                 "ERROR",
                 null,
-                error.getMessage(),
-                error.getMessage(),
+                errorMessage,
+                errorMessage,
                 Map.of(),
                 start,
                 Instant.now());
     }
 
+    private static String describeError(Throwable error) {
+        String message = error.getMessage();
+        return message == null || message.isBlank()
+                ? error.getClass().getName()
+                : error.getClass().getSimpleName() + ": " + message;
+    }
+
     private record InvocationPlan(Object[] arguments, List<ArgumentTrace> argumentTraces) {
+        private static InvocationPlan empty() {
+            return new InvocationPlan(new Object[0], List.of());
+        }
     }
 
     public record ExecutionTrace(
@@ -256,6 +334,19 @@ public class ReflectionExecutionAdapter implements ExecutionAdapter {
             List<ArgumentTrace> argumentTraces,
             String rawReturnType,
             String rawReturnValue) {
+    }
+
+    private static final class ArgumentBindingException extends RuntimeException {
+        private final List<ArgumentTrace> argumentTraces;
+
+        private ArgumentBindingException(String message, Throwable cause, List<ArgumentTrace> argumentTraces) {
+            super(message, cause);
+            this.argumentTraces = argumentTraces;
+        }
+
+        private List<ArgumentTrace> argumentTraces() {
+            return argumentTraces;
+        }
     }
 
     public record ArgumentTrace(

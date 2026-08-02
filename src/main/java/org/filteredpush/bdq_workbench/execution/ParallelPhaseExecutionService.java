@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -18,9 +19,12 @@ import org.filteredpush.bdq_workbench.model.RecordDataset;
 import org.filteredpush.bdq_workbench.model.Response;
 import org.filteredpush.bdq_workbench.model.TestType;
 import org.filteredpush.bdq_workbench.test_discovery.DiscoveredImplementation;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** Executes policy bindings in pre/amendment/post phases with deterministic ordering. */
 public class ParallelPhaseExecutionService implements TestExecutionService {
+    private static final Logger LOG = LoggerFactory.getLogger(ParallelPhaseExecutionService.class);
     private final int threadCount;
     private final ExecutionAdapter executionAdapter;
     private final ExecutionProgressListener progressListener;
@@ -82,22 +86,42 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
             return List.of();
         }
         int total = dataset.records().size() * phaseBindings.size() + builtInMeasures.size();
+        LOG.debug("Starting phase {} with {} records, {} direct bindings, {} built-in measures",
+                phase, dataset.records().size(), phaseBindings.size(), builtInMeasures.size());
         progressListener.onPhaseStarted(phase, total);
         ExecutorService executor = Executors.newFixedThreadPool(threadCount);
         try {
-            List<Future<Response>> futures = new ArrayList<>();
+            List<PendingExecution> futures = new ArrayList<>();
             for (var record : dataset.records()) {
                 for (var binding : phaseBindings) {
-                    futures.add(executor.submit(() -> executionAdapter.execute(
-                            record,
+                    String implementationKey = binding.implementationClass() + "#" + binding.implementationMethod();
+                    futures.add(new PendingExecution(
+                            record.id(),
                             binding,
-                            discoveredByKey.get(binding.implementationClass() + "#" + binding.implementationMethod()))));
+                            executor.submit(() -> executionAdapter.execute(
+                                    record,
+                                    binding,
+                                    discoveredByKey.get(implementationKey)))));
                 }
             }
             List<Response> responses = new ArrayList<>();
             int completed = 0;
-            for (Future<Response> future : futures) {
-                Response response = future.get();
+            for (PendingExecution pending : futures) {
+                Response response;
+                try {
+                    response = pending.future().get();
+                } catch (ExecutionException e) {
+                    Throwable cause = e.getCause() == null ? e : e.getCause();
+                    LOG.error("Unhandled execution failure in phase {} for test {} using {}.{} on record {}: {}",
+                            phase,
+                            pending.binding().testId(),
+                            pending.binding().implementationClass(),
+                            pending.binding().implementationMethod(),
+                            pending.recordId(),
+                            cause.getMessage(),
+                            cause);
+                    response = errorResponse(pending.recordId(), pending.binding(), cause);
+                }
                 responses.add(response);
                 completed++;
                 if (phase == Phase.AMENDMENT) {
@@ -106,14 +130,28 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
                 progressListener.onResponse(phase, response, completed, total);
             }
             for (ImplementationBinding measureBinding : builtInMeasures) {
-                Response response = synthesizeBuiltInMeasure(phase, dataset, measureBinding, responses);
+                Response response;
+                try {
+                    response = synthesizeBuiltInMeasure(phase, dataset, measureBinding, responses);
+                } catch (RuntimeException e) {
+                    LOG.error("Built-in measure execution failed in phase {} for test {}: {}",
+                            phase, measureBinding.testId(), e.getMessage(), e);
+                    response = errorResponse("MULTIRECORD", measureBinding, e);
+                }
                 responses.add(response);
                 completed++;
                 progressListener.onResponse(phase, response, completed, total);
             }
             progressListener.onPhaseCompleted(phase, completed, total);
+            LOG.debug("Completed phase {} with {} responses", phase, completed);
             return responses;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            LOG.error("Execution interrupted in phase {}", phase, e);
+            throw new RuntimeException("Execution interrupted in phase " + phase, e);
         } catch (Exception e) {
+            LOG.error("Execution failed in phase {} with {} records, {} direct bindings, {} built-in measures",
+                    phase, dataset.records().size(), phaseBindings.size(), builtInMeasures.size(), e);
             throw new RuntimeException("Execution failed in phase " + phase, e);
         } finally {
             executor.shutdownNow();
@@ -286,9 +324,36 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
         if (response.amendments().isEmpty()) {
             return;
         }
+        LOG.debug("Applying amendments for record {}: {}", response.recordId(), response.amendments());
         dataset.records().stream()
                 .filter(record -> record.id().equals(response.recordId()))
                 .findFirst()
                 .ifPresent(record -> response.amendments().forEach(record.terms()::put));
+    }
+
+    private static Response errorResponse(String recordId, ImplementationBinding binding, Throwable error) {
+        String message = error.getMessage() == null || error.getMessage().isBlank()
+                ? error.getClass().getName()
+                : error.getClass().getSimpleName() + ": " + error.getMessage();
+        java.time.Instant now = java.time.Instant.now();
+        return new Response(
+                recordId,
+                binding.testId(),
+                binding.testType(),
+                binding.implementationClass(),
+                binding.implementationMethod(),
+                binding.phase(),
+                binding.parameters(),
+                OutcomeStatus.ERROR,
+                "ERROR",
+                null,
+                message,
+                message,
+                Map.of(),
+                now,
+                now);
+    }
+
+    private record PendingExecution(String recordId, ImplementationBinding binding, Future<Response> future) {
     }
 }
