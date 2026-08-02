@@ -318,9 +318,18 @@ public class ReflectionExecutionAdapter implements ExecutionAdapter {
 
     private static String describeError(Throwable error) {
         String message = error.getMessage();
-        return message == null || message.isBlank()
+        String description = message == null || message.isBlank()
                 ? error.getClass().getName()
                 : error.getClass().getSimpleName() + ": " + message;
+        Throwable cause = error.getCause();
+        if (cause == null || cause == error) {
+            return description;
+        }
+        String causeMessage = cause.getMessage();
+        String causeDescription = causeMessage == null || causeMessage.isBlank()
+                ? cause.getClass().getName()
+                : cause.getClass().getSimpleName() + ": " + causeMessage;
+        return description + " (caused by " + causeDescription + ")";
     }
 
     private record InvocationPlan(Object[] arguments, List<ArgumentTrace> argumentTraces) {
