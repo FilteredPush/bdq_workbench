@@ -67,6 +67,26 @@
             <version>3.2.0</version>
         </dependency>
 
+                <dependency>
+                    <groupId>org.filteredpush</groupId>
+                    <artifactId>event_date_qc</artifactId>
+                    <version>3.1.0</version>
+                </dependency>
+                <dependency>
+                    <groupId>org.filteredpush</groupId>
+                    <artifactId>sci_name_qc</artifactId>
+                    <version>1.2.0</version>
+                </dependency>
+                <dependency>
+                    <groupId>org.filteredpush</groupId>
+                    <artifactId>geo_ref_qc</artifactId>
+                    <version>2.1.1</version>
+                </dependency>
+                <dependency>
+                    <groupId>org.filteredpush</groupId>
+                    <artifactId>rec_occur_qc</artifactId>
+                    <version>1.1.0</version>
+                </dependency>
 
 
         <dependency>
@@ -189,28 +209,6 @@
                     <url>https://repository.gbif.org/content/groups/gbif</url>
                 </repository>
             </repositories>
-            <dependencies>
-                <dependency>
-                    <groupId>org.filteredpush</groupId>
-                    <artifactId>event_date_qc</artifactId>
-                    <version>3.1.0</version>
-                </dependency>
-                <dependency>
-                    <groupId>org.filteredpush</groupId>
-                    <artifactId>sci_name_qc</artifactId>
-                    <version>1.2.0</version>
-                </dependency>
-                <dependency>
-                    <groupId>org.filteredpush</groupId>
-                    <artifactId>geo_ref_qc</artifactId>
-                    <version>2.1.1</version>
-                </dependency>
-                <dependency>
-                    <groupId>org.filteredpush</groupId>
-                    <artifactId>rec_occur_qc</artifactId>
-                    <version>1.1.0</version>
-                </dependency>
-            </dependencies>
         </profile>
     </profiles>
 </project>
