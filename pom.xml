@@ -197,18 +197,5 @@
                 <skipITs>false</skipITs>
             </properties>
         </profile>
-        <profile>
-            <id>external-impl-libs</id>
-            <repositories>
-                <repository>
-                    <id>gbif-releases</id>
-                    <url>https://repository.gbif.org/content/repositories/releases</url>
-                </repository>
-                <repository>
-                    <id>gbif-group</id>
-                    <url>https://repository.gbif.org/content/groups/gbif</url>
-                </repository>
-            </repositories>
-        </profile>
     </profiles>
 </project>

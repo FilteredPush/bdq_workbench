@@ -5,13 +5,11 @@ BDQ Workbench is a Java 17 application scaffold for policy-driven Biodiversity D
 ## Build and test
 
 ```bash
-mvn -q test
+mvn -q clean package
 ```
 
-To include the bundled FilteredPush implementation libraries during build/run, enable the profile that pulls those artifacts:
-
 ```bash
-mvn -q test -Pexternal-impl-libs
+mvn -q test
 ```
 
 Run integration tests only (failsafe):
