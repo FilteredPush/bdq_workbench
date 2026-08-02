@@ -2,7 +2,9 @@ package org.filteredpush.bdq_workbench.execution;
 
 import java.lang.reflect.InvocationTargetException;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import org.filteredpush.bdq_workbench.model.BoundMethodParameter;
 import org.filteredpush.bdq_workbench.model.CanonicalRecord;
@@ -21,11 +23,19 @@ public class ReflectionExecutionAdapter implements ExecutionAdapter {
 
     @Override
     public Response execute(CanonicalRecord record, ImplementationBinding binding, DiscoveredImplementation implementation) {
+        return executeWithTrace(record, binding, implementation).response();
+    }
+
+    public ExecutionTrace executeWithTrace(
+            CanonicalRecord record,
+            ImplementationBinding binding,
+            DiscoveredImplementation implementation) {
         Instant start = Instant.now();
         Map<String, String> originalTerms = new LinkedHashMap<>(record.terms());
         Map<String, String> invocationTerms = new LinkedHashMap<>(record.terms());
+        InvocationPlan invocation = buildArguments(invocationTerms, binding);
         try {
-            Object result = implementation.method().invoke(implementation.target(), buildArguments(invocationTerms, binding));
+            Object result = implementation.method().invoke(implementation.target(), invocation.arguments());
             Map<String, String> amendments = extractAmendments(result, originalTerms, invocationTerms, binding);
             String responseStatus = extractResponseStatus(result, binding, amendments);
             String responseResult = extractResponseResult(result, amendments);
@@ -36,7 +46,7 @@ public class ReflectionExecutionAdapter implements ExecutionAdapter {
                     : comment;
             LOG.debug("Executed {}.{} for record {} with status {} / {}",
                     binding.implementationClass(), binding.implementationMethod(), record.id(), status, responseStatus);
-            return new Response(
+            return new ExecutionTrace(new Response(
                     record.id(),
                     binding.testId(),
                     binding.testType(),
@@ -51,32 +61,56 @@ public class ReflectionExecutionAdapter implements ExecutionAdapter {
                     message,
                     Map.copyOf(amendments),
                     start,
-                    Instant.now());
+                    Instant.now()),
+                    List.copyOf(invocation.argumentTraces()),
+                    result == null ? null : result.getClass().getName(),
+                    stringify(result));
         } catch (InvocationTargetException e) {
             Throwable cause = e.getTargetException() == null ? e : e.getTargetException();
             LOG.error("Error executing {}.{} for record {}: {}",
                     binding.implementationClass(), binding.implementationMethod(), record.id(), cause.getMessage(), cause);
-            return errorResponse(record, binding, start, cause);
+            return new ExecutionTrace(
+                    errorResponse(record, binding, start, cause),
+                    List.copyOf(invocation.argumentTraces()),
+                    cause.getClass().getName(),
+                    cause.toString());
         } catch (Exception e) {
             LOG.error("Error executing {}.{} for record {}: {}",
                     binding.implementationClass(), binding.implementationMethod(), record.id(), e.getMessage(), e);
-            return errorResponse(record, binding, start, e);
+            return new ExecutionTrace(
+                    errorResponse(record, binding, start, e),
+                    List.copyOf(invocation.argumentTraces()),
+                    e.getClass().getName(),
+                    e.toString());
         }
     }
 
-    private Object[] buildArguments(Map<String, String> recordTerms, ImplementationBinding binding) {
+    private InvocationPlan buildArguments(Map<String, String> recordTerms, ImplementationBinding binding) {
         Object[] arguments = new Object[binding.parameterBindings().size()];
+        List<ArgumentTrace> argumentTraces = new ArrayList<>();
         for (BoundMethodParameter parameter : binding.parameterBindings()) {
-            arguments[parameter.parameter().index()] = switch (parameter.parameter().role()) {
-                case ACTED_UPON, CONSULTED -> convertValue(
-                        recordTerms.get(parameter.resolvedSource()),
-                        parameter.parameter().typeName());
-                case PARAMETER -> convertValue(parameter.suppliedValue(), parameter.parameter().typeName());
+            String rawValue = switch (parameter.parameter().role()) {
+                case ACTED_UPON, CONSULTED -> recordTerms.get(parameter.resolvedSource());
+                case PARAMETER -> parameter.suppliedValue();
+                case LEGACY_RECORD -> recordTerms.toString();
+                case LEGACY_PARAMETERS -> binding.parameters().toString();
+            };
+            Object argument = switch (parameter.parameter().role()) {
+                case ACTED_UPON, CONSULTED -> convertValue(rawValue, parameter.parameter().typeName());
+                case PARAMETER -> convertValue(rawValue, parameter.parameter().typeName());
                 case LEGACY_RECORD -> recordTerms;
                 case LEGACY_PARAMETERS -> binding.parameters();
             };
+            arguments[parameter.parameter().index()] = argument;
+            argumentTraces.add(new ArgumentTrace(
+                    parameter.parameter().name(),
+                    parameter.parameter().role(),
+                    parameter.resolvedSource(),
+                    rawValue,
+                    stringify(argument),
+                    parameter.reason()));
         }
-        return arguments;
+        return new InvocationPlan(arguments, List.copyOf(argumentTraces));
     }
 
     private static Object convertValue(String rawValue, String typeName) {
@@ -203,5 +237,24 @@ public class ReflectionExecutionAdapter implements ExecutionAdapter {
                 Map.of(),
                 start,
                 Instant.now());
+    }
+
+    private record InvocationPlan(Object[] arguments, List<ArgumentTrace> argumentTraces) {
+    }
+
+    public record ExecutionTrace(
+            Response response,
+            List<ArgumentTrace> argumentTraces,
+            String rawReturnType,
+            String rawReturnValue) {
+    }
+
+    public record ArgumentTrace(
+            String parameterName,
+            ParameterRole role,
+            String source,
+            String rawValue,
+            String convertedValue,
+            String reason) {
     }
 }

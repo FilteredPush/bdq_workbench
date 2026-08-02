@@ -90,6 +90,10 @@ public class BindingReviewTableModel extends AbstractTableModel {
                 .orElse(Map.of());
     }
 
+    public BindingReview reviewAt(int rowIndex) {
+        return rows.get(rowIndex).review;
+    }
+
     private static String toDisplayValue(Map<String, String> values) {
         return values.entrySet().stream()
                 .map(entry -> entry.getKey() + "=" + entry.getValue())

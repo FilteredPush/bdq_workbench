@@ -65,6 +65,51 @@ class ReflectionExecutionAdapterTest {
         assertThat(response.startedAt()).isBeforeOrEqualTo(Instant.now());
     }
 
+    @Test
+    void executionTraceCapturesBindingsAndRawReturnValue() throws Exception {
+        ReflectionExecutionAdapter adapter = new ReflectionExecutionAdapter();
+        Method method = Impl.class.getMethod("validate", String.class, Integer.class);
+        MethodParameter actedUpon = new MethodParameter(0, "p0", ParameterRole.ACTED_UPON, "dwc:eventDate", String.class.getName(), true);
+        MethodParameter parameter = new MethodParameter(1, "p1", ParameterRole.PARAMETER, "bdq:latestValidDate", Integer.class.getName(), true);
+        ImplementationBinding binding = new ImplementationBinding(
+                "urn:test:1",
+                TestType.VALIDATION,
+                Impl.class.getName(),
+                "validate",
+                Phase.PRE_AMENDMENT,
+                Map.of("bdq:latestValidDate", "2026"),
+                BindingStatus.BOUND,
+                ParameterizationCapability.PARAMETERIZED_ONLY,
+                "parameterized",
+                false,
+                List.of(
+                        new BoundMethodParameter(actedUpon, "dwc:eventDate", null, true, "Mapped"),
+                        new BoundMethodParameter(parameter, "bdq:latestValidDate", "2026", true, "Provided")),
+                List.of());
+        DiscoveredImplementation implementation = new DiscoveredImplementation(
+                "urn:test:1",
+                null,
+                TestType.VALIDATION,
+                Phase.PRE_AMENDMENT,
+                Impl.class.getName(),
+                "validate",
+                null,
+                List.of(actedUpon, parameter),
+                new Impl(),
+                method);
+
+        ReflectionExecutionAdapter.ExecutionTrace trace = adapter.executeWithTrace(
+                new CanonicalRecord("r1", Map.of("dwc:eventDate", "2025-01-01")),
+                binding,
+                implementation);
+
+        assertThat(trace.argumentTraces()).hasSize(2);
+        assertThat(trace.argumentTraces().get(0).rawValue()).isEqualTo("2025-01-01");
+        assertThat(trace.argumentTraces().get(1).convertedValue()).isEqualTo("2026");
+        assertThat(trace.rawReturnType()).isEqualTo(StubDQResponse.class.getName());
+        assertThat(trace.rawReturnValue()).contains("RUN_HAS_RESULT").contains("COMPLIANT");
+    }
+
     static class Impl {
         public StubDQResponse validate(String eventDate, Integer latestValidDate) {
             return new StubDQResponse("RUN_HAS_RESULT", "COMPLIANT", "checked");
@@ -92,6 +137,11 @@ class ReflectionExecutionAdapterTest {
 
         public String getComment() {
             return comment;
+        }
+
+        @Override
+        public String toString() {
+            return "StubDQResponse[" + resultState.label + "," + value.object + "," + comment + "]";
         }
     }
 

@@ -5,6 +5,8 @@ import java.awt.CardLayout;
 import java.awt.FileDialog;
 import java.awt.FlowLayout;
 import java.awt.Frame;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -16,11 +18,14 @@ import javax.swing.BoxLayout;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
+import javax.swing.JDialog;
 import javax.swing.JFileChooser;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
+import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JPopupMenu;
 import javax.swing.JProgressBar;
 import javax.swing.JScrollPane;
 import javax.swing.JSplitPane;
@@ -33,7 +38,9 @@ import org.filteredpush.bdq_workbench.execution.ExecutionProgressListener;
 import org.filteredpush.bdq_workbench.execution.ParallelPhaseExecutionService;
 import org.filteredpush.bdq_workbench.execution.ReflectionExecutionAdapter;
 import org.filteredpush.bdq_workbench.ingest.DefaultIngestService;
+import org.filteredpush.bdq_workbench.model.BindingReview;
 import org.filteredpush.bdq_workbench.model.ExecutionSummary;
+import org.filteredpush.bdq_workbench.model.ImplementationBinding;
 import org.filteredpush.bdq_workbench.model.PreparedRun;
 import org.filteredpush.bdq_workbench.model.Response;
 import org.filteredpush.bdq_workbench.model.TestDefinition;
@@ -46,6 +53,7 @@ import org.filteredpush.bdq_workbench.reporting.SummaryReportExporter;
 import org.filteredpush.bdq_workbench.reporting.XlsCompatibilityExporter;
 import org.filteredpush.bdq_workbench.test_discovery.ClasspathAnnotationTestDiscoveryService;
 import org.filteredpush.bdq_workbench.test_discovery.DefaultTestBindingService;
+import org.filteredpush.bdq_workbench.test_discovery.DiscoveredImplementation;
 import org.filteredpush.bdq_workbench.test_discovery.TestBindingResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -209,6 +217,7 @@ final class BdqWorkbenchGui {
         root.add(cardPanel, BorderLayout.CENTER);
 
         final PreflightState[] state = new PreflightState[1];
+        installBindingDebugPopup(frame, bindingGrid, state);
 
         toggleAdvanced.addActionListener(e -> {
             advanced.setVisible(!advanced.isVisible());
@@ -420,6 +429,161 @@ final class BdqWorkbenchGui {
             }
         });
         return facade.runPrepared(preparedRun);
+    }
+
+    private static void installBindingDebugPopup(JFrame frame, JTable bindingGrid, PreflightState[] state) {
+        JPopupMenu popupMenu = new JPopupMenu();
+        JMenuItem inspectItem = new JMenuItem("Inspect / Run Test");
+        popupMenu.add(inspectItem);
+        inspectItem.addActionListener(e -> openBindingDebugDialog(frame, bindingGrid, state));
+        bindingGrid.setComponentPopupMenu(popupMenu);
+        bindingGrid.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                selectPopupRow(e);
+            }
+
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                selectPopupRow(e);
+            }
+
+            private void selectPopupRow(MouseEvent e) {
+                if (!e.isPopupTrigger()) {
+                    return;
+                }
+                int row = bindingGrid.rowAtPoint(e.getPoint());
+                if (row >= 0) {
+                    bindingGrid.setRowSelectionInterval(row, row);
+                }
+            }
+        });
+    }
+
+    private static void openBindingDebugDialog(JFrame frame, JTable bindingGrid, PreflightState[] state) {
+        if (state[0] == null || !(bindingGrid.getModel() instanceof BindingReviewTableModel reviewModel)) {
+            return;
+        }
+        int viewRow = bindingGrid.getSelectedRow();
+        if (viewRow < 0) {
+            return;
+        }
+        int row = bindingGrid.convertRowIndexToModel(viewRow);
+        BindingReview selectedReview = reviewModel.reviewAt(row);
+        PreparedRun editedRun = applyParameterEdits(state[0].preparedRun(), reviewModel);
+        BindingReview reboundReview = editedRun.bindingResult().reviews().stream()
+                .filter(review -> review.test().id().equals(selectedReview.test().id()))
+                .findFirst()
+                .orElse(selectedReview);
+        ImplementationBinding binding = findBinding(editedRun, reboundReview.test().id());
+
+        JDialog dialog = new JDialog(frame, "Test Debug: " + reboundReview.test().label(), false);
+        dialog.setSize(900, 600);
+        dialog.setLayout(new BorderLayout(8, 8));
+
+        JTextArea detailsArea = new JTextArea(renderBindingReviewDetails(reboundReview, binding));
+        detailsArea.setEditable(false);
+        detailsArea.setLineWrap(true);
+        detailsArea.setWrapStyleWord(true);
+
+        JTextArea outputArea = new JTextArea();
+        outputArea.setEditable(false);
+        outputArea.setLineWrap(true);
+        outputArea.setWrapStyleWord(true);
+        outputArea.setText(binding == null
+                ? "No runnable implementation is currently bound for this test.\n"
+                : "Use Run Test to execute this binding against each input record in isolation.\n");
+
+        JProgressBar dialogProgress = new JProgressBar(0, Math.max(1, editedRun.dataset().records().size()));
+        dialogProgress.setStringPainted(true);
+        dialogProgress.setVisible(binding != null);
+        dialogProgress.setValue(0);
+        dialogProgress.setString(binding == null ? "No runnable binding" : "0/" + editedRun.dataset().records().size());
+
+        JPanel controls = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        JButton runButton = new JButton("Run Test");
+        runButton.setEnabled(binding != null);
+        JButton closeButton = new JButton("Close");
+        controls.add(runButton);
+        controls.add(closeButton);
+
+        runButton.addActionListener(e -> runIsolatedBinding(dialog, editedRun, binding, outputArea, dialogProgress, runButton));
+        closeButton.addActionListener(e -> dialog.dispose());
+
+        JSplitPane splitPane = new JSplitPane(
+                JSplitPane.VERTICAL_SPLIT,
+                new JScrollPane(detailsArea),
+                new JScrollPane(outputArea));
+        splitPane.setResizeWeight(0.35d);
+
+        dialog.add(dialogProgress, BorderLayout.NORTH);
+        dialog.add(splitPane, BorderLayout.CENTER);
+        dialog.add(controls, BorderLayout.SOUTH);
+        dialog.setLocationRelativeTo(frame);
+        dialog.setVisible(true);
+    }
+
+    private static void runIsolatedBinding(
+            JDialog dialog,
+            PreparedRun preparedRun,
+            ImplementationBinding binding,
+            JTextArea outputArea,
+            JProgressBar progressBar,
+            JButton runButton) {
+        DiscoveredImplementation implementation;
+        try {
+            implementation = findImplementation(preparedRun, binding);
+        } catch (AppException e) {
+            outputArea.setText("Unable to locate implementation for isolated execution: " + e.getMessage() + "\n");
+            progressBar.setVisible(false);
+            dialog.toFront();
+            return;
+        }
+        ReflectionExecutionAdapter adapter = new ReflectionExecutionAdapter();
+        List<org.filteredpush.bdq_workbench.model.CanonicalRecord> records = preparedRun.dataset().copy().records();
+        outputArea.setText("Running " + binding.testId() + " against " + records.size() + " input record(s).\n\n");
+        runButton.setEnabled(false);
+        progressBar.setMaximum(Math.max(1, records.size()));
+        progressBar.setValue(0);
+        progressBar.setString("0/" + records.size());
+
+        SwingWorker<Void, String> worker = new SwingWorker<>() {
+            @Override
+            protected Void doInBackground() {
+                int completed = 0;
+                for (org.filteredpush.bdq_workbench.model.CanonicalRecord record : records) {
+                    ReflectionExecutionAdapter.ExecutionTrace trace =
+                            adapter.executeWithTrace(record, binding, implementation);
+                    completed++;
+                    publish(renderExecutionTrace(trace, completed, records.size()));
+                    setProgress((int) Math.round((completed * 100.0d) / Math.max(1, records.size())));
+                }
+                return null;
+            }
+
+            @Override
+            protected void process(List<String> chunks) {
+                for (String chunk : chunks) {
+                    outputArea.append(chunk);
+                    outputArea.append("\n");
+                }
+                int processed = Math.min(records.size(), progressBar.getValue() + chunks.size());
+                progressBar.setValue(processed);
+                progressBar.setString(processed + "/" + records.size());
+                outputArea.setCaretPosition(outputArea.getDocument().getLength());
+            }
+
+            @Override
+            protected void done() {
+                runButton.setEnabled(true);
+                progressBar.setValue(records.size());
+                progressBar.setString(records.size() + "/" + records.size());
+                outputArea.append("Isolated test run complete.\n");
+                outputArea.setCaretPosition(outputArea.getDocument().getLength());
+                dialog.toFront();
+            }
+        };
+        worker.execute();
     }
 
     private static WorkbenchFacade createFacade(AppConfig config) {
@@ -787,6 +951,22 @@ final class BdqWorkbenchGui {
                 rebound);
     }
 
+    private static ImplementationBinding findBinding(PreparedRun preparedRun, String testId) {
+        return preparedRun.bindingResult().bindings().stream()
+                .filter(binding -> binding.testId().equals(testId))
+                .findFirst()
+                .orElse(null);
+    }
+
+    private static DiscoveredImplementation findImplementation(PreparedRun preparedRun, ImplementationBinding binding) {
+        return preparedRun.discovered().stream()
+                .filter(discovered -> discovered.implementationClass().equals(binding.implementationClass())
+                        && discovered.implementationMethod().equals(binding.implementationMethod()))
+                .findFirst()
+                .orElseThrow(() -> new AppException("No discovered implementation found for "
+                        + binding.implementationClass() + "#" + binding.implementationMethod()));
+    }
+
     private static java.util.Set<String> collectAvailableTerms(org.filteredpush.bdq_workbench.model.RecordDataset dataset) {
         java.util.Set<String> terms = new java.util.LinkedHashSet<>();
         dataset.records().forEach(record -> terms.addAll(record.terms().keySet()));
@@ -809,6 +989,74 @@ final class BdqWorkbenchGui {
                 + "Response status counts: " + summary.responseStatusCounts() + "\n"
                 + "Response result counts: " + summary.responseResultCounts() + "\n"
                 + "Saved files: reports/bdq-report-summary.txt, reports/bdq-report-xls-hook.txt\n";
+    }
+
+    private static String renderBindingReviewDetails(BindingReview review, ImplementationBinding binding) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Selected test\n");
+        sb.append("Label: ").append(review.test().label()).append('\n');
+        sb.append("Id: ").append(review.test().id()).append('\n');
+        sb.append("Type: ").append(review.test().type()).append('\n');
+        sb.append("Implementation status: ").append(review.implementationStatus()).append('\n');
+        sb.append("Binding status: ").append(review.bindingStatus()).append('\n');
+        sb.append("Parameterization: ").append(review.parameterizationCapability()).append('\n');
+        sb.append("Chosen method: ").append(review.chosenImplementationMethod()).append('\n');
+        sb.append("Use defaults: ").append(review.usingDefaultParameters()).append('\n');
+        sb.append("Parameter values: ").append(review.parameterValues()).append("\n\n");
+        sb.append("Diagnostics:\n");
+        review.diagnostics().forEach(diagnostic -> sb.append(" - ").append(diagnostic).append('\n'));
+        if (binding != null) {
+            sb.append("\nResolved parameter bindings:\n");
+            binding.parameterBindings().forEach(parameter -> sb.append(" - ")
+                    .append(parameter.parameter().name())
+                    .append(" [")
+                    .append(parameter.parameter().role())
+                    .append("] from ")
+                    .append(parameter.resolvedSource())
+                    .append(" :: ")
+                    .append(parameter.reason())
+                    .append('\n'));
+        }
+        return sb.toString();
+    }
+
+    private static String renderExecutionTrace(
+            ReflectionExecutionAdapter.ExecutionTrace trace,
+            int index,
+            int total) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Record ").append(index).append('/').append(total).append(": ")
+                .append(trace.response().recordId()).append('\n');
+        sb.append("Bindings:\n");
+        trace.argumentTraces().forEach(argument -> sb.append(" - ")
+                .append(argument.parameterName())
+                .append(" [")
+                .append(argument.role())
+                .append("] source=")
+                .append(argument.source())
+                .append(", raw=")
+                .append(argument.rawValue())
+                .append(", converted=")
+                .append(argument.convertedValue())
+                .append(", note=")
+                .append(argument.reason())
+                .append('\n'));
+        sb.append("Raw return type: ").append(trace.rawReturnType()).append('\n');
+        sb.append("Raw return value: ").append(trace.rawReturnValue()).append('\n');
+        sb.append("Normalized response: ")
+                .append(trace.response().status())
+                .append(" / ")
+                .append(trace.response().responseStatus())
+                .append(" / ")
+                .append(trace.response().responseResult())
+                .append('\n');
+        if (trace.response().comment() != null) {
+            sb.append("Comment: ").append(trace.response().comment()).append('\n');
+        }
+        if (!trace.response().amendments().isEmpty()) {
+            sb.append("Amendments: ").append(trace.response().amendments()).append('\n');
+        }
+        return sb.toString();
     }
 
     private record UseCaseChoice(String id, String label) {
