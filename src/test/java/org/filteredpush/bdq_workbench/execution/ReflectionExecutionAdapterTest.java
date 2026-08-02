@@ -110,9 +110,53 @@ class ReflectionExecutionAdapterTest {
         assertThat(trace.rawReturnValue()).contains("RUN_HAS_RESULT").contains("COMPLIANT");
     }
 
+    @Test
+    void omitsResponseResultWhenDqResponseHasNoValue() throws Exception {
+        ReflectionExecutionAdapter adapter = new ReflectionExecutionAdapter();
+        Method method = Impl.class.getMethod("prerequisiteOnly", String.class);
+        MethodParameter actedUpon = new MethodParameter(0, "p0", ParameterRole.ACTED_UPON, "dwc:eventDate", String.class.getName(), true);
+        ImplementationBinding binding = new ImplementationBinding(
+                "urn:test:missing-result",
+                TestType.VALIDATION,
+                Impl.class.getName(),
+                "prerequisiteOnly",
+                Phase.PRE_AMENDMENT,
+                Map.of(),
+                BindingStatus.BOUND,
+                ParameterizationCapability.DEFAULT_ONLY,
+                "default",
+                true,
+                List.of(new BoundMethodParameter(actedUpon, "dwc:eventDate", null, true, "Mapped")),
+                List.of());
+        DiscoveredImplementation implementation = new DiscoveredImplementation(
+                "urn:test:missing-result",
+                null,
+                TestType.VALIDATION,
+                Phase.PRE_AMENDMENT,
+                Impl.class.getName(),
+                "prerequisiteOnly",
+                null,
+                List.of(actedUpon),
+                new Impl(),
+                method);
+
+        var response = adapter.execute(
+                new CanonicalRecord("r1", Map.of("dwc:eventDate", "not-a-date")),
+                binding,
+                implementation);
+
+        assertThat(response.responseStatus()).isEqualTo("INTERNAL_PREREQUISITES_NOT_MET");
+        assertThat(response.responseResult()).isNull();
+        assertThat(response.message()).isEqualTo("INTERNAL_PREREQUISITES_NOT_MET");
+    }
+
     static class Impl {
         public StubDQResponse validate(String eventDate, Integer latestValidDate) {
             return new StubDQResponse("RUN_HAS_RESULT", "COMPLIANT", "checked");
+        }
+
+        public StubDQResponseWithoutValue prerequisiteOnly(String eventDate) {
+            return new StubDQResponseWithoutValue("INTERNAL_PREREQUISITES_NOT_MET", "{}", null);
         }
     }
 
@@ -125,6 +169,35 @@ class ReflectionExecutionAdapterTest {
             this.resultState = new StubResultState(status);
             this.value = new StubResultValue(result);
             this.comment = comment;
+        }
+
+        static class StubDQResponseWithoutValue {
+            private final StubResultState resultState;
+            private final String rendered;
+            private final String comment;
+
+            StubDQResponseWithoutValue(String status, String rendered, String comment) {
+                this.resultState = new StubResultState(status);
+                this.rendered = rendered;
+                this.comment = comment;
+            }
+
+            public StubResultState getResultState() {
+                return resultState;
+            }
+
+            public Object getValue() {
+                return null;
+            }
+
+            public String getComment() {
+                return comment;
+            }
+
+            @Override
+            public String toString() {
+                return rendered;
+            }
         }
 
         public StubResultState getResultState() {

@@ -48,7 +48,7 @@ public class BindingReviewTableModel extends AbstractTableModel {
 
     @Override
     public boolean isCellEditable(int rowIndex, int columnIndex) {
-        return columnIndex == 6 || columnIndex == 7;
+        return supportsParameterEditing(rowIndex) && (columnIndex == 6 || columnIndex == 7);
     }
 
     @Override
@@ -63,8 +63,8 @@ public class BindingReviewTableModel extends AbstractTableModel {
                     ? "PARAMETERIZED_VERSION_AVAILABLE"
                     : row.review.parameterizationCapability().name();
             case 5 -> row.review.chosenImplementationMethod();
-            case 6 -> row.useDefaults;
-            case 7 -> toDisplayValue(row.parameters);
+            case 6 -> supportsParameterEditing(rowIndex) ? row.useDefaults : null;
+            case 7 -> supportsParameterEditing(rowIndex) ? toDisplayValue(row.parameters) : "";
             default -> "";
         };
     }
@@ -90,6 +90,10 @@ public class BindingReviewTableModel extends AbstractTableModel {
 
     public BindingReview reviewAt(int rowIndex) {
         return rows.get(rowIndex).review;
+    }
+
+    public boolean supportsParameterEditing(int rowIndex) {
+        return rows.get(rowIndex).supportsParameterEditing();
     }
 
     public ParameterSettings settingsFor(String testId) {
@@ -172,6 +176,10 @@ public class BindingReviewTableModel extends AbstractTableModel {
             if (this.useDefaults) {
                 this.parameters.clear();
             }
+        }
+
+        private boolean supportsParameterEditing() {
+            return review.parameterizationCapability() != org.filteredpush.bdq_workbench.model.ParameterizationCapability.DEFAULT_ONLY;
         }
     }
 }

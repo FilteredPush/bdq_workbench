@@ -4,5 +4,6 @@ package org.filteredpush.bdq_workbench.model;
 public enum BindingStatus {
     BOUND,
     PARTIAL,
+    TERM_MISSING,
     UNBOUND
 }

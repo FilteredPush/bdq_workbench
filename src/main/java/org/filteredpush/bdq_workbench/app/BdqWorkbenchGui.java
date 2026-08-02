@@ -37,6 +37,7 @@ import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
+import javax.swing.table.TableCellRenderer;
 import org.filteredpush.bdq_workbench.execution.ExecutionProgressListener;
 import org.filteredpush.bdq_workbench.execution.ParallelPhaseExecutionService;
 import org.filteredpush.bdq_workbench.execution.ReflectionExecutionAdapter;
@@ -221,7 +222,7 @@ final class BdqWorkbenchGui {
         setupPanel.add(new JScrollPane(setupInfo), BorderLayout.CENTER);
 
         JPanel setupControls = new JPanel(new FlowLayout(FlowLayout.RIGHT));
-        JButton run = new JButton("Run");
+        JButton run = new JButton("Setup Tests");
         JButton exit = new JButton("Quit");
         setupControls.add(run);
         setupControls.add(exit);
@@ -395,14 +396,14 @@ final class BdqWorkbenchGui {
                         Iterator <Response> i = summary.responses().iterator();
                         while (i.hasNext()) {
 							Response r = i.next();
+                            String responseText = formatStructuredResponse(r);
 							appendStatus(statusArea, String.format(
-									" - %s [%s/%s]: %s -> %s / %s (%s)\n",
+									" - %s [%s/%s]: %s -> %s (%s)\n",
 									r.testId(),
                                     r.phase(),
                                     r.responseStatus(),
 									r.recordId(),
-									r.responseStatus(),
-                                    r.responseResult(),
+									responseText == null ? "(no structured response)" : responseText,
 									r.message()));
 						}
                     } catch (Exception ex) {
@@ -508,6 +509,11 @@ final class BdqWorkbenchGui {
                 int row = bindingGrid.rowAtPoint(e.getPoint());
                 if (row >= 0) {
                     bindingGrid.setRowSelectionInterval(row, row);
+                    if (bindingGrid.getModel() instanceof BindingReviewTableModel reviewModel) {
+                        boolean parameterized = reviewModel.supportsParameterEditing(bindingGrid.convertRowIndexToModel(row));
+                        parameterItem.setVisible(parameterized);
+                        parameterItem.setEnabled(parameterized);
+                    }
                 }
             }
         });
@@ -534,11 +540,8 @@ final class BdqWorkbenchGui {
         BindingReview selectedReview = reviewModel.reviewAt(row);
         PreparedRun editedRun = applyParameterEdits(state[0].preparedRun(), reviewModel);
         ImplementationBinding binding = findBinding(editedRun, selectedReview.test().id());
-        List<org.filteredpush.bdq_workbench.model.BoundMethodParameter> configurableParameters = binding == null
-                ? List.of()
-                : binding.parameterBindings().stream()
-                        .filter(parameter -> parameter.parameter().role() == org.filteredpush.bdq_workbench.model.ParameterRole.PARAMETER)
-                        .toList();
+        List<org.filteredpush.bdq_workbench.model.MethodParameter> configurableParameters =
+                configurableParametersFor(editedRun, selectedReview, binding);
         if (configurableParameters.isEmpty()) {
             JOptionPane.showMessageDialog(
                     frame,
@@ -556,8 +559,8 @@ final class BdqWorkbenchGui {
         JPanel fields = new JPanel();
         fields.setLayout(new BoxLayout(fields, BoxLayout.Y_AXIS));
         Map<String, JTextField> parameterFields = new LinkedHashMap<>();
-        for (org.filteredpush.bdq_workbench.model.BoundMethodParameter parameter : configurableParameters) {
-            String name = parameter.parameter().source();
+        for (org.filteredpush.bdq_workbench.model.MethodParameter parameter : configurableParameters) {
+            String name = parameter.source();
             JTextField field = addField(fields, name, current.parameters().getOrDefault(name, ""));
             parameterFields.put(name, field);
         }
@@ -1223,12 +1226,10 @@ final class BdqWorkbenchGui {
                 .append('\n'));
         sb.append("Raw return type: ").append(trace.rawReturnType()).append('\n');
         sb.append("Raw return value: ").append(trace.rawReturnValue()).append('\n');
-        sb.append("Vocabulary response: ")
-                .append(trace.response().responseStatus())
-                .append(" / ")
-                .append(trace.response().responseResult())
-                .append('\n');
-        sb.append("Execution state: ").append(trace.response().status()).append('\n');
+        String responseText = formatStructuredResponse(trace.response());
+        if (responseText != null) {
+            sb.append("Response: ").append(responseText).append('\n');
+        }
         if (trace.response().comment() != null) {
             sb.append("Comment: ").append(trace.response().comment()).append('\n');
         }
@@ -1254,6 +1255,7 @@ final class BdqWorkbenchGui {
                 state[0].preparedRun().bindingResult().unresolved().size());
         setStatus(statusArea, renderPreflightMessage(state[0]));
         bindingGrid.setModel(new BindingReviewTableModel(state[0].preparedRun().bindingResult().reviews()));
+        configureBindingGrid(bindingGrid);
         resultSummaryArea.setText("Parameter review ready. Edit parameter values, use the row popup, or save/load settings before starting the run.");
         boolean complete = state[0].isFullyResolved();
         if (!complete && !runWithAvailableOnly.isSelected()) {
@@ -1277,6 +1279,96 @@ final class BdqWorkbenchGui {
         popupMenu.add(copyItem);
         popupMenu.add(selectAllItem);
         textArea.setComponentPopupMenu(popupMenu);
+    }
+
+    private static void configureBindingGrid(JTable bindingGrid) {
+        TableCellRenderer booleanRenderer = bindingGrid.getDefaultRenderer(Boolean.class);
+        TableCellRenderer textRenderer = bindingGrid.getDefaultRenderer(Object.class);
+        bindingGrid.getColumnModel().getColumn(6).setCellRenderer((table, value, isSelected, hasFocus, row, column) -> {
+            if (table.getModel() instanceof BindingReviewTableModel reviewModel
+                    && !reviewModel.supportsParameterEditing(table.convertRowIndexToModel(row))) {
+                return textRenderer.getTableCellRendererComponent(table, "", isSelected, hasFocus, row, column);
+            }
+            return booleanRenderer.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
+        });
+    }
+
+    private static List<org.filteredpush.bdq_workbench.model.MethodParameter> configurableParametersFor(
+            PreparedRun preparedRun,
+            BindingReview review,
+            ImplementationBinding binding) {
+        List<org.filteredpush.bdq_workbench.model.MethodParameter> selectedBindingParameters = binding == null
+                ? List.of()
+                : binding.parameterBindings().stream()
+                        .map(org.filteredpush.bdq_workbench.model.BoundMethodParameter::parameter)
+                        .filter(parameter -> parameter.role() == org.filteredpush.bdq_workbench.model.ParameterRole.PARAMETER)
+                        .toList();
+        if (!selectedBindingParameters.isEmpty()) {
+            return selectedBindingParameters;
+        }
+        Map<String, org.filteredpush.bdq_workbench.model.MethodParameter> discoveredParameters = new LinkedHashMap<>();
+        preparedRun.discovered().stream()
+                .filter(DiscoveredImplementation::isParameterized)
+                .filter(discovered -> matchesTestIdentifier(review.test().id(), discovered))
+                .sorted(java.util.Comparator.comparing(DiscoveredImplementation::implementationClass)
+                        .thenComparing(DiscoveredImplementation::implementationMethod))
+                .flatMap(discovered -> discovered.parameters().stream())
+                .filter(parameter -> parameter.role() == org.filteredpush.bdq_workbench.model.ParameterRole.PARAMETER)
+                .forEach(parameter -> discoveredParameters.putIfAbsent(parameter.source(), parameter));
+        return List.copyOf(discoveredParameters.values());
+    }
+
+    private static boolean matchesTestIdentifier(String testId, DiscoveredImplementation discovered) {
+        String normalizedTestId = normalizeTestIdentifier(testId);
+        if (normalizedTestId == null) {
+            return false;
+        }
+        String providedVersion = normalizeTestIdentifier(discovered.providedVersion());
+        if (normalizedTestId.equals(providedVersion)) {
+            return true;
+        }
+        String providedTestId = normalizeTestIdentifier(discovered.providedTestId());
+        if (normalizedTestId.equals(providedTestId)) {
+            return true;
+        }
+        String providesFallbackKey = toProvidesKey(normalizedTestId);
+        return providesFallbackKey != null && providesFallbackKey.equals(providedTestId);
+    }
+
+    private static String normalizeTestIdentifier(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        if (trimmed.isBlank()) {
+            return null;
+        }
+        return trimmed.endsWith("/") ? trimmed.substring(0, trimmed.length() - 1) : trimmed;
+    }
+
+    private static String toProvidesKey(String normalizedId) {
+        if (normalizedId == null) {
+            return null;
+        }
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile(
+                        "([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})")
+                .matcher(normalizedId);
+        return matcher.find() ? matcher.group(1) : null;
+    }
+
+    private static String formatStructuredResponse(Response response) {
+        String responseStatus = response.responseStatus();
+        String responseResult = response.responseResult();
+        if ((responseStatus == null || responseStatus.isBlank())
+                && (responseResult == null || responseResult.isBlank())) {
+            return null;
+        }
+        if (responseStatus == null || responseStatus.isBlank()) {
+            return responseResult;
+        }
+        return responseResult == null || responseResult.isBlank()
+                ? responseStatus
+                : responseStatus + " / " + responseResult;
     }
 
     private static String describeParameterization(org.filteredpush.bdq_workbench.model.ParameterizationCapability capability) {

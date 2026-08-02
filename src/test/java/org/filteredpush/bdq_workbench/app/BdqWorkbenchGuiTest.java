@@ -7,7 +7,9 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import org.filteredpush.bdq_workbench.model.ExecutionPlan;
 import org.filteredpush.bdq_workbench.execution.ReflectionExecutionAdapter;
+import org.filteredpush.bdq_workbench.model.PreparedRun;
 import org.filteredpush.bdq_workbench.model.BindingReview;
 import org.filteredpush.bdq_workbench.model.BindingStatus;
 import org.filteredpush.bdq_workbench.model.BoundMethodParameter;
@@ -18,9 +20,14 @@ import org.filteredpush.bdq_workbench.model.OutcomeStatus;
 import org.filteredpush.bdq_workbench.model.ParameterRole;
 import org.filteredpush.bdq_workbench.model.ParameterizationCapability;
 import org.filteredpush.bdq_workbench.model.Phase;
+import org.filteredpush.bdq_workbench.model.Policy;
+import org.filteredpush.bdq_workbench.model.RecordDataset;
 import org.filteredpush.bdq_workbench.model.Response;
 import org.filteredpush.bdq_workbench.model.TestDefinition;
 import org.filteredpush.bdq_workbench.model.TestType;
+import org.filteredpush.bdq_workbench.model.UseCase;
+import org.filteredpush.bdq_workbench.test_discovery.DiscoveredImplementation;
+import org.filteredpush.bdq_workbench.test_discovery.TestBindingResult;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -89,6 +96,25 @@ class BdqWorkbenchGuiTest {
 
         assertThat(model.settingsFor("urn:test").useDefaults()).isTrue();
         assertThat(model.settingsFor("urn:test").parameters()).isEmpty();
+    }
+
+    @Test
+    void bindingReviewTableModelHidesParameterControlsForDefaultOnlyTests() {
+        BindingReviewTableModel model = new BindingReviewTableModel(List.of(new BindingReview(
+                new TestDefinition("urn:test", "Test", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of()),
+                ImplementationStatus.FOUND,
+                BindingStatus.BOUND,
+                ParameterizationCapability.DEFAULT_ONLY,
+                "example#method",
+                Map.of(),
+                true,
+                List.of())));
+
+        assertThat(model.supportsParameterEditing(0)).isFalse();
+        assertThat(model.isCellEditable(0, 6)).isFalse();
+        assertThat(model.isCellEditable(0, 7)).isFalse();
+        assertThat(model.getValueAt(0, 6)).isNull();
+        assertThat(model.getValueAt(0, 7)).isEqualTo("");
     }
 
     @Test
@@ -186,8 +212,118 @@ class BdqWorkbenchGuiTest {
 
         assertThat(traceText).contains("Record 1/3: r1");
         assertThat(traceText).contains("Raw return value: Result[COMPLIANT]");
-        assertThat(traceText).contains("Vocabulary response: RUN_HAS_RESULT / COMPLIANT");
-        assertThat(traceText).contains("Execution state: PASSED");
+        assertThat(traceText).contains("Response: RUN_HAS_RESULT / COMPLIANT");
+        assertThat(traceText).doesNotContain("Vocabulary response");
+        assertThat(traceText).doesNotContain("Execution state:");
+    }
+
+    @Test
+    void debugRendererShowsStatusOnlyWhenResponseResultIsMissing() throws Exception {
+        Method renderTrace = BdqWorkbenchGui.class.getDeclaredMethod(
+                "renderExecutionTrace",
+                ReflectionExecutionAdapter.ExecutionTrace.class,
+                int.class,
+                int.class);
+        renderTrace.setAccessible(true);
+
+        ReflectionExecutionAdapter.ExecutionTrace trace = new ReflectionExecutionAdapter.ExecutionTrace(
+                new Response(
+                        "r1",
+                        "urn:test",
+                        TestType.VALIDATION,
+                        "example",
+                        "method",
+                        Phase.PRE_AMENDMENT,
+                        Map.of(),
+                        OutcomeStatus.FAILED,
+                        "INTERNAL_PREREQUISITES_NOT_MET",
+                        null,
+                        null,
+                        "INTERNAL_PREREQUISITES_NOT_MET",
+                        Map.of(),
+                        Instant.now(),
+                        Instant.now()),
+                List.of(),
+                "example.Result",
+                "{}");
+
+        String traceText = (String) renderTrace.invoke(null, trace, 1, 1);
+
+        assertThat(traceText).contains("Response: INTERNAL_PREREQUISITES_NOT_MET");
+        assertThat(traceText).doesNotContain("/ {}");
+    }
+
+    @Test
+    void configurableParametersIncludeParameterizedVariantWhenDefaultMethodIsSelected() throws Exception {
+        Method helper = BdqWorkbenchGui.class.getDeclaredMethod(
+                "configurableParametersFor",
+                PreparedRun.class,
+                BindingReview.class,
+                ImplementationBinding.class);
+        helper.setAccessible(true);
+
+        Method defaultMethod = GuiDummy.class.getMethod("validate", String.class);
+        Method parameterizedMethod = GuiDummy.class.getMethod("validateWithParameter", String.class, Integer.class);
+        MethodParameter actedUpon = new MethodParameter(
+                0, "eventDate", ParameterRole.ACTED_UPON, "dwc:eventDate", String.class.getName(), true);
+        MethodParameter parameter = new MethodParameter(
+                1, "latestValidDate", ParameterRole.PARAMETER, "bdq:latestValidDate", Integer.class.getName(), true);
+        BindingReview review = new BindingReview(
+                new TestDefinition("urn:test:param", "Test", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of()),
+                ImplementationStatus.FOUND,
+                BindingStatus.BOUND,
+                ParameterizationCapability.BOTH,
+                "example#validate",
+                Map.of(),
+                true,
+                List.of("Parameterized version available"));
+        ImplementationBinding binding = new ImplementationBinding(
+                "urn:test:param",
+                TestType.VALIDATION,
+                GuiDummy.class.getName(),
+                "validate",
+                Phase.PRE_AMENDMENT,
+                Map.of(),
+                BindingStatus.BOUND,
+                ParameterizationCapability.BOTH,
+                "default",
+                true,
+                List.of(new BoundMethodParameter(actedUpon, "dwc:eventDate", null, true, "Mapped")),
+                List.of());
+        PreparedRun preparedRun = new PreparedRun(
+                null,
+                new RecordDataset(List.of()),
+                new ExecutionPlan(new UseCase("urn:usecase", "Use case", "urn:policy"), new Policy("urn:policy", List.of()), List.of(), List.of()),
+                List.of(
+                        new DiscoveredImplementation(
+                                "urn:test:param",
+                                null,
+                                TestType.VALIDATION,
+                                Phase.PRE_AMENDMENT,
+                                GuiDummy.class.getName(),
+                                "validate",
+                                null,
+                                List.of(actedUpon),
+                                new GuiDummy(),
+                                defaultMethod),
+                        new DiscoveredImplementation(
+                                "urn:test:param",
+                                null,
+                                TestType.VALIDATION,
+                                Phase.PRE_AMENDMENT,
+                                GuiDummy.class.getName(),
+                                "validateWithParameter",
+                                null,
+                                List.of(actedUpon, parameter),
+                                new GuiDummy(),
+                                parameterizedMethod)),
+                new TestBindingResult(List.of(binding), List.of(), List.of(review)));
+
+        @SuppressWarnings("unchecked")
+        List<MethodParameter> configurableParameters =
+                (List<MethodParameter>) helper.invoke(null, preparedRun, review, binding);
+
+        assertThat(configurableParameters).extracting(MethodParameter::source).containsExactly("bdq:latestValidDate");
     }
 
     @Test
@@ -219,5 +355,15 @@ class BdqWorkbenchGuiTest {
 
         assertThat(loaded).containsKey("urn:test");
         assertThat(loaded.get("urn:test").parameters()).containsEntry("bdq:limit", "10");
+    }
+
+    static class GuiDummy {
+        public boolean validate(String eventDate) {
+            return eventDate != null;
+        }
+
+        public boolean validateWithParameter(String eventDate, Integer latestValidDate) {
+            return eventDate != null && latestValidDate != null;
+        }
     }
 }

@@ -42,7 +42,7 @@ public class ReflectionExecutionAdapter implements ExecutionAdapter {
             String comment = extractComment(result);
             OutcomeStatus status = mapOutcomeStatus(binding, responseStatus, amendments, result);
             String message = comment == null || comment.isBlank()
-                    ? responseResult == null ? responseStatus : responseStatus + " " + responseResult
+                    ? defaultMessage(responseStatus, responseResult, result)
                     : comment;
             LOG.debug("Executed {}.{} for record {} with status {} / {}",
                     binding.implementationClass(), binding.implementationMethod(), record.id(), status, responseStatus);
@@ -171,10 +171,19 @@ public class ReflectionExecutionAdapter implements ExecutionAdapter {
     private static String extractResponseResult(Object result, Map<String, String> amendments) {
         Object value = invokeNoArg(result, "getValue");
         if (value == null) {
-            return amendments.isEmpty() ? stringify(result) : amendments.toString();
+            return amendments.isEmpty() ? null : amendments.toString();
         }
         Object object = invokeNoArg(value, "getObject");
         return stringify(object == null ? value : object);
+    }
+
+    private static String defaultMessage(String responseStatus, String responseResult, Object result) {
+        if (responseStatus != null && !responseStatus.isBlank()) {
+            return responseResult == null || responseResult.isBlank()
+                    ? responseStatus
+                    : responseStatus + " " + responseResult;
+        }
+        return stringify(result);
     }
 
     @SuppressWarnings("unchecked")

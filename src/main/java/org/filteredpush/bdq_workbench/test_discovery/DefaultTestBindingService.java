@@ -131,8 +131,12 @@ public class DefaultTestBindingService implements TestBindingService {
             }
             if (!bound.bound()) {
                 diagnostics.add(bound.reason());
-                status = status == BindingStatus.BOUND ? BindingStatus.PARTIAL : status;
-                if (parameter.required()) {
+                if (isTermMissing(bound)) {
+                    status = status == BindingStatus.UNBOUND ? status : BindingStatus.TERM_MISSING;
+                } else {
+                    status = status == BindingStatus.BOUND ? BindingStatus.PARTIAL : status;
+                }
+                if (parameter.required() && !isTermMissing(bound)) {
                     status = BindingStatus.UNBOUND;
                 }
             }
@@ -200,7 +204,7 @@ public class DefaultTestBindingService implements TestBindingService {
                     parameter.source(),
                     null,
                     false,
-                    "Term acted_upon/consulted absent in input data: " + parameter.source());
+                    "TERM MISSING: Term acted_upon/consulted absent in input data: " + parameter.source());
         }
         if (!isSupportedScalarType(parameter.typeName())) {
             return new BoundMethodParameter(
@@ -345,6 +349,12 @@ public class DefaultTestBindingService implements TestBindingService {
 
     private static boolean canUseImplementationDefault(MethodParameter parameter) {
         return isSupportedScalarType(parameter.typeName()) && !isPrimitiveType(parameter.typeName());
+    }
+
+    private static boolean isTermMissing(BoundMethodParameter parameter) {
+        return (parameter.parameter().role() == ParameterRole.ACTED_UPON
+                        || parameter.parameter().role() == ParameterRole.CONSULTED)
+                && parameter.reason().startsWith("TERM MISSING:");
     }
 
     private static boolean isPrimitiveType(String typeName) {
