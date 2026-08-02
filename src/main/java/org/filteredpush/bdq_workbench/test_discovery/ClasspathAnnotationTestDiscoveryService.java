@@ -8,6 +8,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.Parameter;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import org.filteredpush.bdq_workbench.app.AppException;
 import org.filteredpush.bdq_workbench.model.MethodParameter;
@@ -31,32 +32,58 @@ public class ClasspathAnnotationTestDiscoveryService implements TestDiscoverySer
     @Override
     public List<DiscoveredImplementation> discover() {
         LOG.debug("Scanning packages for test implementations: {}", scanPackages);
-        ClassLoader cl = Thread.currentThread().getContextClassLoader();
-        List<DiscoveredImplementation> discovered = discoverWith(cl);
-        if (discovered.isEmpty() && cl != null) {
-            LOG.debug("No test implementations found via context class loader {}; retrying default classpath scan", cl);
-            discovered = discoverWith(null);
+        ClassLoader contextClassLoader = Thread.currentThread().getContextClassLoader();
+        ClassLoader discoveryClassLoader = getClass().getClassLoader();
+        String javaClassPath = System.getProperty("java.class.path", "");
+        LOG.debug("Using class loader: {}", contextClassLoader);
+        LOG.debug(javaClassPath);
+        LOG.debug("Classpath entries: {}", String.join(", ", splitClasspathEntries(javaClassPath)));
+
+        List<DiscoveredImplementation> discovered = discoverWith("context class loader", graph -> {
+            if (contextClassLoader != null) {
+                return graph.overrideClassLoaders(contextClassLoader);
+            }
+            return graph;
+        });
+        if (discovered.isEmpty() && discoveryClassLoader != null && discoveryClassLoader != contextClassLoader) {
+            LOG.debug(
+                    "No test implementations found via context class loader {}; retrying discovery class loader {}",
+                    contextClassLoader,
+                    discoveryClassLoader);
+            discovered = discoverWith("discovery class loader", graph -> graph.overrideClassLoaders(discoveryClassLoader));
+        }
+        if (discovered.isEmpty() && !javaClassPath.isBlank()) {
+            LOG.debug("No test implementations found via class loaders; retrying explicit java.class.path scan");
+            discovered = discoverWith("explicit java.class.path", graph -> graph.overrideClasspath(splitClasspathEntries(javaClassPath)));
+        }
+        if (discovered.isEmpty() && contextClassLoader != null) {
+            LOG.debug("No test implementations found via configured class loaders; retrying default classpath scan");
+            discovered = discoverWith("default classpath", graph -> graph);
         }
         LOG.debug("Discovered {} implementation methods for scan packages {}", discovered.size(), scanPackages);
         return discovered;
     }
 
-    private List<DiscoveredImplementation> discoverWith(ClassLoader classLoader) {
+    private List<DiscoveredImplementation> discoverWith(String strategy, GraphConfigurator configurator) {
         List<DiscoveredImplementation> discovered = new ArrayList<>();
-        ClassGraph classGraph = new ClassGraph()
+        ClassGraph classGraph = configurator.configure(new ClassGraph()
                 .ignoreClassVisibility()
                 .ignoreMethodVisibility()
                 .enableAllInfo()
-                .acceptPackages(scanPackages.toArray(String[]::new));
-        if (classLoader != null) {
-            classGraph = classGraph.overrideClassLoaders(classLoader);
-        }
+                .acceptPackages(scanPackages.toArray(String[]::new)));
+        int scannedClassCount = 0;
+        int skippedClassCount = 0;
+        int skippedMethodCount = 0;
         try (var scanResult = classGraph.scan()) {
+            LOG.debug("{} scan returned {} candidate classes", strategy, scanResult.getAllClasses().size());
             for (ClassInfo classInfo : scanResult.getAllClasses()) {
+                scannedClassCount++;
+                LOG.debug("Scanning class: {}", classInfo.getName());
                 Class<?> clazz;
                 try {
                     clazz = classInfo.loadClass();
                 } catch (LinkageError | RuntimeException e) {
+                    skippedClassCount++;
                     LOG.debug("Skipping unloadable class during discovery: {}", classInfo.getName(), e);
                     continue;
                 }
@@ -66,6 +93,7 @@ public class ClasspathAnnotationTestDiscoveryService implements TestDiscoverySer
                     try {
                         method = methodInfo.loadClassAndGetMethod();
                     } catch (LinkageError | RuntimeException e) {
+                        skippedMethodCount++;
                         LOG.debug("Skipping unloadable method during discovery: {}#{}", classInfo.getName(), methodInfo.getName(), e);
                         continue;
                     }
@@ -97,7 +125,23 @@ public class ClasspathAnnotationTestDiscoveryService implements TestDiscoverySer
         } catch (Exception e) {
             throw new AppException("Failed to discover test implementations", e);
         }
+        LOG.debug(
+                "{} discovered {} implementation methods across {} candidate classes ({} unloadable classes, {} unloadable methods)",
+                strategy,
+                discovered.size(),
+                scannedClassCount,
+                skippedClassCount,
+                skippedMethodCount);
         return discovered;
+    }
+
+    private static String[] splitClasspathEntries(String javaClassPath) {
+        if (javaClassPath == null || javaClassPath.isBlank()) {
+            return new String[0];
+        }
+        return Arrays.stream(javaClassPath.split(System.getProperty("path.separator")))
+                .filter(entry -> entry != null && !entry.isBlank())
+                .toArray(String[]::new);
     }
 
     private static String readProvides(Annotation[] annotations) {
@@ -239,5 +283,10 @@ public class ClasspathAnnotationTestDiscoveryService implements TestDiscoverySer
         } catch (ReflectiveOperationException e) {
             return null;
         }
+    }
+
+    @FunctionalInterface
+    private interface GraphConfigurator {
+        ClassGraph configure(ClassGraph graph);
     }
 }
