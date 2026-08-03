@@ -1,3 +1,23 @@
+/** BdqWorkbenchApplication.java
+ *
+ * Command line entry point that parses arguments, loads configuration, and wires the core
+ * BDQ Workbench pipeline services to run a headless dataset validation/amendment pass.
+ *
+ * Copyright 2026 President and Fellows of Harvard College
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ */
 package org.filteredpush.bdq_workbench.app;
 
 import java.io.PrintStream;
@@ -20,7 +40,17 @@ import org.filteredpush.bdq_workbench.test_discovery.DefaultTestBindingService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/** Main entrypoint that wires core services for the workbench pipeline. */
+/**
+ * Main entrypoint that wires core services for the workbench pipeline.
+ *
+ * <p>With no arguments on a graphical desktop, delegates to {@link BdqWorkbenchGui#launch()}.
+ * Otherwise parses command line arguments into an {@link AppConfig} override map (via
+ * {@link ConfigLoader}), validates the resulting configuration, runs the pipeline through
+ * {@link WorkbenchFacade#run(AppConfig)}, and prints a one-line completion summary.
+ *
+ * <p>This class is not instantiable; all behavior is exposed through {@link #main(String[])}
+ * and package-visible helpers used directly by tests.
+ */
 public final class BdqWorkbenchApplication {
     private static final Logger LOG = LoggerFactory.getLogger(BdqWorkbenchApplication.class);
     private static final String HELP_FLAG = "--help";
@@ -29,6 +59,14 @@ public final class BdqWorkbenchApplication {
     private BdqWorkbenchApplication() {
     }
 
+    /**
+     * CLI entry point. Runs the application against the given arguments, writing normal output
+     * to {@link System#out} and errors to {@link System#err}, and terminates the JVM with a
+     * non-zero exit code on failure.
+     *
+     * @param args command line arguments; see {@link #renderUsage(PrintStream)} for the
+     *     supported flags
+     */
     public static void main(String[] args) {
         int exitCode = run(args, System.out, System.err);
         if (exitCode != 0) {
@@ -36,6 +74,22 @@ public final class BdqWorkbenchApplication {
         }
     }
 
+    /**
+     * Executes the application logic for the given arguments without terminating the JVM,
+     * writing to the supplied streams instead of {@link System#out}/{@link System#err}.
+     *
+     * <p>With no arguments on a non-headless environment, launches the GUI. Otherwise renders
+     * help if requested, parses and validates the configuration, executes the pipeline, and
+     * prints a completion summary. Configuration and startup problems ({@link AppException})
+     * are reported as user-facing errors; any other exception is logged and reported as a
+     * generic failure.
+     *
+     * @param args command line arguments
+     * @param out stream for normal output (usage text and the completion summary)
+     * @param err stream for error output
+     * @return {@code 0} on success, {@code 2} on an argument parsing error, or {@code 1} on a
+     *     configuration or execution failure
+     */
     static int run(String[] args, PrintStream out, PrintStream err) {
         try {
             if (args.length == 0 && !GraphicsEnvironment.isHeadless()) {
@@ -71,6 +125,13 @@ public final class BdqWorkbenchApplication {
         }
     }
 
+    /**
+     * Validates configuration values that must hold before a run can start.
+     *
+     * @param config the configuration to validate
+     * @throws AppException if {@link AppConfig#threadCount()} is less than 1 or
+     *     {@link AppConfig#datasetPath()} does not exist
+     */
     static void validateStartupConfig(AppConfig config) {
         if (config.threadCount() < 1) {
             throw new AppException("Invalid thread count: bdq.threads must be >= 1");
@@ -80,6 +141,12 @@ public final class BdqWorkbenchApplication {
         }
     }
 
+    /**
+     * Checks whether the given arguments request help output.
+     *
+     * @param args command line arguments
+     * @return {@code true} if either {@code --help} or {@code -h} appears among {@code args}
+     */
     private static boolean wantsHelp(String[] args) {
         for (String arg : args) {
             if (HELP_FLAG.equals(arg) || HELP_SHORT_FLAG.equals(arg)) {
@@ -89,6 +156,14 @@ public final class BdqWorkbenchApplication {
         return false;
     }
 
+    /**
+     * Parses command line flags into {@link ConfigLoader} override keys.
+     *
+     * @param args command line arguments, expected as alternating {@code --flag value} pairs
+     *     (help flags are skipped)
+     * @return the parsed overrides, or a result carrying a descriptive error message if an
+     *     argument is unrecognized or missing its value
+     */
     private static ParseResult parseArguments(String[] args) {
         Map<String, String> overrides = new HashMap<>();
         for (int i = 0; i < args.length; i++) {
@@ -116,6 +191,11 @@ public final class BdqWorkbenchApplication {
         return new ParseResult(Map.copyOf(overrides), null);
     }
 
+    /**
+     * Writes CLI usage instructions.
+     *
+     * @param out stream to write the usage text to
+     */
     private static void renderUsage(PrintStream out) {
         out.println("Usage: java -jar target/bdq_workbench-0.1.0-SNAPSHOT.jar [options]");
         out.println();
@@ -131,10 +211,24 @@ public final class BdqWorkbenchApplication {
         out.println("  --threads <n>                  Worker thread count (>= 1)");
     }
 
+    /**
+     * Writes a one-line completion summary for a finished run.
+     *
+     * @param summary the execution summary produced by the run
+     * @param out stream to write the summary line to
+     */
     static void render(ExecutionSummary summary, PrintStream out) {
         out.println("BDQ Workbench completed: " + summary.responses().size() + " outcomes");
     }
 
+    /**
+     * Wires the concrete pipeline services (ingest, RDF-backed policy resolution, classpath
+     * test discovery, test binding, parallel execution, and export to summary/detailed/XLS
+     * reports) into a {@link WorkbenchFacade} and runs it for the given configuration.
+     *
+     * @param config the configuration for this run
+     * @return the summary of the executed run
+     */
     static ExecutionSummary execute(AppConfig config) {
         WorkbenchFacade facade = new WorkbenchFacade(
                 new DefaultIngestService(),
@@ -149,6 +243,12 @@ public final class BdqWorkbenchApplication {
         return facade.run(config);
     }
 
+    /**
+     * Outcome of parsing command line arguments.
+     *
+     * @param overrides the parsed {@link ConfigLoader} override keys/values
+     * @param error a descriptive error message if parsing failed, or {@code null} on success
+     */
     private record ParseResult(Map<String, String> overrides, String error) {
     }
 }
