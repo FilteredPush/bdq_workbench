@@ -1,0 +1,37 @@
+@prefix bdqval: <https://rs.tdwg.org/bdqval/terms/> .
+@prefix bdqcrit: <https://rs.tdwg.org/bdqcrit/terms/> .
+@prefix bdqdim: <https://rs.tdwg.org/bdqdim/terms/> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix bdqffdq: <https://rs.tdwg.org/bdqffdq/terms/> .
+@prefix bdqtest: <https://rs.tdwg.org/bdqtest/terms/> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+# Trimmed excerpt of the real, ratified tdwg/bdq bdqtest.ttl (tg2/_review/dist/bdqtest.ttl),
+# kept just large enough to exercise BdqSpecificationIndex's resolution paths: the bare test
+# IRI, its dated/versioned IRI (linked via dcterms:isVersionOf), the ValidationMethod that
+# links the two together, and the Specification it uses.
+
+bdqtest:0493bcfb-652e-4d17-815b-b0cce0742fbe-2025-03-07 a bdqffdq:Validation;
+  bdqffdq:hasResourceType bdqffdq:SingleRecord;
+  bdqffdq:hasDataQualityDimension bdqdim:Conformance;
+  bdqffdq:hasCriterion bdqcrit:Standard;
+  bdqffdq:hasActedUponInformationElement <urn:uuid:c3620a97-65d6-4f9c-8a03-32e0d240a423>;
+  dcterms:issued "2025-03-07"^^xsd:date;
+  rdfs:label "VALIDATION_COUNTRYCODE_STANDARD";
+  dcterms:isVersionOf bdqtest:0493bcfb-652e-4d17-815b-b0cce0742fbe;
+  skos:prefLabel "Validation dwc:countryCode Standard for SingleRecord" .
+
+bdqffdq:Validation rdfs:subClassOf bdqffdq:DataQualityNeed .
+
+<urn:uuid:02f5a440-a473-42cf-a3f1-6c10334d5eb8> a bdqffdq:ValidationMethod;
+  bdqffdq:hasSpecification <urn:uuid:01b96157-e4a1-4884-95d7-3bcfc5f3c047>;
+  rdfs:label "ValidationMethod: VALIDATION_COUNTRYCODE_STANDARD with Specification for: VALIDATION_COUNTRYCODE_STANDARD";
+  bdqffdq:forValidation bdqtest:0493bcfb-652e-4d17-815b-b0cce0742fbe-2025-03-07 .
+
+bdqffdq:ValidationMethod rdfs:subClassOf bdqffdq:DataQualityMethod .
+
+<urn:uuid:01b96157-e4a1-4884-95d7-3bcfc5f3c047> a bdqffdq:Specification;
+  bdqffdq:hasExpectedResponse "EXTERNAL_PREREQUISITES_NOT_MET if the bdqval:sourceAuthority is not available; INTERNAL_PREREQUISITES_NOT_MET if the dwc:countryCode is bdqval:Empty; COMPLIANT if dwc:countryCode can be unambiguously interpreted as a valid ISO 3166-1-alpha-2 country code in the bdqval:sourceAuthority; otherwise NOT_COMPLIANT";
+  rdfs:label "Specification for: VALIDATION_COUNTRYCODE_STANDARD" .
