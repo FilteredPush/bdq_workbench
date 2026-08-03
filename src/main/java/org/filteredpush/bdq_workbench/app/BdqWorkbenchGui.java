@@ -76,6 +76,7 @@ import org.filteredpush.bdq_workbench.model.UseCase;
 import org.filteredpush.bdq_workbench.rdf_policy.RdfPolicyResolverService;
 import org.filteredpush.bdq_workbench.rdf_policy.UseCaseXmlParser;
 import org.filteredpush.bdq_workbench.reporting.DetailedResponseStreamExporter;
+import org.filteredpush.bdq_workbench.reporting.RdfResponseExporter;
 import org.filteredpush.bdq_workbench.reporting.ReportingService;
 import org.filteredpush.bdq_workbench.reporting.SummaryReportExporter;
 import org.filteredpush.bdq_workbench.reporting.XlsCompatibilityExporter;
@@ -892,7 +893,8 @@ final class BdqWorkbenchGui {
     /**
      * Builds a {@link WorkbenchFacade} wired with the standard set of services (ingest, RDF
      * policy resolution, classpath test discovery, default test binding, parallel-phase
-     * execution, and the summary/detailed/xls-compatibility report exporters) for {@code config}.
+     * execution, and the summary/detailed/xls-compatibility/rdf report exporters) for
+     * {@code config}.
      *
      * @param config application configuration specifying RDF sources, dataset, discovery
      *     packages, and thread count
@@ -909,7 +911,8 @@ final class BdqWorkbenchGui {
                 new ReportingService(List.of(
                         new SummaryReportExporter(),
                         new DetailedResponseStreamExporter(),
-                        new XlsCompatibilityExporter())));
+                        new XlsCompatibilityExporter(),
+                        new RdfResponseExporter(config.rdfDefinitions()))));
     }
 
     /**
@@ -1472,7 +1475,7 @@ final class BdqWorkbenchGui {
      */
     private static String renderResultSummary(ExecutionSummary summary) {
         return SummaryReportExporter.renderSummaryText("Results summary", summary)
-                + "Saved files: reports/bdq-report-summary.txt, reports/bdq-report-response-stream.txt, reports/bdq-report-xls-hook.txt\n";
+                + "Saved files: reports/bdq-report-summary.txt, reports/bdq-report-response-stream.txt, reports/bdq-report-xls-hook.txt, reports/bdq-report-rdf.ttl\n";
     }
 
     /**

@@ -32,6 +32,7 @@ import org.filteredpush.bdq_workbench.ingest.DefaultIngestService;
 import org.filteredpush.bdq_workbench.model.ExecutionSummary;
 import org.filteredpush.bdq_workbench.rdf_policy.RdfPolicyResolverService;
 import org.filteredpush.bdq_workbench.reporting.DetailedResponseStreamExporter;
+import org.filteredpush.bdq_workbench.reporting.RdfResponseExporter;
 import org.filteredpush.bdq_workbench.reporting.ReportingService;
 import org.filteredpush.bdq_workbench.reporting.SummaryReportExporter;
 import org.filteredpush.bdq_workbench.reporting.XlsCompatibilityExporter;
@@ -223,7 +224,7 @@ public final class BdqWorkbenchApplication {
 
     /**
      * Wires the concrete pipeline services (ingest, RDF-backed policy resolution, classpath
-     * test discovery, test binding, parallel execution, and export to summary/detailed/XLS
+     * test discovery, test binding, parallel execution, and export to summary/detailed/XLS/RDF
      * reports) into a {@link WorkbenchFacade} and runs it for the given configuration.
      *
      * @param config the configuration for this run
@@ -239,7 +240,8 @@ public final class BdqWorkbenchApplication {
                 new ReportingService(List.of(
                         new SummaryReportExporter(),
                         new DetailedResponseStreamExporter(),
-                        new XlsCompatibilityExporter())));
+                        new XlsCompatibilityExporter(),
+                        new RdfResponseExporter(config.rdfDefinitions()))));
         return facade.run(config);
     }
 
