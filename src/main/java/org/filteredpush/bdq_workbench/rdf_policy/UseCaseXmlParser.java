@@ -1,3 +1,22 @@
+/** UseCaseXmlParser.java
+ *
+ * Parses BDQ use case definitions from bdquc-style XML or RDF (RDF/XML, Turtle, JSON-LD) sources.
+ *
+ * Copyright 2026 President and Fellows of Harvard College
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ */
 package org.filteredpush.bdq_workbench.rdf_policy;
 
 import java.io.IOException;
@@ -28,7 +47,35 @@ import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 
-/** Parses use case definitions from bdquc-style RDF/XML and related RDF serializations. */
+/**
+ * Static utility that loads {@link UseCase} definitions from a single file, tolerating both
+ * loosely-structured XML and standards-conformant RDF serializations of the same bdquc use case
+ * vocabulary.
+ *
+ * <p>Rather than requiring a single fixed schema, {@link #loadUseCases(Path)} tries two
+ * independent strategies and uses whichever one actually produces use cases:
+ *
+ * <ol>
+ *   <li>A lenient DOM walk ({@link #loadUseCasesFromXml}) that treats the file as generic XML —
+ *       not necessarily well-formed RDF/XML — and looks, element by element, for anything that
+ *       resembles a use case (by tag name or by a nested {@code type} element/attribute
+ *       referencing "use case") with an associated policy (by attribute, child element, or a
+ *       loosely-matched {@code rdf:resource} reference containing "policy", "profile", or
+ *       {@code bdquc/terms/}).
+ *   <li>A Jena-based RDF parse ({@link #loadUseCasesFromRdf}) that loads the file as RDF/XML,
+ *       Turtle, or JSON-LD (chosen by file extension) and looks for subjects whose URI or
+ *       {@code rdf:type} indicates a use case, extracting the linked or literal policy value from
+ *       their properties in the same policy/profile/{@code bdquc/terms/} manner.
+ * </ol>
+ *
+ * <p>Which strategy runs first depends on the file's extension (see {@link #isXmlLike(Path)}):
+ * for XML-like extensions ({@code .xml}, {@code .rdf}, {@code .owl}) the DOM walk is tried first
+ * and the RDF parse is a fallback only if it finds nothing; for other extensions the order is
+ * reversed. If neither strategy yields any use case, {@link #loadUseCases(Path)} still returns an
+ * empty map rather than throwing — unless the file both looks like RDF/XML (contains
+ * {@code <rdf:RDF} or {@code xmlns:rdf=}) and the RDF parse actually failed with an error, in
+ * which case that parse failure is surfaced as a likely-malformed-input error.
+ */
 public final class UseCaseXmlParser {
     private static final Logger LOG = LoggerFactory.getLogger(UseCaseXmlParser.class);
     private static final String RDF_NS = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
@@ -36,6 +83,17 @@ public final class UseCaseXmlParser {
     private UseCaseXmlParser() {
     }
 
+    /**
+     * Loads all use cases found in {@code xmlPath}, trying a lenient XML parse and a Jena RDF
+     * parse (in an order chosen by the file's extension) and returning the result of whichever
+     * one finds use cases first.
+     *
+     * @param xmlPath path to the use case source file (XML, RDF/XML, Turtle, or JSON-LD)
+     * @return use cases keyed by their resolved ID, in first-encountered order; empty if the file
+     *     parses successfully but contains no recognizable use case definitions
+     * @throws org.filteredpush.bdq_workbench.app.AppException if {@code xmlPath} does not exist,
+     *     or if the file appears to be RDF/XML but could not be parsed as such
+     */
     public static Map<String, UseCase> loadUseCases(Path xmlPath) {
         if (Files.notExists(xmlPath)) {
             throw new AppException("Use case file not found: " + xmlPath);

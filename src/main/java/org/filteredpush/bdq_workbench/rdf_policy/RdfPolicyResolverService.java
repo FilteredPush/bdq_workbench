@@ -1,3 +1,23 @@
+/** RdfPolicyResolverService.java
+ *
+ * PolicyResolverService implementation that loads BDQ/bdquc use case and policy definitions
+ * from RDF (RDF/XML, Turtle, or JSON-LD) and follows their links to resolve a use case's tests.
+ *
+ * Copyright 2026 President and Fellows of Harvard College
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ */
 package org.filteredpush.bdq_workbench.rdf_policy;
 
 import java.io.IOException;
@@ -30,7 +50,37 @@ import org.filteredpush.bdq_workbench.model.UseCase;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/** Loads bdquc and BDQ RDF definitions and resolves linked tests for use cases. */
+/**
+ * {@link PolicyResolverService} that resolves a use case identifier against BDQ Use Cases
+ * (bdquc) and BDQ RDF/OWL definitions using Apache Jena.
+ *
+ * <p>The use case itself is loaded from a single XML or RDF source (via
+ * {@link UseCaseXmlParser#loadUseCases(Path)}), while the tests a use case's policy requires are
+ * discovered by loading one or more RDF definition files (RDF/XML, Turtle, or JSON-LD — see
+ * {@link #loadRdf(List)}) into a single Jena {@link Model} and walking that model's statements.
+ *
+ * <p>Resolution does not rely on any single fixed vocabulary. Instead it builds, for each RDF
+ * file, a {@link SemanticIndex} that discovers which classes in that file are (or subclass)
+ * a small set of expected "core" Data Quality Need classes — {@code DataQualityNeed},
+ * {@code Validation}, {@code Amendment}, {@code Measure}, and {@code Issue} — by local name, then
+ * treats any resource typed with one of those classes, or any resource reached through a
+ * predicate whose {@code rdfs:range} is one of those classes, as a candidate test. A policy is
+ * matched to the requested use case via a predicate whose local name normalizes to
+ * {@code hasUseCase} pointing at the use case's URI (or an {@code http}/{@code https} or
+ * versioned/unversioned equivalent of it — see {@link #candidateUseCaseIds(UseCase)}); the tests
+ * linked from that policy (and, as a fallback, tests linked directly from the use case resource
+ * itself) are then collected by scanning that policy's properties for objects that are resources
+ * and are either linked via a predicate that looks like a test-link predicate or are themselves
+ * classified as test resources by the semantic index (see {@link #collectLinkedTests}). Each
+ * linked test is labeled from its {@code rdfs:label} where present (tests without a label are
+ * reported as unresolved rather than dropped), typed by matching {@code Amendment}/
+ * {@code Measure}/{@code Issue}/{@code Validation} tokens in its local name or {@code rdf:type}
+ * values, and assigned to the {@code AMENDMENT} phase if its type is {@code AMENDMENT} or
+ * otherwise to {@code PRE_AMENDMENT}.
+ *
+ * <p>Instances are immutable and safe to reuse across calls to {@link #resolve(String)}, though
+ * every call re-reads and re-parses the configured files.
+ */
 public class RdfPolicyResolverService implements PolicyResolverService {
     private static final Logger LOG = LoggerFactory.getLogger(RdfPolicyResolverService.class);
     private static final String RDF_TYPE_URI = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
@@ -41,11 +91,41 @@ public class RdfPolicyResolverService implements PolicyResolverService {
     private final Path useCaseXmlPath;
     private final List<Path> rdfFiles;
 
+    /**
+     * Creates a resolver that loads use cases from {@code useCaseXmlPath} and test/policy
+     * definitions from {@code rdfFiles}.
+     *
+     * @param useCaseXmlPath path to the use case source, parsed via
+     *     {@link UseCaseXmlParser#loadUseCases(Path)}; read afresh on every call to
+     *     {@link #resolve(String)}
+     * @param rdfFiles RDF/OWL definition files (RDF/XML, Turtle, or JSON-LD) containing the
+     *     policy-to-test and use-case-to-policy links; missing files are silently skipped, and
+     *     the list is defensively copied
+     */
     public RdfPolicyResolverService(Path useCaseXmlPath, List<Path> rdfFiles) {
         this.useCaseXmlPath = useCaseXmlPath;
         this.rdfFiles = List.copyOf(rdfFiles);
     }
 
+    /**
+     * Resolves {@code selectedUseCaseId} into an {@link ExecutionPlan}.
+     *
+     * <p>Loads the use case from {@link #useCaseXmlPath}, selects the matching {@link UseCase}
+     * (see {@link #selectUseCase}), loads and merges all configured RDF definition files into a
+     * single model, and follows the RDF links from that use case's policy to its tests (see
+     * {@link #resolveLinkedTests}). Each linked test ID is then labeled, typed, and assigned
+     * metadata (see {@link #resolveLabel}, {@link #inferTestType}, {@link #resolveTestMetadata});
+     * tests with no resolvable {@code rdfs:label} are placed in the plan's unresolved list rather
+     * than the resolved one.
+     *
+     * @param selectedUseCaseId identifier or URI of the use case to resolve; if null, blank, or
+     *     not found, {@link #selectUseCase} falls back to a URI-equivalence match and then to an
+     *     arbitrary loaded use case
+     * @return the execution plan containing the resolved use case, its policy (with the full list
+     *     of linked test IDs), and the tests that were and were not successfully resolved
+     * @throws org.filteredpush.bdq_workbench.app.AppException if no use cases can be loaded, or
+     *     an RDF definition file cannot be read or parsed
+     */
     @Override
     public ExecutionPlan resolve(String selectedUseCaseId) {
         LOG.debug("Resolving policy from use case source: {}", useCaseXmlPath.toAbsolutePath());
@@ -75,6 +155,19 @@ public class RdfPolicyResolverService implements PolicyResolverService {
                 unresolved);
     }
 
+    /**
+     * Parses each of the given RDF definition files independently and reports how many distinct
+     * use cases, policies, and tests each one contributes, for diagnostic/preview purposes (for
+     * example, reporting to a user what a configured set of definition files actually contains)
+     * rather than for resolving a specific use case.
+     *
+     * <p>Unlike {@link #resolve(String)}, files are parsed one at a time (not merged into a
+     * single model), so counts reflect only the links present within each individual file.
+     * Nonexistent paths are skipped rather than causing a failure.
+     *
+     * @param paths RDF definition files to summarize
+     * @return a summary with per-file counts and totals de-duplicated by ID across all files
+     */
     public static RdfDefinitionSummary summarizeDefinitionSources(List<Path> paths) {
         List<RdfDefinitionFileSummary> files = new ArrayList<>();
         Set<String> allUseCases = new LinkedHashSet<>();
@@ -643,6 +736,15 @@ public class RdfPolicyResolverService implements PolicyResolverService {
             Set<String> testIds) {
     }
 
+    /**
+     * Aggregated result of {@link #summarizeDefinitionSources(List)} across a set of RDF
+     * definition files.
+     *
+     * @param files per-file summaries, in the order the input paths were given
+     * @param totalUseCases number of distinct use case IDs found across all files
+     * @param totalPolicies number of distinct policy IDs found across all files
+     * @param totalTests number of distinct test IDs found across all files
+     */
     public record RdfDefinitionSummary(
             List<RdfDefinitionFileSummary> files,
             int totalUseCases,
@@ -650,6 +752,16 @@ public class RdfPolicyResolverService implements PolicyResolverService {
             int totalTests) {
     }
 
+    /**
+     * Summary of the use cases, policies, and tests found in a single RDF definition file.
+     *
+     * @param path the file that was parsed
+     * @param useCaseCount number of distinct use case IDs found in this file
+     * @param policyCount number of distinct policy IDs found in this file
+     * @param testCount number of distinct test IDs linked from a policy in this file (or, if no
+     *     policy-to-test links were found, the number of resources classified as tests by the
+     *     file's semantic index)
+     */
     public record RdfDefinitionFileSummary(
             Path path,
             int useCaseCount,
