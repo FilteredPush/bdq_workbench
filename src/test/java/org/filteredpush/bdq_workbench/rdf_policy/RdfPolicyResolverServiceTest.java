@@ -280,4 +280,48 @@ class RdfPolicyResolverServiceTest {
         assertThat(summary.totalPolicies()).isEqualTo(1);
         assertThat(summary.totalTests()).isEqualTo(1);
     }
+
+    @Test
+    void capturesExpectedResponseAndNoteMetadataForTests() throws Exception {
+        Path useCaseFile = tempDir.resolve("bdquc.xml");
+        Files.writeString(useCaseFile, """
+                <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+                         xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+                         xmlns:dcterms="http://purl.org/dc/terms/"
+                         xmlns:skos="http://www.w3.org/2004/02/skos/core#">
+                  <rdf:Description rdf:about="https://rs.tdwg.org/bdquc/terms/version/Spatial-Temporal_Patterns-2026-04-22">
+                    <rdf:type rdf:resource="https://rs.tdwg.org/bdqffdq/terms/UseCase"/>
+                    <rdfs:label>Spatial-Temporal Patterns</rdfs:label>
+                    <dcterms:isVersionOf rdf:resource="https://rs.tdwg.org/bdquc/terms/Spatial-Temporal_Patterns"/>
+                  </rdf:Description>
+                </rdf:RDF>
+                """, StandardCharsets.UTF_8);
+
+        Path definitions = tempDir.resolve("bdqtest.ttl");
+        Files.writeString(definitions, """
+                @prefix bdqffdq: <https://rs.tdwg.org/bdqffdq/terms/> .
+                @prefix ex: <https://example.org/> .
+                @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+                @prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+
+                ex:policy1 a bdqffdq:ValidationPolicy ;
+                    bdqffdq:hasUseCase <https://rs.tdwg.org/bdquc/terms/Spatial-Temporal_Patterns> ;
+                    bdqffdq:hasTest ex:testMeasure .
+
+                ex:testMeasure a bdqffdq:Measure ;
+                    rdfs:label "MULTIRECORD_MEASURE_QA_MINDEPTH_LESSTHAN_MAXDEPTH" ;
+                    bdqffdq:hasExpectedResponse "COMPLETE if every VALIDATION_MINDEPTH_LESSTHAN_MAXDEPTH in the MultiRecord has Response.result=COMPLIANT or Response.status=INTERNAL_PREREQUISITES_NOT_MET, otherwise NOT_COMPLETE." ;
+                    skos:note "For Quality Assurance, filter record set until this measure is COMPLETE." .
+                """, StandardCharsets.UTF_8);
+
+        RdfPolicyResolverService service = new RdfPolicyResolverService(useCaseFile, List.of(definitions));
+        var plan = service.resolve("https://rs.tdwg.org/bdquc/terms/version/Spatial-Temporal_Patterns-2026-04-22");
+
+        assertThat(plan.tests()).singleElement().satisfies(test -> {
+            assertThat(test.metadata()).containsEntry("expectedResponse",
+                    "COMPLETE if every VALIDATION_MINDEPTH_LESSTHAN_MAXDEPTH in the MultiRecord has Response.result=COMPLIANT or Response.status=INTERNAL_PREREQUISITES_NOT_MET, otherwise NOT_COMPLETE.");
+            assertThat(test.metadata()).containsEntry("note",
+                    "For Quality Assurance, filter record set until this measure is COMPLETE.");
+        });
+    }
 }

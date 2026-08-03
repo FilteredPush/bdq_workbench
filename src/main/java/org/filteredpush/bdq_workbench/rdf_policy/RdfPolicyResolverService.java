@@ -25,6 +25,7 @@ import org.filteredpush.bdq_workbench.model.ExecutionPlan;
 import org.filteredpush.bdq_workbench.model.Phase;
 import org.filteredpush.bdq_workbench.model.Policy;
 import org.filteredpush.bdq_workbench.model.TestDefinition;
+import org.filteredpush.bdq_workbench.model.TestType;
 import org.filteredpush.bdq_workbench.model.UseCase;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,6 +36,8 @@ public class RdfPolicyResolverService implements PolicyResolverService {
     private static final String RDF_TYPE_URI = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
     private static final String RDFS_SUBCLASS_OF_URI = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
     private static final String RDFS_RANGE_URI = "http://www.w3.org/2000/01/rdf-schema#range";
+    private static final String TEST_METADATA_EXPECTED_RESPONSE = "expectedResponse";
+    private static final String TEST_METADATA_NOTE = "note";
     private final Path useCaseXmlPath;
     private final List<Path> rdfFiles;
 
@@ -56,10 +59,12 @@ public class RdfPolicyResolverService implements PolicyResolverService {
         List<TestDefinition> unresolved = new ArrayList<>();
         for (String testId : linkedTestIds) {
             String label = resolveLabel(rdf, testId);
+            TestType testType = inferTestType(rdf, testId);
+            Map<String, String> metadata = resolveTestMetadata(rdf, testId);
             if (label == null) {
-                unresolved.add(new TestDefinition(testId, testId, Phase.PRE_AMENDMENT, Map.of()));
+                unresolved.add(new TestDefinition(testId, testId, testType, inferPhase(testType), Map.of(), metadata));
             } else {
-                resolved.add(new TestDefinition(testId, label, inferPhase(rdf, testId), Map.of()));
+                resolved.add(new TestDefinition(testId, label, testType, inferPhase(testType), Map.of(), metadata));
             }
         }
 
@@ -269,10 +274,76 @@ public class RdfPolicyResolverService implements PolicyResolverService {
         return stmt == null ? null : stmt.getString();
     }
 
-    private static Phase inferPhase(Model model, String testId) {
+    private static Map<String, String> resolveTestMetadata(Model model, String uri) {
+        Resource resource = model.getResource(uri);
+        if (resource == null) {
+            return Map.of();
+        }
+        Map<String, String> metadata = new LinkedHashMap<>();
+        putIfPresent(metadata, TEST_METADATA_EXPECTED_RESPONSE,
+                resolveLiteralProperty(resource, Set.of("hasExpectedResponse", "expectedResponse")));
+        putIfPresent(metadata, TEST_METADATA_NOTE,
+                resolveLiteralProperty(resource, Set.of("note")));
+        return Map.copyOf(metadata);
+    }
+
+    private static void putIfPresent(Map<String, String> metadata, String key, String value) {
+        if (value != null && !value.isBlank()) {
+            metadata.put(key, value);
+        }
+    }
+
+    private static String resolveLiteralProperty(Resource resource, Set<String> candidateLocalNames) {
+        var statements = resource.listProperties();
+        while (statements.hasNext()) {
+            var statement = statements.nextStatement();
+            String localName = statement.getPredicate().getLocalName();
+            if (localName == null || !candidateLocalNames.contains(localName)) {
+                continue;
+            }
+            if (statement.getObject().isLiteral()) {
+                return statement.getString();
+            }
+        }
+        return null;
+    }
+
+    private static TestType inferTestType(Model model, String testId) {
         Resource r = model.getResource(testId);
         String local = r.getLocalName() == null ? "" : r.getLocalName().toLowerCase();
         if (local.contains("amend")) {
+            return TestType.AMENDMENT;
+        }
+        if (local.contains("measure")) {
+            return TestType.MEASURE;
+        }
+        if (local.contains("issue")) {
+            return TestType.ISSUE;
+        }
+        if (local.contains("validation")) {
+            return TestType.VALIDATION;
+        }
+        var types = model.listStatements(r, model.createProperty(RDF_TYPE_URI), (RDFNode) null);
+        while (types.hasNext()) {
+            String typeUri = resourceUri(types.nextStatement().getResource()).toLowerCase();
+            if (typeUri.endsWith("amendment")) {
+                return TestType.AMENDMENT;
+            }
+            if (typeUri.endsWith("measure")) {
+                return TestType.MEASURE;
+            }
+            if (typeUri.endsWith("issue")) {
+                return TestType.ISSUE;
+            }
+            if (typeUri.endsWith("validation")) {
+                return TestType.VALIDATION;
+            }
+        }
+        return TestType.UNKNOWN;
+    }
+
+    private static Phase inferPhase(TestType testType) {
+        if (testType == TestType.AMENDMENT) {
             return Phase.AMENDMENT;
         }
         return Phase.PRE_AMENDMENT;

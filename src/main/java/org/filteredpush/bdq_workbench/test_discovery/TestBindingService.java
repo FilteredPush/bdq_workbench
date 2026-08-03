@@ -1,5 +1,6 @@
 package org.filteredpush.bdq_workbench.test_discovery;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import org.filteredpush.bdq_workbench.model.TestDefinition;
@@ -10,4 +11,12 @@ public interface TestBindingService {
             List<TestDefinition> tests,
             List<DiscoveredImplementation> discovered,
             Map<String, String> explicitMapping);
+
+    default TestBindingResult bind(
+            List<TestDefinition> tests,
+            List<DiscoveredImplementation> discovered,
+            Map<String, String> explicitMapping,
+            Collection<String> availableTerms) {
+        return bind(tests, discovered, explicitMapping);
+    }
 }

@@ -11,6 +11,7 @@ import org.filteredpush.bdq_workbench.execution.ReflectionExecutionAdapter;
 import org.filteredpush.bdq_workbench.ingest.DefaultIngestService;
 import org.filteredpush.bdq_workbench.model.ExecutionSummary;
 import org.filteredpush.bdq_workbench.rdf_policy.RdfPolicyResolverService;
+import org.filteredpush.bdq_workbench.reporting.DetailedResponseStreamExporter;
 import org.filteredpush.bdq_workbench.reporting.ReportingService;
 import org.filteredpush.bdq_workbench.reporting.SummaryReportExporter;
 import org.filteredpush.bdq_workbench.reporting.XlsCompatibilityExporter;
@@ -141,7 +142,10 @@ public final class BdqWorkbenchApplication {
                 new ClasspathAnnotationTestDiscoveryService(config.implementationPackages()),
                 new DefaultTestBindingService(),
                 new ParallelPhaseExecutionService(config.threadCount(), new ReflectionExecutionAdapter()),
-                new ReportingService(List.of(new SummaryReportExporter(), new XlsCompatibilityExporter())));
+                new ReportingService(List.of(
+                        new SummaryReportExporter(),
+                        new DetailedResponseStreamExporter(),
+                        new XlsCompatibilityExporter())));
         return facade.run(config);
     }
 

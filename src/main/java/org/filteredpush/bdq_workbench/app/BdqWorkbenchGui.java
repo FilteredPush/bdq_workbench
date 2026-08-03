@@ -1,10 +1,15 @@
 package org.filteredpush.bdq_workbench.app;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.awt.BorderLayout;
 import java.awt.CardLayout;
 import java.awt.FileDialog;
 import java.awt.FlowLayout;
 import java.awt.Frame;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -16,31 +21,46 @@ import javax.swing.BoxLayout;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
+import javax.swing.JDialog;
 import javax.swing.JFileChooser;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
+import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JPopupMenu;
 import javax.swing.JProgressBar;
 import javax.swing.JScrollPane;
+import javax.swing.JSplitPane;
+import javax.swing.JTable;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
+import javax.swing.table.TableCellRenderer;
+import org.filteredpush.bdq_workbench.execution.ExecutionProgressListener;
 import org.filteredpush.bdq_workbench.execution.ParallelPhaseExecutionService;
 import org.filteredpush.bdq_workbench.execution.ReflectionExecutionAdapter;
 import org.filteredpush.bdq_workbench.ingest.DefaultIngestService;
-import org.filteredpush.bdq_workbench.model.ExecutionPlan;
+import org.filteredpush.bdq_workbench.model.BindingReview;
+import org.filteredpush.bdq_workbench.model.BuiltInMeasureSpec;
 import org.filteredpush.bdq_workbench.model.ExecutionSummary;
+import org.filteredpush.bdq_workbench.model.ImplementationBinding;
+import org.filteredpush.bdq_workbench.model.Phase;
+import org.filteredpush.bdq_workbench.model.PreparedRun;
 import org.filteredpush.bdq_workbench.model.Response;
+import org.filteredpush.bdq_workbench.model.TestDefinition;
+import org.filteredpush.bdq_workbench.model.TestType;
 import org.filteredpush.bdq_workbench.model.UseCase;
 import org.filteredpush.bdq_workbench.rdf_policy.RdfPolicyResolverService;
 import org.filteredpush.bdq_workbench.rdf_policy.UseCaseXmlParser;
+import org.filteredpush.bdq_workbench.reporting.DetailedResponseStreamExporter;
 import org.filteredpush.bdq_workbench.reporting.ReportingService;
 import org.filteredpush.bdq_workbench.reporting.SummaryReportExporter;
 import org.filteredpush.bdq_workbench.reporting.XlsCompatibilityExporter;
 import org.filteredpush.bdq_workbench.test_discovery.ClasspathAnnotationTestDiscoveryService;
 import org.filteredpush.bdq_workbench.test_discovery.DefaultTestBindingService;
+import org.filteredpush.bdq_workbench.test_discovery.DiscoveredImplementation;
 import org.filteredpush.bdq_workbench.test_discovery.TestBindingResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -48,6 +68,7 @@ import org.slf4j.LoggerFactory;
 /** Desktop launcher for collecting startup parameters and monitoring execution progress. */
 final class BdqWorkbenchGui {
     private static final Logger LOG = LoggerFactory.getLogger(BdqWorkbenchGui.class);
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private static final String DEFAULT_USECASE_SOURCE = "https://bdq.tdwg.org/draft/dist/bdquc.xml";
     private static final String DEFAULT_TEST_DEFINITIONS_SOURCE = "https://bdq.tdwg.org/draft/dist/bdqtest.ttl";
@@ -93,19 +114,38 @@ final class BdqWorkbenchGui {
         statusArea.setEditable(false);
         statusArea.setLineWrap(true);
         statusArea.setWrapStyleWord(true);
+        installTextAreaClipboardSupport(statusArea);
+        JTable bindingGrid = new JTable(new BindingReviewTableModel(List.of()));
+        JTextArea resultSummaryArea = new JTextArea();
+        resultSummaryArea.setEditable(false);
+        resultSummaryArea.setLineWrap(true);
+        resultSummaryArea.setWrapStyleWord(true);
+        installTextAreaClipboardSupport(resultSummaryArea);
 
         JPanel monitorPanel = new JPanel(new BorderLayout(8, 8));
-        monitorPanel.add(new JScrollPane(statusArea), BorderLayout.CENTER);
+        JSplitPane monitorSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT,
+                new JScrollPane(statusArea),
+                new JSplitPane(JSplitPane.VERTICAL_SPLIT,
+                        new JScrollPane(bindingGrid),
+                        new JScrollPane(resultSummaryArea)));
+        monitorSplit.setResizeWeight(0.45d);
+        monitorPanel.add(monitorSplit, BorderLayout.CENTER);
         JProgressBar progress = new JProgressBar();
-        progress.setIndeterminate(true);
+        progress.setStringPainted(true);
         progress.setVisible(false);
         monitorPanel.add(progress, BorderLayout.NORTH);
 
         JPanel monitorControls = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        JButton loadParameters = new JButton("Load Parameters...");
+        loadParameters.setEnabled(false);
+        JButton saveParameters = new JButton("Save Parameters...");
+        saveParameters.setEnabled(false);
         JButton backToSetup = new JButton("Back to Setup");
         JButton startRun = new JButton("Start Run");
         startRun.setEnabled(false);
         JButton closeButton = new JButton("Quit");
+        monitorControls.add(loadParameters);
+        monitorControls.add(saveParameters);
         monitorControls.add(backToSetup);
         monitorControls.add(startRun);
         monitorControls.add(closeButton);
@@ -124,6 +164,7 @@ final class BdqWorkbenchGui {
         useCaseLoadStatus.setLineWrap(true);
         useCaseLoadStatus.setWrapStyleWord(true);
         useCaseLoadStatus.setBorder(BorderFactory.createEtchedBorder());
+        installTextAreaClipboardSupport(useCaseLoadStatus);
         form.add(useCaseLoadStatus);
 
         JButton toggleAdvanced = new JButton("Show Advanced Options");
@@ -155,6 +196,7 @@ final class BdqWorkbenchGui {
         testDefinitionLoadStatus.setLineWrap(true);
         testDefinitionLoadStatus.setWrapStyleWord(true);
         testDefinitionLoadStatus.setBorder(BorderFactory.createEtchedBorder());
+        installTextAreaClipboardSupport(testDefinitionLoadStatus);
         advanced.add(testDefinitionLoadStatus);
 
         JTextField additionalTestDefinitions = addField(advanced, "Additional test definition files/URLs (comma-separated)", "");
@@ -179,10 +221,11 @@ final class BdqWorkbenchGui {
         setupInfo.setText("Default test definitions are retrieved and cached from:\n"
                 + "  " + DEFAULT_TEST_DEFINITIONS_SOURCE + "\n"
                 + "Use advanced options to change the test definitions source, add more test definition files, or change ontology source.");
+        installTextAreaClipboardSupport(setupInfo);
         setupPanel.add(new JScrollPane(setupInfo), BorderLayout.CENTER);
 
         JPanel setupControls = new JPanel(new FlowLayout(FlowLayout.RIGHT));
-        JButton run = new JButton("Run");
+        JButton run = new JButton("Setup Tests");
         JButton exit = new JButton("Quit");
         setupControls.add(run);
         setupControls.add(exit);
@@ -193,6 +236,16 @@ final class BdqWorkbenchGui {
         root.add(cardPanel, BorderLayout.CENTER);
 
         final PreflightState[] state = new PreflightState[1];
+        installBindingDebugPopup(
+                frame,
+                bindingGrid,
+                state,
+                statusArea,
+                resultSummaryArea,
+                startRun,
+                runWithAvailableOnly,
+                saveParameters,
+                loadParameters);
 
         toggleAdvanced.addActionListener(e -> {
             advanced.setVisible(!advanced.isVisible());
@@ -230,6 +283,17 @@ final class BdqWorkbenchGui {
 
         exit.addActionListener(e -> exitApplication(frame));
         closeButton.addActionListener(e -> exitApplication(frame));
+        saveParameters.addActionListener(e -> saveParameterSettings(frame, bindingGrid));
+        loadParameters.addActionListener(e -> loadParameterSettings(
+                frame,
+                bindingGrid,
+                state,
+                statusArea,
+                resultSummaryArea,
+                startRun,
+                runWithAvailableOnly,
+                saveParameters,
+                loadParameters));
 
         backToSetup.addActionListener(e -> {
             if (!progress.isVisible()) {
@@ -247,7 +311,6 @@ final class BdqWorkbenchGui {
             SwingWorker<PreflightState, Void> preflight = new SwingWorker<>() {
                 @Override
                 protected PreflightState doInBackground() {
-                    LOG.debug("Preparing preflight mapping");
                     AppConfig config = buildConfig(
                             dataset.field().getText().trim(),
                             selectedUseCaseId(useCaseChoice),
@@ -260,38 +323,30 @@ final class BdqWorkbenchGui {
                             resolver,
                             defaults);
                     BdqWorkbenchApplication.validateStartupConfig(config);
-
-                    RdfPolicyResolverService policyResolver = new RdfPolicyResolverService(config.useCaseXml(), config.rdfDefinitions());
-                    ExecutionPlan plan = policyResolver.resolve(config.useCaseId());
-                    var discovery = new ClasspathAnnotationTestDiscoveryService(config.implementationPackages());
-                    var discovered = discovery.discover();
-                    TestBindingResult binding = new DefaultTestBindingService().bind(plan.tests(), discovered, Map.of());
-
-                    return new PreflightState(config, plan, discovered.size(), binding);
+                    PreparedRun preparedRun = createFacade(config).prepare(config);
+                    return new PreflightState(preparedRun);
                 }
 
                 @Override
                 protected void done() {
                     try {
-                        state[0] = get();
-                        LOG.debug("Preflight mapping complete: {} runnable, {} unresolved",
-                                state[0].binding().bindings().size(),
-                                state[0].binding().unresolved().size());
-                        String preflightMessage = renderPreflightMessage(state[0]);
-                        setStatus(statusArea, preflightMessage);
-                        boolean complete = state[0].isFullyResolved();
-                        if (!complete && !runWithAvailableOnly.isSelected()) {
-                            appendStatus(statusArea, "\nRun is blocked until unresolved tests are handled.\n");
-                            startRun.setEnabled(false);
-                        } else {
-                            startRun.setText(complete ? "Start Run" : "Start Available Tests");
-                            startRun.setEnabled(true);
-                        }
+                        updatePreflightUi(
+                                state,
+                                get().preparedRun(),
+                                bindingGrid,
+                                statusArea,
+                                resultSummaryArea,
+                                startRun,
+                                runWithAvailableOnly,
+                                saveParameters,
+                                loadParameters);
                     } catch (Exception ex) {
                         Throwable cause = ex.getCause() == null ? ex : ex.getCause();
                         LOG.error("Preflight mapping failed", cause);
                         setStatus(statusArea, "Failed to prepare run: " + cause.getMessage() + "\n");
                         startRun.setEnabled(false);
+                        saveParameters.setEnabled(false);
+                        loadParameters.setEnabled(false);
                     } finally {
                         progress.setVisible(false);
                         run.setEnabled(true);
@@ -308,13 +363,30 @@ final class BdqWorkbenchGui {
             startRun.setEnabled(false);
             backToSetup.setEnabled(false);
             progress.setVisible(true);
+            progress.setMinimum(0);
+            progress.setValue(0);
             appendStatus(statusArea, "\nStarting execution...\n");
 
             SwingWorker<ExecutionSummary, Void> worker = new SwingWorker<>() {
                 @Override
                 protected ExecutionSummary doInBackground() {
                     LOG.info("Starting BDQ Workbench execution");
-                    return runWorkbench(state[0].config());
+                    BindingReviewTableModel reviewModel = (BindingReviewTableModel) bindingGrid.getModel();
+                    PreparedRun editedRun = applyParameterEdits(state[0].preparedRun(), reviewModel);
+                    ExecutionProgressTracker tracker = new ExecutionProgressTracker();
+                    return runWorkbench(editedRun, tracker, snapshot -> SwingUtilities.invokeLater(() -> {
+                        int max = Math.max(1, snapshot.total());
+                        progress.setMaximum(max);
+                        progress.setValue(snapshot.completed());
+                        progress.setString(String.format(
+                                "%s queued=%d running=%d completed=%d/%d",
+                                snapshot.phase(),
+                                snapshot.queued(),
+                                snapshot.running(),
+                                snapshot.completed(),
+                                snapshot.total()));
+                        resultSummaryArea.setText(renderProgressSnapshot(snapshot));
+                    }));
                 }
 
                 @Override
@@ -323,14 +395,19 @@ final class BdqWorkbenchGui {
                         ExecutionSummary summary = get();
                         LOG.info("BDQ Workbench execution complete: {} outcomes", summary.responses().size());
                         appendStatus(statusArea, "Completed: " + summary.responses().size() + " outcomes\n");
+                        resultSummaryArea.setText(renderResultSummary(summary));
+                        updateBindingGridExecutionOutputs(bindingGrid, summary);
                         Iterator <Response> i = summary.responses().iterator();
                         while (i.hasNext()) {
 							Response r = i.next();
+                            String responseText = formatStructuredResponse(r);
 							appendStatus(statusArea, String.format(
-									" - %s: %s -> %s (%s)\n",
+									" - %s [%s/%s]: %s -> %s (%s)\n",
 									r.testId(),
+                                    r.phase(),
+                                    r.responseStatus(),
 									r.recordId(),
-									r.status(),
+									responseText == null ? "(no structured response)" : responseText,
 									r.message()));
 						}
                     } catch (Exception ex) {
@@ -366,15 +443,330 @@ final class BdqWorkbenchGui {
         return frame;
     }
 
-    private static ExecutionSummary runWorkbench(AppConfig config) {
-        WorkbenchFacade facade = new WorkbenchFacade(
+    private static ExecutionSummary runWorkbench(
+            PreparedRun preparedRun,
+            ExecutionProgressTracker tracker,
+            java.util.function.Consumer<ExecutionProgressSnapshot> progressConsumer) {
+        WorkbenchFacade facade = createFacade(preparedRun.config(), new ExecutionProgressListener() {
+            @Override
+            public void onPhaseStarted(org.filteredpush.bdq_workbench.model.Phase phase, int total) {
+                tracker.onPhaseStarted(phase, total);
+                progressConsumer.accept(tracker.snapshot());
+            }
+
+            @Override
+            public void onResponse(org.filteredpush.bdq_workbench.model.Phase phase, Response response, int completed, int total) {
+                tracker.onResponse(phase, response, completed, total);
+                progressConsumer.accept(tracker.snapshot());
+            }
+
+            @Override
+            public void onPhaseCompleted(org.filteredpush.bdq_workbench.model.Phase phase, int completed, int total) {
+                progressConsumer.accept(tracker.snapshot());
+            }
+        });
+        return facade.runPrepared(preparedRun);
+    }
+
+    private static void installBindingDebugPopup(
+            JFrame frame,
+            JTable bindingGrid,
+            PreflightState[] state,
+            JTextArea statusArea,
+            JTextArea resultSummaryArea,
+            JButton startRun,
+            JCheckBox runWithAvailableOnly,
+            JButton saveParameters,
+            JButton loadParameters) {
+        JPopupMenu popupMenu = new JPopupMenu();
+        JMenuItem parameterItem = new JMenuItem("Set Parameters...");
+        JMenuItem inspectItem = new JMenuItem("Inspect / Run Test");
+        popupMenu.add(parameterItem);
+        popupMenu.add(inspectItem);
+        parameterItem.addActionListener(e -> openParameterDialog(
+                frame,
+                bindingGrid,
+                state,
+                statusArea,
+                resultSummaryArea,
+                startRun,
+                runWithAvailableOnly,
+                saveParameters,
+                loadParameters));
+        inspectItem.addActionListener(e -> openBindingDebugDialog(frame, bindingGrid, state));
+        bindingGrid.setComponentPopupMenu(popupMenu);
+        bindingGrid.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                selectPopupRow(e);
+            }
+
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                selectPopupRow(e);
+            }
+
+            private void selectPopupRow(MouseEvent e) {
+                if (!e.isPopupTrigger()) {
+                    return;
+                }
+                int row = bindingGrid.rowAtPoint(e.getPoint());
+                if (row >= 0) {
+                    bindingGrid.setRowSelectionInterval(row, row);
+                    if (bindingGrid.getModel() instanceof BindingReviewTableModel reviewModel) {
+                        boolean parameterized = reviewModel.supportsParameterEditing(bindingGrid.convertRowIndexToModel(row));
+                        parameterItem.setVisible(parameterized);
+                        parameterItem.setEnabled(parameterized);
+                    }
+                }
+            }
+        });
+    }
+
+    private static void openParameterDialog(
+            JFrame frame,
+            JTable bindingGrid,
+            PreflightState[] state,
+            JTextArea statusArea,
+            JTextArea resultSummaryArea,
+            JButton startRun,
+            JCheckBox runWithAvailableOnly,
+            JButton saveParameters,
+            JButton loadParameters) {
+        if (state[0] == null || !(bindingGrid.getModel() instanceof BindingReviewTableModel reviewModel)) {
+            return;
+        }
+        int viewRow = bindingGrid.getSelectedRow();
+        if (viewRow < 0) {
+            return;
+        }
+        int row = bindingGrid.convertRowIndexToModel(viewRow);
+        BindingReview selectedReview = reviewModel.reviewAt(row);
+        PreparedRun editedRun = applyParameterEdits(state[0].preparedRun(), reviewModel);
+        ImplementationBinding binding = findBinding(editedRun, selectedReview.test().id());
+        List<org.filteredpush.bdq_workbench.model.MethodParameter> configurableParameters =
+                configurableParametersFor(editedRun, selectedReview, binding);
+        if (configurableParameters.isEmpty()) {
+            JOptionPane.showMessageDialog(
+                    frame,
+                    "No annotated @Parameter inputs are available for this test.",
+                    "No Parameters",
+                    JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+
+        BindingReviewTableModel.ParameterSettings current = reviewModel.settingsFor(selectedReview.test().id());
+        JDialog dialog = new JDialog(frame, "Parameters: " + selectedReview.test().label(), true);
+        dialog.setLayout(new BorderLayout(8, 8));
+
+        JCheckBox useDefaults = new JCheckBox("Use implementation defaults / no user overrides", current.useDefaults());
+        JPanel fields = new JPanel();
+        fields.setLayout(new BoxLayout(fields, BoxLayout.Y_AXIS));
+        Map<String, JTextField> parameterFields = new LinkedHashMap<>();
+        for (org.filteredpush.bdq_workbench.model.MethodParameter parameter : configurableParameters) {
+            String name = parameter.source();
+            JTextField field = addField(fields, name, current.parameters().getOrDefault(name, ""));
+            parameterFields.put(name, field);
+        }
+        setParameterFieldState(parameterFields, !useDefaults.isSelected());
+        useDefaults.addActionListener(e -> setParameterFieldState(parameterFields, !useDefaults.isSelected()));
+
+        JButton saveButton = new JButton("Apply");
+        JButton cancelButton = new JButton("Cancel");
+        JPanel controls = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        controls.add(saveButton);
+        controls.add(cancelButton);
+
+        saveButton.addActionListener(e -> {
+            Map<String, String> parameters = new LinkedHashMap<>();
+            if (!useDefaults.isSelected()) {
+                parameterFields.forEach((name, field) -> {
+                    String value = field.getText().trim();
+                    if (!value.isEmpty()) {
+                        parameters.put(name, value);
+                    }
+                });
+            }
+            reviewModel.applyParameterSettings(Map.of(
+                    selectedReview.test().id(),
+                    new BindingReviewTableModel.ParameterSettings(useDefaults.isSelected(), parameters)));
+            PreparedRun rebound = applyParameterEdits(state[0].preparedRun(), reviewModel);
+            updatePreflightUi(
+                    state,
+                    rebound,
+                    bindingGrid,
+                    statusArea,
+                    resultSummaryArea,
+                    startRun,
+                    runWithAvailableOnly,
+                    saveParameters,
+                    loadParameters);
+            dialog.dispose();
+        });
+        cancelButton.addActionListener(e -> dialog.dispose());
+
+        JPanel content = new JPanel(new BorderLayout(8, 8));
+        content.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+        content.add(useDefaults, BorderLayout.NORTH);
+        content.add(new JScrollPane(fields), BorderLayout.CENTER);
+
+        dialog.add(content, BorderLayout.CENTER);
+        dialog.add(controls, BorderLayout.SOUTH);
+        dialog.setSize(560, 320);
+        dialog.setLocationRelativeTo(frame);
+        dialog.setVisible(true);
+    }
+
+    private static void openBindingDebugDialog(JFrame frame, JTable bindingGrid, PreflightState[] state) {
+        if (state[0] == null || !(bindingGrid.getModel() instanceof BindingReviewTableModel reviewModel)) {
+            return;
+        }
+        int viewRow = bindingGrid.getSelectedRow();
+        if (viewRow < 0) {
+            return;
+        }
+        int row = bindingGrid.convertRowIndexToModel(viewRow);
+        BindingReview selectedReview = reviewModel.reviewAt(row);
+        PreparedRun editedRun = applyParameterEdits(state[0].preparedRun(), reviewModel);
+        BindingReview reboundReview = editedRun.bindingResult().reviews().stream()
+                .filter(review -> review.test().id().equals(selectedReview.test().id()))
+                .findFirst()
+                .orElse(selectedReview);
+        ImplementationBinding binding = findBinding(editedRun, reboundReview.test().id());
+
+        JDialog dialog = new JDialog(frame, "Test Debug: " + reboundReview.test().label(), false);
+        dialog.setSize(900, 600);
+        dialog.setLayout(new BorderLayout(8, 8));
+
+        JTextArea detailsArea = new JTextArea(renderBindingReviewDetails(reboundReview, binding));
+        detailsArea.setEditable(false);
+        detailsArea.setLineWrap(true);
+        detailsArea.setWrapStyleWord(true);
+        installTextAreaClipboardSupport(detailsArea);
+
+        JTextArea outputArea = new JTextArea();
+        outputArea.setEditable(false);
+        outputArea.setLineWrap(true);
+        outputArea.setWrapStyleWord(true);
+        installTextAreaClipboardSupport(outputArea);
+        boolean runnableInDialog = binding != null && !BuiltInMeasureSpec.isBuiltIn(binding);
+        outputArea.setText(binding == null
+                ? "No runnable implementation is currently bound for this test.\n"
+                : BuiltInMeasureSpec.isBuiltIn(binding)
+                        ? "This built-in multi-record measure is evaluated during the full run after matching validation responses are available.\n"
+                        : "Use Run Test to execute this binding against each input record in isolation.\n");
+
+        JProgressBar dialogProgress = new JProgressBar(0, Math.max(1, editedRun.dataset().records().size()));
+        dialogProgress.setStringPainted(true);
+        dialogProgress.setVisible(runnableInDialog);
+        dialogProgress.setValue(0);
+        dialogProgress.setString(binding == null
+                ? "No runnable binding"
+                : runnableInDialog
+                        ? "0/" + editedRun.dataset().records().size()
+                        : "Built-in aggregate measure");
+        JPanel controls = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        JButton runButton = new JButton("Run Test");
+        runButton.setEnabled(runnableInDialog);
+        JButton closeButton = new JButton("Close");
+        controls.add(runButton);
+        controls.add(closeButton);
+
+        runButton.addActionListener(e -> runIsolatedBinding(dialog, editedRun, binding, outputArea, dialogProgress, runButton));
+        closeButton.addActionListener(e -> dialog.dispose());
+
+        JSplitPane splitPane = new JSplitPane(
+                JSplitPane.VERTICAL_SPLIT,
+                new JScrollPane(detailsArea),
+                new JScrollPane(outputArea));
+        splitPane.setResizeWeight(0.35d);
+
+        dialog.add(dialogProgress, BorderLayout.NORTH);
+        dialog.add(splitPane, BorderLayout.CENTER);
+        dialog.add(controls, BorderLayout.SOUTH);
+        dialog.setLocationRelativeTo(frame);
+        dialog.setVisible(true);
+    }
+
+    private static void runIsolatedBinding(
+            JDialog dialog,
+            PreparedRun preparedRun,
+            ImplementationBinding binding,
+            JTextArea outputArea,
+            JProgressBar progressBar,
+            JButton runButton) {
+        DiscoveredImplementation implementation;
+        try {
+            implementation = findImplementation(preparedRun, binding);
+        } catch (AppException e) {
+            outputArea.setText("Unable to locate implementation for isolated execution: " + e.getMessage() + "\n");
+            progressBar.setVisible(false);
+            dialog.toFront();
+            return;
+        }
+        ReflectionExecutionAdapter adapter = new ReflectionExecutionAdapter();
+        List<org.filteredpush.bdq_workbench.model.CanonicalRecord> records = preparedRun.dataset().copy().records();
+        outputArea.setText("Running " + binding.testId() + " against " + records.size() + " input record(s).\n\n");
+        runButton.setEnabled(false);
+        progressBar.setMaximum(Math.max(1, records.size()));
+        progressBar.setValue(0);
+        progressBar.setString("0/" + records.size());
+
+        SwingWorker<Void, String> worker = new SwingWorker<>() {
+            @Override
+            protected Void doInBackground() {
+                int completed = 0;
+                for (org.filteredpush.bdq_workbench.model.CanonicalRecord record : records) {
+                    ReflectionExecutionAdapter.ExecutionTrace trace =
+                            adapter.executeWithTrace(record, binding, implementation);
+                    completed++;
+                    publish(renderExecutionTrace(trace, completed, records.size()));
+                    setProgress((int) Math.round((completed * 100.0d) / Math.max(1, records.size())));
+                }
+                return null;
+            }
+
+            @Override
+            protected void process(List<String> chunks) {
+                for (String chunk : chunks) {
+                    outputArea.append(chunk);
+                    outputArea.append("\n");
+                }
+                int processed = Math.min(records.size(), progressBar.getValue() + chunks.size());
+                progressBar.setValue(processed);
+                progressBar.setString(processed + "/" + records.size());
+                outputArea.setCaretPosition(outputArea.getDocument().getLength());
+            }
+
+            @Override
+            protected void done() {
+                runButton.setEnabled(true);
+                progressBar.setValue(records.size());
+                progressBar.setString(records.size() + "/" + records.size());
+                outputArea.append("Isolated test run complete.\n");
+                outputArea.setCaretPosition(outputArea.getDocument().getLength());
+                dialog.toFront();
+            }
+        };
+        worker.execute();
+    }
+
+    private static WorkbenchFacade createFacade(AppConfig config) {
+        return createFacade(config, new ExecutionProgressListener() {
+        });
+    }
+
+    private static WorkbenchFacade createFacade(AppConfig config, ExecutionProgressListener progressListener) {
+        return new WorkbenchFacade(
                 new DefaultIngestService(),
                 new RdfPolicyResolverService(config.useCaseXml(), config.rdfDefinitions()),
                 new ClasspathAnnotationTestDiscoveryService(config.implementationPackages()),
                 new DefaultTestBindingService(),
-                new ParallelPhaseExecutionService(config.threadCount(), new ReflectionExecutionAdapter()),
-                new ReportingService(List.of(new SummaryReportExporter(), new XlsCompatibilityExporter())));
-        return facade.run(config);
+                new ParallelPhaseExecutionService(config.threadCount(), new ReflectionExecutionAdapter(), progressListener),
+                new ReportingService(List.of(
+                        new SummaryReportExporter(),
+                        new DetailedResponseStreamExporter(),
+                        new XlsCompatibilityExporter())));
     }
 
     private static AppConfig buildConfig(
@@ -427,53 +819,58 @@ final class BdqWorkbenchGui {
     }
 
     private static String renderPreflightMessage(PreflightState state) {
-        int policyResolved = state.plan().tests().size();
-        int policyUnresolved = state.plan().unresolvedTests().size();
-        int bindingUnresolved = state.binding().unresolved().size();
-        int runnable = state.binding().bindings().size();
+        int policyResolved = state.preparedRun().plan().tests().size();
+        int policyUnresolved = state.preparedRun().plan().unresolvedTests().size();
+        int bindingUnresolved = state.preparedRun().bindingResult().unresolved().size();
+        int runnable = state.preparedRun().bindingResult().bindings().size();
         int policyTotal = policyResolved + policyUnresolved;
 
         StringBuilder sb = new StringBuilder();
         sb.append("Use case preflight mapping\n");
-        sb.append("Selected use case: ").append(state.plan().useCase().id()).append(" (")
-                .append(state.plan().useCase().label()).append(")\n");
-        sb.append("Selected use case reference: ").append(state.plan().useCase().policyId()).append('\n');
+        sb.append("Selected use case: ").append(state.preparedRun().plan().useCase().id()).append(" (")
+                .append(state.preparedRun().plan().useCase().label()).append(")\n");
+        sb.append("Selected use case reference: ").append(state.preparedRun().plan().useCase().policyId()).append('\n');
         sb.append("Policy tests total: ").append(policyTotal).append('\n');
         sb.append("Policy tests resolved from definitions: ").append(policyResolved).append('\n');
         sb.append("Policy tests unresolved in definitions: ").append(policyUnresolved).append('\n');
-        sb.append("Discovered implementation methods: ").append(state.discoveredCount()).append('\n');
+        sb.append("Discovered implementation methods: ").append(state.preparedRun().discovered().size()).append('\n');
         sb.append("Runnable mapped tests: ").append(runnable).append('\n');
         sb.append("Tests without discovered implementation: ").append(bindingUnresolved).append("\n\n");
 
         Map<String, String> labelsByTestId = new LinkedHashMap<>();
-        state.plan().tests().forEach(t -> labelsByTestId.put(t.id(), t.label()));
-        state.plan().unresolvedTests().forEach(t -> labelsByTestId.put(t.id(), t.label()));
-        state.binding().unresolved().forEach(t -> labelsByTestId.put(t.id(), t.label()));
+        state.preparedRun().plan().tests().forEach(t -> labelsByTestId.put(t.id(), t.label()));
+        state.preparedRun().plan().unresolvedTests().forEach(t -> labelsByTestId.put(t.id(), t.label()));
+        state.preparedRun().bindingResult().unresolved().forEach(t -> labelsByTestId.put(t.id(), t.label()));
 
-        if (!state.binding().bindings().isEmpty()) {
+        if (!state.preparedRun().bindingResult().bindings().isEmpty()) {
             sb.append("Matched library mappings:\n");
-            state.binding().bindings().forEach(b -> sb.append(" - ")
+            state.preparedRun().bindingResult().bindings().forEach(b -> sb.append(" - ")
                     .append(formatTestIdWithLabel(b.testId(), labelsByTestId.get(b.testId())))
                     .append(" -> ")
                     .append(b.implementationClass())
                     .append("#")
                     .append(b.implementationMethod())
+                    .append(" [")
+                    .append(b.bindingStatus())
+                    .append(", ")
+                    .append(b.methodSelection())
+                    .append("]")
                     .append('\n'));
         }
-        if (!state.plan().unresolvedTests().isEmpty()) {
+        if (!state.preparedRun().plan().unresolvedTests().isEmpty()) {
             sb.append("Unresolved policy definitions:\n");
-            state.plan().unresolvedTests().forEach(t -> sb.append(" - ")
+            state.preparedRun().plan().unresolvedTests().forEach(t -> sb.append(" - ")
                     .append(formatTestIdWithLabel(t.id(), t.label()))
                     .append('\n'));
         }
-        if (!state.binding().unresolved().isEmpty()) {
+        if (!state.preparedRun().bindingResult().unresolved().isEmpty()) {
             sb.append("Unresolved library mappings:\n");
-            state.binding().unresolved().forEach(t -> sb.append(" - ")
+            state.preparedRun().bindingResult().unresolved().forEach(t -> sb.append(" - ")
                     .append(formatTestIdWithLabel(t.id(), t.label()))
                     .append('\n'));
         }
 
-        sb.append("\nNote: multi-record measures need explicit implementation in this framework and are not discovered automatically.\n");
+        sb.append("\nNote: COUNT-based multi-record measures are synthesized from validation response streams; other multi-record measures still need explicit implementation.\n");
         if (!state.isFullyResolved()) {
             sb.append("You can continue with available tests.\n");
         }
@@ -602,6 +999,27 @@ final class BdqWorkbenchGui {
         return null;
     }
 
+    private static String chooseSaveFile(JFrame frame, String title, String defaultFileName) {
+        try {
+            FileDialog dialog = new FileDialog((Frame) SwingUtilities.getWindowAncestor(frame), title, FileDialog.SAVE);
+            dialog.setFile(defaultFileName);
+            dialog.setVisible(true);
+            if (dialog.getFile() != null) {
+                return Path.of(dialog.getDirectory(), dialog.getFile()).toString();
+            }
+        } catch (Exception ignored) {
+            // fall through to JFileChooser
+        }
+        JFileChooser chooser = new JFileChooser();
+        chooser.setDialogTitle(title);
+        chooser.setSelectedFile(new java.io.File(defaultFileName));
+        int result = chooser.showSaveDialog(frame);
+        if (result == JFileChooser.APPROVE_OPTION && chooser.getSelectedFile() != null) {
+            return chooser.getSelectedFile().getAbsolutePath();
+        }
+        return null;
+    }
+
     private static int defaultThreadCount() {
         int cores = Runtime.getRuntime().availableProcessors();
         return cores <= 1 ? 1 : cores - 1;
@@ -695,6 +1113,395 @@ final class BdqWorkbenchGui {
         LOG.info("{}", message);
     }
 
+    private static PreparedRun applyParameterEdits(PreparedRun preparedRun, BindingReviewTableModel reviewModel) {
+        List<TestDefinition> updatedTests = preparedRun.plan().tests().stream()
+                .map(test -> new TestDefinition(
+                        test.id(),
+                        test.label(),
+                        test.type(),
+                        test.phase(),
+                        parameterValuesFor(test, reviewModel.settingsFor(test.id())),
+                        test.metadata()))
+                .toList();
+        TestBindingResult rebound = new DefaultTestBindingService().bind(
+                updatedTests,
+                preparedRun.discovered(),
+                Map.of(),
+                collectAvailableTerms(preparedRun.dataset()));
+        return new PreparedRun(
+                preparedRun.config(),
+                preparedRun.dataset().copy(),
+                preparedRun.plan(),
+                preparedRun.discovered(),
+                rebound);
+    }
+
+    private static Map<String, String> parameterValuesFor(
+            TestDefinition test,
+            BindingReviewTableModel.ParameterSettings settings) {
+        if (settings.useDefaults()) {
+            return Map.of();
+        }
+        return settings.parameters().isEmpty() ? test.parameters() : settings.parameters();
+    }
+
+    private static ImplementationBinding findBinding(PreparedRun preparedRun, String testId) {
+        return preparedRun.bindingResult().bindings().stream()
+                .filter(binding -> binding.testId().equals(testId))
+                .findFirst()
+                .orElse(null);
+    }
+
+    private static DiscoveredImplementation findImplementation(PreparedRun preparedRun, ImplementationBinding binding) {
+        return preparedRun.discovered().stream()
+                .filter(discovered -> discovered.implementationClass().equals(binding.implementationClass())
+                        && discovered.implementationMethod().equals(binding.implementationMethod()))
+                .findFirst()
+                .orElseThrow(() -> new AppException("No discovered implementation found for "
+                        + binding.implementationClass() + "#" + binding.implementationMethod()));
+    }
+
+    private static java.util.Set<String> collectAvailableTerms(org.filteredpush.bdq_workbench.model.RecordDataset dataset) {
+        java.util.Set<String> terms = new java.util.LinkedHashSet<>();
+        dataset.records().forEach(record -> terms.addAll(record.terms().keySet()));
+        return terms;
+    }
+
+    private static String renderProgressSnapshot(ExecutionProgressSnapshot snapshot) {
+        return "Execution progress\n"
+                + "Phase: " + snapshot.phase() + "\n"
+                + "Queued: " + snapshot.queued() + "\n"
+                + "Running: " + snapshot.running() + "\n"
+                + "Completed: " + snapshot.completed() + "/" + snapshot.total() + "\n"
+                + "Status counts: " + snapshot.statusCounts() + "\n"
+                + "Result counts: " + snapshot.resultCounts() + "\n";
+    }
+
+    private static String renderResultSummary(ExecutionSummary summary) {
+        return SummaryReportExporter.renderSummaryText("Results summary", summary)
+                + "Saved files: reports/bdq-report-summary.txt, reports/bdq-report-response-stream.txt, reports/bdq-report-xls-hook.txt\n";
+    }
+
+    private static void updateBindingGridExecutionOutputs(JTable bindingGrid, ExecutionSummary summary) {
+        if (!(bindingGrid.getModel() instanceof BindingReviewTableModel reviewModel)) {
+            return;
+        }
+        Map<String, BindingReviewTableModel.PhaseExecutionOutput> outputs = new LinkedHashMap<>();
+        summary.multiRecordMeasureResponses().stream()
+                .filter(response -> response.testType() == TestType.MEASURE)
+                .collect(java.util.stream.Collectors.groupingBy(
+                        Response::testId,
+                        LinkedHashMap::new,
+                        java.util.stream.Collectors.toList()))
+                .forEach((testId, responses) -> {
+                    Map<Phase, Response> byPhase = responses.stream().collect(java.util.stream.Collectors.toMap(
+                            Response::phase,
+                            response -> response,
+                            (left, right) -> right,
+                            LinkedHashMap::new));
+                    outputs.put(testId, new BindingReviewTableModel.PhaseExecutionOutput(
+                            formatMeasureGridOutput(byPhase.get(Phase.PRE_AMENDMENT)),
+                            formatMeasureGridOutput(byPhase.get(Phase.POST_AMENDMENT))));
+                });
+        reviewModel.applyExecutionOutputs(outputs);
+    }
+
+    private static String formatMeasureGridOutput(Response response) {
+        if (response == null) {
+            return "";
+        }
+        String kind = response.parameters().get(BuiltInMeasureSpec.KIND_KEY);
+        if ("COUNT".equals(kind)) {
+            String count = response.parameters().getOrDefault(BuiltInMeasureSpec.MATCHING_COUNT_KEY, response.responseResult());
+            String percentage = response.parameters().get(BuiltInMeasureSpec.PERCENTAGE_KEY);
+            return percentage == null || percentage.isBlank()
+                    ? count
+                    : count + " (" + percentage + "%)";
+        }
+        return response.responseResult() == null || response.responseResult().isBlank()
+                ? formatStructuredResponse(response)
+                : response.responseResult();
+    }
+
+    private static String renderBindingReviewDetails(BindingReview review, ImplementationBinding binding) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Selected test\n");
+        sb.append("Label: ").append(review.test().label()).append('\n');
+        sb.append("Id: ").append(review.test().id()).append('\n');
+        sb.append("Type: ").append(review.test().type()).append('\n');
+        sb.append("Implementation status: ").append(review.implementationStatus()).append('\n');
+        sb.append("Binding status: ").append(review.bindingStatus()).append('\n');
+        sb.append("Parameterization: ").append(describeParameterization(review.parameterizationCapability())).append('\n');
+        sb.append("Chosen method: ").append(review.chosenImplementationMethod()).append('\n');
+        sb.append("Use defaults: ").append(review.usingDefaultParameters()).append('\n');
+        sb.append("Parameter values: ").append(review.parameterValues()).append("\n\n");
+        sb.append("Diagnostics:\n");
+        review.diagnostics().forEach(diagnostic -> sb.append(" - ").append(diagnostic).append('\n'));
+        if (binding != null) {
+            sb.append("\nResolved parameter bindings:\n");
+            binding.parameterBindings().forEach(parameter -> sb.append(" - ")
+                    .append(parameter.parameter().name())
+                    .append(" [")
+                    .append(parameter.parameter().role())
+                    .append("] from ")
+                    .append(parameter.resolvedSource())
+                    .append(" :: ")
+                    .append(parameter.reason())
+                    .append('\n'));
+        }
+        return sb.toString();
+    }
+
+    private static String renderExecutionTrace(
+            ReflectionExecutionAdapter.ExecutionTrace trace,
+            int index,
+            int total) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Record ").append(index).append('/').append(total).append(": ")
+                .append(trace.response().recordId()).append('\n');
+        sb.append("Bindings:\n");
+        trace.argumentTraces().forEach(argument -> sb.append(" - ")
+                .append(argument.parameterName())
+                .append(" [")
+                .append(argument.role())
+                .append("] source=")
+                .append(argument.source())
+                .append(", raw=")
+                .append(argument.rawValue())
+                .append(", converted=")
+                .append(argument.convertedValue())
+                .append(", note=")
+                .append(argument.reason())
+                .append('\n'));
+        sb.append("Raw return type: ").append(trace.rawReturnType()).append('\n');
+        sb.append("Raw return value: ").append(trace.rawReturnValue()).append('\n');
+        String responseText = formatStructuredResponse(trace.response());
+        if (responseText != null) {
+            sb.append("Response: ").append(responseText).append('\n');
+        }
+        if (trace.response().comment() != null) {
+            sb.append("Comment: ").append(trace.response().comment()).append('\n');
+        }
+        if (!trace.response().amendments().isEmpty()) {
+            sb.append("Amendments: ").append(trace.response().amendments()).append('\n');
+        }
+        return sb.toString();
+    }
+
+    private static void updatePreflightUi(
+            PreflightState[] state,
+            PreparedRun preparedRun,
+            JTable bindingGrid,
+            JTextArea statusArea,
+            JTextArea resultSummaryArea,
+            JButton startRun,
+            JCheckBox runWithAvailableOnly,
+            JButton saveParameters,
+            JButton loadParameters) {
+        state[0] = new PreflightState(preparedRun);
+        LOG.debug("Preflight mapping complete: {} runnable, {} unresolved",
+                state[0].preparedRun().bindingResult().bindings().size(),
+                state[0].preparedRun().bindingResult().unresolved().size());
+        setStatus(statusArea, renderPreflightMessage(state[0]));
+        bindingGrid.setModel(new BindingReviewTableModel(state[0].preparedRun().bindingResult().reviews()));
+        configureBindingGrid(bindingGrid);
+        resultSummaryArea.setText("Parameter review ready. Edit parameter values, use the row popup, or save/load settings before starting the run.");
+        boolean complete = state[0].isFullyResolved();
+        if (!complete && !runWithAvailableOnly.isSelected()) {
+            appendStatus(statusArea, "\nRun is blocked until unresolved tests are handled.\n");
+            startRun.setEnabled(false);
+        } else {
+            startRun.setText(complete ? "Start Run" : "Start Available Tests");
+            startRun.setEnabled(true);
+        }
+        boolean hasReviews = !preparedRun.bindingResult().reviews().isEmpty();
+        saveParameters.setEnabled(hasReviews);
+        loadParameters.setEnabled(hasReviews);
+    }
+
+    private static void installTextAreaClipboardSupport(JTextArea textArea) {
+        JPopupMenu popupMenu = new JPopupMenu();
+        JMenuItem copyItem = new JMenuItem("Copy");
+        copyItem.addActionListener(e -> textArea.copy());
+        JMenuItem selectAllItem = new JMenuItem("Select All");
+        selectAllItem.addActionListener(e -> textArea.selectAll());
+        popupMenu.add(copyItem);
+        popupMenu.add(selectAllItem);
+        textArea.setComponentPopupMenu(popupMenu);
+    }
+
+    private static void configureBindingGrid(JTable bindingGrid) {
+        TableCellRenderer booleanRenderer = bindingGrid.getDefaultRenderer(Boolean.class);
+        TableCellRenderer textRenderer = bindingGrid.getDefaultRenderer(Object.class);
+        bindingGrid.getColumnModel().getColumn(6).setCellRenderer((table, value, isSelected, hasFocus, row, column) -> {
+            if (table.getModel() instanceof BindingReviewTableModel reviewModel
+                    && !reviewModel.supportsParameterEditing(table.convertRowIndexToModel(row))) {
+                return textRenderer.getTableCellRendererComponent(table, "", isSelected, hasFocus, row, column);
+            }
+            return booleanRenderer.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
+        });
+    }
+
+    private static List<org.filteredpush.bdq_workbench.model.MethodParameter> configurableParametersFor(
+            PreparedRun preparedRun,
+            BindingReview review,
+            ImplementationBinding binding) {
+        List<org.filteredpush.bdq_workbench.model.MethodParameter> selectedBindingParameters = binding == null
+                ? List.of()
+                : binding.parameterBindings().stream()
+                        .map(org.filteredpush.bdq_workbench.model.BoundMethodParameter::parameter)
+                        .filter(parameter -> parameter.role() == org.filteredpush.bdq_workbench.model.ParameterRole.PARAMETER)
+                        .toList();
+        if (!selectedBindingParameters.isEmpty()) {
+            return selectedBindingParameters;
+        }
+        Map<String, org.filteredpush.bdq_workbench.model.MethodParameter> discoveredParameters = new LinkedHashMap<>();
+        preparedRun.discovered().stream()
+                .filter(DiscoveredImplementation::isParameterized)
+                .filter(discovered -> matchesTestIdentifier(review.test().id(), discovered))
+                .sorted(java.util.Comparator.comparing(DiscoveredImplementation::implementationClass)
+                        .thenComparing(DiscoveredImplementation::implementationMethod))
+                .flatMap(discovered -> discovered.parameters().stream())
+                .filter(parameter -> parameter.role() == org.filteredpush.bdq_workbench.model.ParameterRole.PARAMETER)
+                .forEach(parameter -> discoveredParameters.putIfAbsent(parameter.source(), parameter));
+        return List.copyOf(discoveredParameters.values());
+    }
+
+    private static boolean matchesTestIdentifier(String testId, DiscoveredImplementation discovered) {
+        String normalizedTestId = normalizeTestIdentifier(testId);
+        if (normalizedTestId == null) {
+            return false;
+        }
+        String providedVersion = normalizeTestIdentifier(discovered.providedVersion());
+        if (normalizedTestId.equals(providedVersion)) {
+            return true;
+        }
+        String providedTestId = normalizeTestIdentifier(discovered.providedTestId());
+        if (normalizedTestId.equals(providedTestId)) {
+            return true;
+        }
+        String providesFallbackKey = toProvidesKey(normalizedTestId);
+        return providesFallbackKey != null && providesFallbackKey.equals(providedTestId);
+    }
+
+    private static String normalizeTestIdentifier(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        if (trimmed.isBlank()) {
+            return null;
+        }
+        return trimmed.endsWith("/") ? trimmed.substring(0, trimmed.length() - 1) : trimmed;
+    }
+
+    private static String toProvidesKey(String normalizedId) {
+        if (normalizedId == null) {
+            return null;
+        }
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile(
+                        "([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})")
+                .matcher(normalizedId);
+        return matcher.find() ? matcher.group(1) : null;
+    }
+
+    private static String formatStructuredResponse(Response response) {
+        String responseStatus = response.responseStatus();
+        String responseResult = response.responseResult();
+        if ((responseStatus == null || responseStatus.isBlank())
+                && (responseResult == null || responseResult.isBlank())) {
+            return null;
+        }
+        if (responseStatus == null || responseStatus.isBlank()) {
+            return responseResult;
+        }
+        return responseResult == null || responseResult.isBlank()
+                ? responseStatus
+                : responseStatus + " / " + responseResult;
+    }
+
+    private static String describeParameterization(org.filteredpush.bdq_workbench.model.ParameterizationCapability capability) {
+        return capability == org.filteredpush.bdq_workbench.model.ParameterizationCapability.BOTH
+                ? "PARAMETERIZED_VERSION_AVAILABLE"
+                : capability.name();
+    }
+
+    private static void setParameterFieldState(Map<String, JTextField> parameterFields, boolean enabled) {
+        parameterFields.values().forEach(field -> field.setEnabled(enabled));
+    }
+
+    private static void saveParameterSettings(JFrame frame, JTable bindingGrid) {
+        if (!(bindingGrid.getModel() instanceof BindingReviewTableModel reviewModel)) {
+            return;
+        }
+        String path = chooseSaveFile(frame, "Save parameter settings", "bdq-parameter-settings.json");
+        if (path == null) {
+            return;
+        }
+        try {
+            writeParameterSettings(Path.of(path), reviewModel.parameterSettings());
+        } catch (IOException e) {
+            JOptionPane.showMessageDialog(
+                    frame,
+                    "Unable to save parameter settings: " + e.getMessage(),
+                    "Save failed",
+                    JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    private static void loadParameterSettings(
+            JFrame frame,
+            JTable bindingGrid,
+            PreflightState[] state,
+            JTextArea statusArea,
+            JTextArea resultSummaryArea,
+            JButton startRun,
+            JCheckBox runWithAvailableOnly,
+            JButton saveParameters,
+            JButton loadParameters) {
+        if (state[0] == null || !(bindingGrid.getModel() instanceof BindingReviewTableModel reviewModel)) {
+            return;
+        }
+        String path = chooseFile(frame, "Load parameter settings");
+        if (path == null) {
+            return;
+        }
+        try {
+            Map<String, BindingReviewTableModel.ParameterSettings> settings = readParameterSettings(Path.of(path));
+            reviewModel.applyParameterSettings(settings);
+            PreparedRun rebound = applyParameterEdits(state[0].preparedRun(), reviewModel);
+            updatePreflightUi(
+                    state,
+                    rebound,
+                    bindingGrid,
+                    statusArea,
+                    resultSummaryArea,
+                    startRun,
+                    runWithAvailableOnly,
+                    saveParameters,
+                    loadParameters);
+        } catch (IOException e) {
+            JOptionPane.showMessageDialog(
+                    frame,
+                    "Unable to load parameter settings: " + e.getMessage(),
+                    "Load failed",
+                    JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    private static void writeParameterSettings(
+            Path path,
+            Map<String, BindingReviewTableModel.ParameterSettings> settings) throws IOException {
+        OBJECT_MAPPER.writerWithDefaultPrettyPrinter().writeValue(path.toFile(), settings);
+    }
+
+    private static Map<String, BindingReviewTableModel.ParameterSettings> readParameterSettings(Path path) throws IOException {
+        return OBJECT_MAPPER.readValue(
+                path.toFile(),
+                new TypeReference<LinkedHashMap<String, BindingReviewTableModel.ParameterSettings>>() {
+                });
+    }
+
     private record UseCaseChoice(String id, String label) {
         @Override
         public String toString() {
@@ -705,9 +1512,10 @@ final class BdqWorkbenchGui {
     private record PickerField(JTextField field, JButton button) {
     }
 
-    private record PreflightState(AppConfig config, ExecutionPlan plan, int discoveredCount, TestBindingResult binding) {
+    private record PreflightState(PreparedRun preparedRun) {
         boolean isFullyResolved() {
-            return plan.unresolvedTests().isEmpty() && binding.unresolved().isEmpty();
+            return preparedRun.plan().unresolvedTests().isEmpty()
+                    && preparedRun.bindingResult().unresolved().isEmpty();
         }
     }
 }

@@ -3,4 +3,5 @@
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 
 <urn:policy:1> bdq:hasTest <urn:test:validate> .
-<urn:test:validate> rdfs:label "Validate occurrence id" .
+<urn:test:validate> a bdq:Validation ;
+    rdfs:label "Validate occurrence id" .
