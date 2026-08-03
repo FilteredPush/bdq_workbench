@@ -1,3 +1,24 @@
+/** BdqWorkbenchGui.java
+ *
+ * Swing desktop GUI for the BDQ Workbench: collects startup parameters (dataset, use case,
+ * test definitions, discovery packages, thread count), previews the resulting test/binding
+ * plan, and runs and monitors execution.
+ *
+ * Copyright 2026 President and Fellows of Harvard College
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ */
 package org.filteredpush.bdq_workbench.app;
 
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -65,7 +86,25 @@ import org.filteredpush.bdq_workbench.test_discovery.TestBindingResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/** Desktop launcher for collecting startup parameters and monitoring execution progress. */
+/**
+ * Swing desktop presentation layer for the BDQ Workbench.
+ *
+ * <p>This is a non-instantiable, static-method-only class (see {@link #launch()}) that builds
+ * and wires the entire single-window Swing UI: a "setup" card where the user picks a dataset,
+ * use case, test definitions, discovery packages, and thread count, and a "monitor" card where
+ * the resulting preflight binding review is inspected/edited and the run is started and its
+ * progress observed.
+ *
+ * <p>Internally the class delegates all actual work to {@link WorkbenchFacade}: it builds an
+ * {@link org.filteredpush.bdq_workbench.model.AppConfig} from the current UI field values (see
+ * {@link #buildConfig}), calls {@link WorkbenchFacade#prepare(AppConfig)} to obtain a
+ * {@link PreparedRun} for preflight review, and calls
+ * {@link WorkbenchFacade#runPrepared(PreparedRun)} (via {@link #runWorkbench}) to execute it,
+ * always off the Swing event dispatch thread using a {@link javax.swing.SwingWorker}. The class
+ * has no public API beyond {@link #launch()}; everything else is private, static helper methods
+ * that either construct/lay out a piece of the UI or implement the behavior triggered by a
+ * button, menu item, or other user action.
+ */
 final class BdqWorkbenchGui {
     private static final Logger LOG = LoggerFactory.getLogger(BdqWorkbenchGui.class);
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
@@ -74,9 +113,17 @@ final class BdqWorkbenchGui {
     private static final String DEFAULT_TEST_DEFINITIONS_SOURCE = "https://bdq.tdwg.org/draft/dist/bdqtest.ttl";
     private static final String DEFAULT_ONTOLOGY_SOURCE = "https://bdq.tdwg.org/draft/vocabulary/bdqffdq.ttl";
 
+    /** Utility class; not instantiable. */
     private BdqWorkbenchGui() {
     }
 
+    /**
+     * Application entry point for the desktop GUI. Loads default {@link AppConfig} values (from
+     * system properties/environment, via {@link ConfigLoader}), builds the main window on the
+     * Swing event dispatch thread, and shows it. Startup failures are logged and reported to the
+     * user in a dialog rather than propagated, since there is no console the user is expected to
+     * be watching.
+     */
     static void launch() {
         LOG.debug("Scheduling BDQ Workbench GUI startup");
         SwingUtilities.invokeLater(() -> {
@@ -96,6 +143,16 @@ final class BdqWorkbenchGui {
         });
     }
 
+    /**
+     * Builds the main application window: the "setup" card (dataset/use case/advanced options
+     * form) and "monitor" card (status log, binding review grid, result summary, and progress
+     * bar), swapped via a {@link CardLayout}, plus all button/menu action wiring that connects
+     * user input to preflight preparation and execution of the workbench run.
+     *
+     * @param defaults initial field values (dataset path, use case ID, discovery packages,
+     *     thread count) loaded before the window is shown
+     * @return the fully constructed, not-yet-visible application frame
+     */
     private static JFrame createFrame(AppConfig defaults) {
         JFrame frame = new JFrame("BDQ Workbench");
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
@@ -443,6 +500,18 @@ final class BdqWorkbenchGui {
         return frame;
     }
 
+    /**
+     * Executes {@code preparedRun} via a fresh {@link WorkbenchFacade}, forwarding execution
+     * progress events to {@code tracker} and pushing the resulting snapshot to
+     * {@code progressConsumer} after every phase-start, response, and phase-completion event so
+     * the caller (typically the Start Run button's background worker) can update the progress
+     * bar and status text as the run proceeds.
+     *
+     * @param preparedRun the dataset, plan, and bindings to execute
+     * @param tracker accumulates progress events into a displayable {@link ExecutionProgressSnapshot}
+     * @param progressConsumer callback invoked with the latest snapshot after each progress event
+     * @return the summary of the completed execution
+     */
     private static ExecutionSummary runWorkbench(
             PreparedRun preparedRun,
             ExecutionProgressTracker tracker,
@@ -468,6 +537,22 @@ final class BdqWorkbenchGui {
         return facade.runPrepared(preparedRun);
     }
 
+    /**
+     * Attaches a right-click popup menu ("Set Parameters...", "Inspect / Run Test") to the
+     * binding review grid, and a mouse listener that selects the clicked row before showing the
+     * popup and hides/disables the "Set Parameters..." item for tests that do not support
+     * parameter editing.
+     *
+     * @param frame owner frame for dialogs opened from the popup items
+     * @param bindingGrid the binding review table the popup is attached to
+     * @param state holder for the current {@link PreflightState}, read by the popup actions
+     * @param statusArea status log updated after edits made via the popup
+     * @param resultSummaryArea result summary area reset after edits made via the popup
+     * @param startRun re-enabled/relabeled after parameter edits change resolution status
+     * @param runWithAvailableOnly whether the run may proceed with unresolved tests
+     * @param saveParameters enabled state refreshed after edits
+     * @param loadParameters enabled state refreshed after edits
+     */
     private static void installBindingDebugPopup(
             JFrame frame,
             JTable bindingGrid,
@@ -523,6 +608,23 @@ final class BdqWorkbenchGui {
         });
     }
 
+    /**
+     * Handles "Set Parameters..." from the binding grid popup: builds and shows a modal dialog
+     * listing the currently selected test's configurable {@code @Parameter} inputs (or an
+     * informational dialog if it has none), and on "Apply" stores the entered values (or
+     * "use implementation defaults") back into the binding review model, rebinds, and refreshes
+     * the preflight UI to reflect the change.
+     *
+     * @param frame owner frame for the dialog
+     * @param bindingGrid the binding review table the selected row is read from
+     * @param state holder for the current {@link PreflightState}
+     * @param statusArea status log refreshed after applying parameter edits
+     * @param resultSummaryArea result summary area refreshed after applying parameter edits
+     * @param startRun re-enabled/relabeled after applying parameter edits
+     * @param runWithAvailableOnly whether the run may proceed with unresolved tests
+     * @param saveParameters enabled state refreshed after applying parameter edits
+     * @param loadParameters enabled state refreshed after applying parameter edits
+     */
     private static void openParameterDialog(
             JFrame frame,
             JTable bindingGrid,
@@ -617,6 +719,17 @@ final class BdqWorkbenchGui {
         dialog.setVisible(true);
     }
 
+    /**
+     * Handles "Inspect / Run Test" from the binding grid popup: builds and shows a non-modal
+     * dialog with the selected test's binding details (see {@link #renderBindingReviewDetails})
+     * and a "Run Test" button that executes the bound implementation against every input record
+     * in isolation (see {@link #runIsolatedBinding}), for tests with a runnable, non-built-in
+     * implementation.
+     *
+     * @param frame owner frame for the dialog
+     * @param bindingGrid the binding review table the selected row is read from
+     * @param state holder for the current {@link PreflightState}
+     */
     private static void openBindingDebugDialog(JFrame frame, JTable bindingGrid, PreflightState[] state) {
         if (state[0] == null || !(bindingGrid.getModel() instanceof BindingReviewTableModel reviewModel)) {
             return;
@@ -688,6 +801,19 @@ final class BdqWorkbenchGui {
         dialog.setVisible(true);
     }
 
+    /**
+     * Handles the "Run Test" button of the test debug dialog: runs the given binding's
+     * implementation against every record of {@code preparedRun}'s dataset, one at a time, on a
+     * background {@link SwingWorker}, streaming a rendered {@link ReflectionExecutionAdapter.ExecutionTrace}
+     * for each record to {@code outputArea} and advancing {@code progressBar} as records complete.
+     *
+     * @param dialog the debug dialog, brought back to front once the run completes
+     * @param preparedRun supplies the dataset records to execute against
+     * @param binding the implementation binding to invoke
+     * @param outputArea receives the per-record execution trace text
+     * @param progressBar advanced as records are completed
+     * @param runButton disabled while running, re-enabled on completion
+     */
     private static void runIsolatedBinding(
             JDialog dialog,
             PreparedRun preparedRun,
@@ -751,11 +877,28 @@ final class BdqWorkbenchGui {
         worker.execute();
     }
 
+    /**
+     * Builds a {@link WorkbenchFacade} for {@code config} with no progress reporting, used for
+     * preflight preparation where execution progress is not relevant.
+     *
+     * @param config application configuration to wire the facade's services from
+     * @return a facade ready to prepare or run {@code config}
+     */
     private static WorkbenchFacade createFacade(AppConfig config) {
         return createFacade(config, new ExecutionProgressListener() {
         });
     }
 
+    /**
+     * Builds a {@link WorkbenchFacade} wired with the standard set of services (ingest, RDF
+     * policy resolution, classpath test discovery, default test binding, parallel-phase
+     * execution, and the summary/detailed/xls-compatibility report exporters) for {@code config}.
+     *
+     * @param config application configuration specifying RDF sources, dataset, discovery
+     *     packages, and thread count
+     * @param progressListener notified of phase/response progress during execution
+     * @return a facade ready to prepare and run {@code config}
+     */
     private static WorkbenchFacade createFacade(AppConfig config, ExecutionProgressListener progressListener) {
         return new WorkbenchFacade(
                 new DefaultIngestService(),
@@ -769,6 +912,24 @@ final class BdqWorkbenchGui {
                         new XlsCompatibilityExporter())));
     }
 
+    /**
+     * Assembles an {@link AppConfig} from the current setup form field values: resolves (and
+     * caches locally, via {@code resolver}) the use case, test definitions, and ontology sources,
+     * appends any additional test definition sources, and falls back to {@code defaults}'
+     * discovery packages when none are specified.
+     *
+     * @param dataset dataset file path field value
+     * @param selectedUseCaseId ID of the use case chosen in the combo box
+     * @param useCaseSource use case RDF file/URL field value
+     * @param testDefinitionsSource primary test definitions file/URL field value
+     * @param additionalTestDefinitions comma-separated extra test definition files/URLs
+     * @param ontologySource BDQ FFDQ ontology file/URL field value
+     * @param discoveryPackages comma-separated implementation discovery packages
+     * @param threads thread count field value
+     * @param resolver resolves and caches remote/local resource paths
+     * @param defaults fallback values (currently just discovery packages) used when a field is blank
+     * @return the assembled configuration, ready for {@link WorkbenchFacade#prepare(AppConfig)}
+     */
     private static AppConfig buildConfig(
             String dataset,
             String selectedUseCaseId,
@@ -806,6 +967,13 @@ final class BdqWorkbenchGui {
                 parseThreads(threads));
     }
 
+    /**
+     * Parses the thread-count field value, rejecting non-numeric or non-positive values.
+     *
+     * @param raw the thread count field's text
+     * @return the parsed thread count
+     * @throws AppException if {@code raw} is not a whole number or is less than 1
+     */
     private static int parseThreads(String raw) {
         try {
             int parsed = Integer.parseInt(raw);
@@ -818,6 +986,14 @@ final class BdqWorkbenchGui {
         }
     }
 
+    /**
+     * Renders the human-readable preflight summary shown in the status area after a "Setup
+     * Tests" run: selected use case, policy/binding resolution counts, matched library mappings,
+     * and any unresolved policy definitions or library mappings.
+     *
+     * @param state the completed preflight result to summarize
+     * @return the multi-line preflight summary text
+     */
     private static String renderPreflightMessage(PreflightState state) {
         int policyResolved = state.preparedRun().plan().tests().size();
         int policyUnresolved = state.preparedRun().plan().unresolvedTests().size();
@@ -884,6 +1060,18 @@ final class BdqWorkbenchGui {
         return id + " (" + label + ")";
     }
 
+    /**
+     * Handles "Load use cases" (and the initial load at startup): resolves {@code source} to a
+     * local file (caching remote resources via {@code resolver}), parses its use cases, repopulates
+     * {@code combo} with one entry per use case, selects {@code defaultUseCaseId} if present
+     * (otherwise the first entry), and reports the outcome in {@code loadStatus}.
+     *
+     * @param source use case RDF file path or URL
+     * @param resolver resolves and caches remote/local resource paths
+     * @param combo the use case selection combo box, repopulated on success
+     * @param loadStatus status text area updated with the load result or error
+     * @param defaultUseCaseId use case ID to preselect if present among the loaded use cases
+     */
     private static void loadUseCasesIntoCombo(
             String source,
             CachedResourceResolver resolver,
@@ -917,6 +1105,18 @@ final class BdqWorkbenchGui {
         }
     }
 
+    /**
+     * Handles "Load tests" (and the initial load at startup): resolves the primary and any
+     * additional test definition sources to local files (caching remote resources via
+     * {@code resolver}), summarizes each file's use case/policy/test counts via
+     * {@link RdfPolicyResolverService#summarizeDefinitionSources}, and reports the per-file and
+     * total counts (or an error) in {@code loadStatus}.
+     *
+     * @param testDefinitionsSource primary test definitions file/URL field value
+     * @param additionalTestDefinitions comma-separated extra test definition files/URLs
+     * @param resolver resolves and caches remote/local resource paths
+     * @param loadStatus status text area updated with the load result or error
+     */
     private static void loadTestDefinitions(
             String testDefinitionsSource,
             String additionalTestDefinitions,
@@ -980,6 +1180,14 @@ final class BdqWorkbenchGui {
         return selected instanceof UseCaseChoice choice ? choice.id() : "";
     }
 
+    /**
+     * Prompts the user to pick a file to open, preferring the native AWT {@link FileDialog} and
+     * falling back to a {@link JFileChooser} if the native dialog cannot be used.
+     *
+     * @param frame owner frame for the dialog
+     * @param title dialog title
+     * @return the selected file's absolute path, or {@code null} if the user cancelled
+     */
     private static String chooseFile(JFrame frame, String title) {
         try {
             FileDialog dialog = new FileDialog((Frame) SwingUtilities.getWindowAncestor(frame), title, FileDialog.LOAD);
@@ -999,6 +1207,16 @@ final class BdqWorkbenchGui {
         return null;
     }
 
+    /**
+     * Prompts the user to pick a destination file to save to, preferring the native AWT
+     * {@link FileDialog} and falling back to a {@link JFileChooser} if the native dialog cannot
+     * be used.
+     *
+     * @param frame owner frame for the dialog
+     * @param title dialog title
+     * @param defaultFileName suggested file name
+     * @return the selected destination file's absolute path, or {@code null} if the user cancelled
+     */
     private static String chooseSaveFile(JFrame frame, String title, String defaultFileName) {
         try {
             FileDialog dialog = new FileDialog((Frame) SwingUtilities.getWindowAncestor(frame), title, FileDialog.SAVE);
@@ -1025,12 +1243,25 @@ final class BdqWorkbenchGui {
         return cores <= 1 ? 1 : cores - 1;
     }
 
+    /**
+     * Handles the "Quit" buttons: disposes the main frame and terminates the JVM.
+     *
+     * @param frame the main application frame to dispose
+     */
     private static void exitApplication(JFrame frame) {
         LOG.info("Shutting down BDQ Workbench GUI");
         frame.dispose();
         System.exit(0);
     }
 
+    /**
+     * Builds a labeled text field row (label west, field center) and appends it to {@code panel}.
+     *
+     * @param panel panel the row is added to
+     * @param label label text shown to the left of the field
+     * @param defaultValue initial field text, or {@code ""} if {@code null}
+     * @return the created text field
+     */
     private static JTextField addField(JPanel panel, String label, String defaultValue) {
         JPanel row = new JPanel(new BorderLayout(8, 8));
         row.add(new JLabel(label), BorderLayout.WEST);
@@ -1041,6 +1272,17 @@ final class BdqWorkbenchGui {
         return field;
     }
 
+    /**
+     * Builds a labeled text field row with a trailing "Browse..." button (label west, field
+     * center, button east) that opens a file chooser and populates the field, and appends it to
+     * {@code panel}.
+     *
+     * @param panel panel the row is added to
+     * @param frame owner frame for the file chooser dialog
+     * @param label label text shown to the left of the field, also used as the chooser's title
+     * @param defaultValue initial field text, or {@code ""} if {@code null}
+     * @return the created field and browse button, paired for later reference
+     */
     private static PickerField addPickerField(JPanel panel, JFrame frame, String label, String defaultValue) {
         JPanel row = new JPanel(new BorderLayout(8, 8));
         row.add(new JLabel(label), BorderLayout.WEST);
@@ -1059,6 +1301,13 @@ final class BdqWorkbenchGui {
         return new PickerField(field, button);
     }
 
+    /**
+     * Builds a labeled combo box row (label west, combo center) and appends it to {@code panel}.
+     *
+     * @param panel panel the row is added to
+     * @param label label text shown to the left of the combo box
+     * @param combo the combo box to place in the row
+     */
     private static void addComboRow(JPanel panel, String label, JComboBox<UseCaseChoice> combo) {
         JPanel row = new JPanel(new BorderLayout(8, 8));
         row.add(new JLabel(label), BorderLayout.WEST);
@@ -1067,6 +1316,16 @@ final class BdqWorkbenchGui {
         panel.add(row);
     }
 
+    /**
+     * Derives a stable, filesystem-safe cache file name for a resource source (URL or local
+     * path): extracts the base file name (from the URI path if {@code source} parses as a URI,
+     * otherwise from the local path), strips its extension, sanitizes it to lowercase
+     * alphanumerics/{@code ._-}, and appends a hash of the full source plus the original (or a
+     * default {@code .rdf}) extension so distinct sources with the same base name don't collide.
+     *
+     * @param source the resource URL or local path to derive a cache name for
+     * @return the cache file name, e.g. {@code "bdqtest-cached-12345.ttl"}
+     */
     private static String cacheNameFor(String source) {
         String baseName = "resource";
         try {
@@ -1113,6 +1372,17 @@ final class BdqWorkbenchGui {
         LOG.info("{}", message);
     }
 
+    /**
+     * Rebuilds the {@link PreparedRun}'s test bindings after user parameter edits: replaces each
+     * test's parameters with the values currently held in {@code reviewModel} (or its original
+     * parameters if the model has no override), then re-runs {@link DefaultTestBindingService}
+     * against the (unchanged) discovered implementations. Used after every parameter edit and
+     * before starting execution, so the run always reflects the latest edits.
+     *
+     * @param preparedRun the run whose plan/discovered implementations are re-bound
+     * @param reviewModel holds the current per-test parameter settings from the binding grid
+     * @return a new {@link PreparedRun} with re-bound bindings, otherwise unchanged
+     */
     private static PreparedRun applyParameterEdits(PreparedRun preparedRun, BindingReviewTableModel reviewModel) {
         List<TestDefinition> updatedTests = preparedRun.plan().tests().stream()
                 .map(test -> new TestDefinition(
@@ -1152,6 +1422,15 @@ final class BdqWorkbenchGui {
                 .orElse(null);
     }
 
+    /**
+     * Looks up the {@link DiscoveredImplementation} matching a binding's implementation class and
+     * method, for isolated (single-test debug) execution.
+     *
+     * @param preparedRun supplies the discovered implementations to search
+     * @param binding the binding whose implementation is being looked up
+     * @return the matching discovered implementation
+     * @throws AppException if no discovered implementation matches
+     */
     private static DiscoveredImplementation findImplementation(PreparedRun preparedRun, ImplementationBinding binding) {
         return preparedRun.discovered().stream()
                 .filter(discovered -> discovered.implementationClass().equals(binding.implementationClass())
@@ -1167,6 +1446,13 @@ final class BdqWorkbenchGui {
         return terms;
     }
 
+    /**
+     * Renders an {@link ExecutionProgressSnapshot} as the multi-line text shown in the result
+     * summary area while a run is in progress.
+     *
+     * @param snapshot the current execution progress
+     * @return the rendered progress text
+     */
     private static String renderProgressSnapshot(ExecutionProgressSnapshot snapshot) {
         return "Execution progress\n"
                 + "Phase: " + snapshot.phase() + "\n"
@@ -1177,11 +1463,26 @@ final class BdqWorkbenchGui {
                 + "Result counts: " + snapshot.resultCounts() + "\n";
     }
 
+    /**
+     * Renders the final result summary text shown after a run completes: the standard summary
+     * report text plus a note of the saved report file names.
+     *
+     * @param summary the completed execution's summary
+     * @return the rendered result summary text
+     */
     private static String renderResultSummary(ExecutionSummary summary) {
         return SummaryReportExporter.renderSummaryText("Results summary", summary)
                 + "Saved files: reports/bdq-report-summary.txt, reports/bdq-report-response-stream.txt, reports/bdq-report-xls-hook.txt\n";
     }
 
+    /**
+     * After a run completes, pushes each multi-record MEASURE test's pre-/post-amendment results
+     * into the binding review grid's execution output columns, so the grid shows what each
+     * measure computed without requiring the user to open the debug dialog.
+     *
+     * @param bindingGrid the binding review table to update
+     * @param summary the completed execution's summary, supplying multi-record measure responses
+     */
     private static void updateBindingGridExecutionOutputs(JTable bindingGrid, ExecutionSummary summary) {
         if (!(bindingGrid.getModel() instanceof BindingReviewTableModel reviewModel)) {
             return;
@@ -1206,6 +1507,15 @@ final class BdqWorkbenchGui {
         reviewModel.applyExecutionOutputs(outputs);
     }
 
+    /**
+     * Formats a single multi-record measure response for display in the binding grid: for
+     * COUNT-kind built-in measures, renders {@code "<count> (<percentage>%)"} (or just the count
+     * if no percentage is available); otherwise falls back to the raw response result, or a
+     * structured status/result rendering if the result is blank.
+     *
+     * @param response the measure response to format, or {@code null} if none was produced
+     * @return the formatted display text, or {@code ""} if {@code response} is {@code null}
+     */
     private static String formatMeasureGridOutput(Response response) {
         if (response == null) {
             return "";
@@ -1223,6 +1533,15 @@ final class BdqWorkbenchGui {
                 : response.responseResult();
     }
 
+    /**
+     * Renders the details panel of the test debug dialog: the selected test's identity, binding
+     * and implementation status, parameterization capability, chosen method, parameter values,
+     * diagnostics, and (if a binding was found) its resolved per-parameter argument bindings.
+     *
+     * @param review the selected test's binding review
+     * @param binding the resolved implementation binding, or {@code null} if none is bound
+     * @return the rendered details text
+     */
     private static String renderBindingReviewDetails(BindingReview review, ImplementationBinding binding) {
         StringBuilder sb = new StringBuilder();
         sb.append("Selected test\n");
@@ -1252,6 +1571,16 @@ final class BdqWorkbenchGui {
         return sb.toString();
     }
 
+    /**
+     * Renders one record's isolated-execution trace for the test debug dialog's output area: the
+     * record position/ID, each parameter binding's source/raw/converted values and reasoning, the
+     * raw method return type/value, the structured response, and any comment or amendments.
+     *
+     * @param trace the reflection execution adapter's trace of a single record's execution
+     * @param index the 1-based position of this record among those being run
+     * @param total the total number of records being run
+     * @return the rendered trace text for this record
+     */
     private static String renderExecutionTrace(
             ReflectionExecutionAdapter.ExecutionTrace trace,
             int index,
@@ -1288,6 +1617,24 @@ final class BdqWorkbenchGui {
         return sb.toString();
     }
 
+    /**
+     * Applies a newly prepared (or re-bound) run to the monitor UI: stores it as the current
+     * {@link PreflightState}, renders the preflight summary into {@code statusArea}, replaces the
+     * binding grid's model with the new bindings, resets the result summary area, and
+     * enables/labels the "Start Run"/"Start Available Tests" button and the save/load parameter
+     * buttons according to whether every test resolved and bound successfully.
+     *
+     * @param state holder for the current {@link PreflightState}, replaced with one wrapping
+     *     {@code preparedRun}
+     * @param preparedRun the freshly prepared or re-bound run to display
+     * @param bindingGrid the binding review table, given a new model
+     * @param statusArea status log updated with the preflight summary
+     * @param resultSummaryArea result summary area reset to the "ready to review" message
+     * @param startRun enabled/labeled according to resolution completeness
+     * @param runWithAvailableOnly whether the run may proceed with unresolved tests
+     * @param saveParameters enabled if the run has any binding reviews
+     * @param loadParameters enabled if the run has any binding reviews
+     */
     private static void updatePreflightUi(
             PreflightState[] state,
             PreparedRun preparedRun,
@@ -1319,6 +1666,12 @@ final class BdqWorkbenchGui {
         loadParameters.setEnabled(hasReviews);
     }
 
+    /**
+     * Attaches a right-click popup menu ("Copy", "Select All") to a read-only text area, since
+     * plain {@link JTextArea}s have no built-in context menu.
+     *
+     * @param textArea the text area to attach the popup menu to
+     */
     private static void installTextAreaClipboardSupport(JTextArea textArea) {
         JPopupMenu popupMenu = new JPopupMenu();
         JMenuItem copyItem = new JMenuItem("Copy");
@@ -1330,6 +1683,13 @@ final class BdqWorkbenchGui {
         textArea.setComponentPopupMenu(popupMenu);
     }
 
+    /**
+     * Installs a custom cell renderer on the binding grid's "supports parameter editing" boolean
+     * column so that rows for tests which do not support parameter editing render an empty cell
+     * instead of a (misleading, always-false) checkbox.
+     *
+     * @param bindingGrid the binding review table to configure
+     */
     private static void configureBindingGrid(JTable bindingGrid) {
         TableCellRenderer booleanRenderer = bindingGrid.getDefaultRenderer(Boolean.class);
         TableCellRenderer textRenderer = bindingGrid.getDefaultRenderer(Object.class);
@@ -1342,6 +1702,18 @@ final class BdqWorkbenchGui {
         });
     }
 
+    /**
+     * Determines which {@code @Parameter}-role method parameters should be offered for editing
+     * in the "Set Parameters..." dialog for a given test: prefers the parameters already selected
+     * for the current binding, and otherwise falls back to the union of parameters across all
+     * discovered, parameterized implementations that match the test's identifier.
+     *
+     * @param preparedRun supplies the discovered implementations to search when there is no
+     *     current binding
+     * @param review the selected test's binding review, used to match candidate implementations
+     * @param binding the current implementation binding, or {@code null} if none is bound
+     * @return the configurable parameters to show in the dialog, possibly empty
+     */
     private static List<org.filteredpush.bdq_workbench.model.MethodParameter> configurableParametersFor(
             PreparedRun preparedRun,
             BindingReview review,
@@ -1367,6 +1739,16 @@ final class BdqWorkbenchGui {
         return List.copyOf(discoveredParameters.values());
     }
 
+    /**
+     * Checks whether a discovered implementation is associated with the given test ID, matching
+     * against the implementation's declared "provided version" or "provided test ID", or (as a
+     * fallback) a bare UUID extracted from the test ID against the implementation's provided test
+     * ID.
+     *
+     * @param testId the policy test's identifier
+     * @param discovered a candidate discovered implementation
+     * @return {@code true} if {@code discovered} is associated with {@code testId}
+     */
     private static boolean matchesTestIdentifier(String testId, DiscoveredImplementation discovered) {
         String normalizedTestId = normalizeTestIdentifier(testId);
         if (normalizedTestId == null) {
@@ -1395,6 +1777,14 @@ final class BdqWorkbenchGui {
         return trimmed.endsWith("/") ? trimmed.substring(0, trimmed.length() - 1) : trimmed;
     }
 
+    /**
+     * Extracts a bare UUID from a normalized test identifier, for matching against an
+     * implementation's "provides" test ID when the identifier is otherwise namespaced/versioned
+     * differently.
+     *
+     * @param normalizedId the normalized test identifier to search
+     * @return the first UUID found in {@code normalizedId}, or {@code null} if none is present
+     */
     private static String toProvidesKey(String normalizedId) {
         if (normalizedId == null) {
             return null;
@@ -1405,6 +1795,13 @@ final class BdqWorkbenchGui {
         return matcher.find() ? matcher.group(1) : null;
     }
 
+    /**
+     * Formats a response's status and result for display as {@code "<status> / <result>"},
+     * falling back to whichever of the two is non-blank, or {@code null} if both are blank.
+     *
+     * @param response the response to format
+     * @return the formatted status/result text, or {@code null} if the response has neither
+     */
     private static String formatStructuredResponse(Response response) {
         String responseStatus = response.responseStatus();
         String responseResult = response.responseResult();
@@ -1430,6 +1827,13 @@ final class BdqWorkbenchGui {
         parameterFields.values().forEach(field -> field.setEnabled(enabled));
     }
 
+    /**
+     * Handles "Save Parameters...": prompts for a destination file and writes the binding grid's
+     * current per-test parameter settings to it as JSON, reporting any I/O failure in a dialog.
+     *
+     * @param frame owner frame for the save dialog and any error dialog
+     * @param bindingGrid the binding review table whose parameter settings are saved
+     */
     private static void saveParameterSettings(JFrame frame, JTable bindingGrid) {
         if (!(bindingGrid.getModel() instanceof BindingReviewTableModel reviewModel)) {
             return;
@@ -1449,6 +1853,21 @@ final class BdqWorkbenchGui {
         }
     }
 
+    /**
+     * Handles "Load Parameters...": prompts for a JSON settings file, applies its per-test
+     * parameter settings to the binding grid, rebinds, and refreshes the preflight UI to reflect
+     * the loaded settings, reporting any I/O failure in a dialog.
+     *
+     * @param frame owner frame for the open dialog and any error dialog
+     * @param bindingGrid the binding review table the settings are applied to
+     * @param state holder for the current {@link PreflightState}
+     * @param statusArea status log refreshed after loading settings
+     * @param resultSummaryArea result summary area refreshed after loading settings
+     * @param startRun re-enabled/relabeled after loading settings
+     * @param runWithAvailableOnly whether the run may proceed with unresolved tests
+     * @param saveParameters enabled state refreshed after loading settings
+     * @param loadParameters enabled state refreshed after loading settings
+     */
     private static void loadParameterSettings(
             JFrame frame,
             JTable bindingGrid,
@@ -1489,12 +1908,27 @@ final class BdqWorkbenchGui {
         }
     }
 
+    /**
+     * Serializes per-test parameter settings to a JSON file.
+     *
+     * @param path destination file path
+     * @param settings per-test parameter settings, keyed by test ID
+     * @throws IOException if the file cannot be written
+     */
     private static void writeParameterSettings(
             Path path,
             Map<String, BindingReviewTableModel.ParameterSettings> settings) throws IOException {
         OBJECT_MAPPER.writerWithDefaultPrettyPrinter().writeValue(path.toFile(), settings);
     }
 
+    /**
+     * Deserializes per-test parameter settings from a JSON file previously written by
+     * {@link #writeParameterSettings}.
+     *
+     * @param path source file path
+     * @return per-test parameter settings, keyed by test ID
+     * @throws IOException if the file cannot be read or does not contain valid JSON
+     */
     private static Map<String, BindingReviewTableModel.ParameterSettings> readParameterSettings(Path path) throws IOException {
         return OBJECT_MAPPER.readValue(
                 path.toFile(),
@@ -1502,6 +1936,7 @@ final class BdqWorkbenchGui {
                 });
     }
 
+    /** A use case combo box entry; displays as {@code "<label> (<id>)"}. */
     private record UseCaseChoice(String id, String label) {
         @Override
         public String toString() {
@@ -1509,10 +1944,16 @@ final class BdqWorkbenchGui {
         }
     }
 
+    /** A text field paired with its associated "Browse..." button, as built by {@link #addPickerField}. */
     private record PickerField(JTextField field, JButton button) {
     }
 
+    /** The current preflight result being reviewed in the monitor UI. */
     private record PreflightState(PreparedRun preparedRun) {
+        /**
+         * @return {@code true} if every policy test resolved from definitions and was
+         *     successfully bound to a discovered implementation
+         */
         boolean isFullyResolved() {
             return preparedRun.plan().unresolvedTests().isEmpty()
                     && preparedRun.bindingResult().unresolved().isEmpty();
