@@ -586,8 +586,7 @@ final class BdqWorkbenchGui {
      * @param saveParameters enabled state refreshed after edits
      * @param loadParameters enabled state refreshed after edits
      * @param monitorHeader the monitor page's title label, passed through to
-     *     {@link #openParameterDialog} (reset after edits) and read by "Show Test Results" (not
-     *     currently used to decide anything, but consistent with the other popup actions)
+     *     {@link #openParameterDialog} (reset after edits)
      */
     private static void installBindingDebugPopup(
             JFrame frame,
@@ -601,12 +600,13 @@ final class BdqWorkbenchGui {
             JButton loadParameters,
             JLabel monitorHeader) {
         JPopupMenu popupMenu = new JPopupMenu();
-        JMenuItem parameterItem = new JMenuItem("Set Parameters...");
         JMenuItem inspectItem = new JMenuItem("Inspect / Run Test");
+        JMenuItem parameterItem = new JMenuItem("Set Parameters...");
         JMenuItem resultsItem = new JMenuItem("Show Test Results");
-        popupMenu.add(parameterItem);
         popupMenu.add(inspectItem);
+        popupMenu.add(parameterItem);
         popupMenu.add(resultsItem);
+        inspectItem.addActionListener(e -> openBindingDebugDialog(frame, bindingGrid, state));
         parameterItem.addActionListener(e -> openParameterDialog(
                 frame,
                 bindingGrid,
@@ -618,7 +618,6 @@ final class BdqWorkbenchGui {
                 saveParameters,
                 loadParameters,
                 monitorHeader));
-        inspectItem.addActionListener(e -> openBindingDebugDialog(frame, bindingGrid, state));
         resultsItem.addActionListener(e -> openTestResultsDialog(frame, bindingGrid, state));
         bindingGrid.setComponentPopupMenu(popupMenu);
         bindingGrid.addMouseListener(new MouseAdapter() {
@@ -637,14 +636,18 @@ final class BdqWorkbenchGui {
                     return;
                 }
                 int row = bindingGrid.rowAtPoint(e.getPoint());
-                if (row >= 0) {
-                    bindingGrid.setRowSelectionInterval(row, row);
-                    if (bindingGrid.getModel() instanceof BindingReviewTableModel reviewModel) {
-                        boolean parameterized = reviewModel.supportsParameterEditing(bindingGrid.convertRowIndexToModel(row));
-                        parameterItem.setVisible(parameterized);
-                        parameterItem.setEnabled(parameterized);
-                    }
+                if (row < 0) {
+                    return;
                 }
+                bindingGrid.setRowSelectionInterval(row, row);
+                if (bindingGrid.getModel() instanceof BindingReviewTableModel reviewModel) {
+                    boolean parameterized = reviewModel.supportsParameterEditing(bindingGrid.convertRowIndexToModel(row));
+                    parameterItem.setVisible(parameterized);
+                    parameterItem.setEnabled(parameterized);
+                }
+                boolean resultsAvailable = Files.exists(Path.of("reports", "bdq-report-rdf.ttl"));
+                resultsItem.setVisible(resultsAvailable);
+                resultsItem.setEnabled(resultsAvailable);
             }
         });
     }
