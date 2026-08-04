@@ -52,9 +52,12 @@ import org.filteredpush.bdq_workbench.rdf_policy.RdfDefinitionsLoader;
  * {@code bdq-report-rdf.ttl}) into one merged model via {@link RdfDefinitionsLoader#load(List)},
  * then, for a given test, reports what the test does (label, description, dimension, criterion or
  * enhancement, and the information elements it acts upon/consults, from the ratified definition)
- * and how it performed (counts of distinct status/result/comment combinations, and the most
- * frequent observed values of each acted-upon/consulted information element, both broken out by
- * execution phase since the same test can be bound and run in more than one phase).
+ * and how it performed, per execution phase (since the same test can be bound and run in more than
+ * one phase): counts of distinct outcomes — status + result for {@code VALIDATION}/{@code ISSUE}
+ * tests, status alone for {@code AMENDMENT} tests and non-categorical {@code MEASURE} tests, or
+ * status + result for a {@code MEASURE} test whose result is categorical
+ * ({@code COMPLETE}/{@code NOT_COMPLETE}) — and the most frequent observed values of each
+ * acted-upon/consulted information element (see {@link #tallyOutcomes}).
  */
 public class TestResultsSummaryService {
     private static final String BDQFFDQ = "https://rs.tdwg.org/bdqffdq/terms/";
@@ -66,7 +69,7 @@ public class TestResultsSummaryService {
 
     private static final String CHAIN_QUERY = """
             PREFIX bdqffdq: <https://rs.tdwg.org/bdqffdq/terms/>
-            SELECT ?response ?status ?result ?resultValue ?comment ?phase ?record WHERE {
+            SELECT ?response ?status ?result ?phase ?record WHERE {
               ?implementation bdqffdq:producesResponse ?response ;
                               bdqffdq:usesSpecification ?specification .
               ?method bdqffdq:hasSpecification ?specification ;
@@ -74,8 +77,6 @@ public class TestResultsSummaryService {
               FILTER(?forProperty IN (bdqffdq:forValidation, bdqffdq:forIssue, bdqffdq:forMeasure, bdqffdq:forAmendment))
               OPTIONAL { ?response bdqffdq:hasResponseStatus ?status }
               OPTIONAL { ?response bdqffdq:hasResponseResult ?result }
-              OPTIONAL { ?response bdqffdq:hasResponseResultValue ?resultValue }
-              OPTIONAL { ?response bdqffdq:hasResponseComment ?comment }
               OPTIONAL { ?response <https://github.com/FilteredPush/bdq_workbench/terms/phase> ?phase }
               OPTIONAL { ?response bdqffdq:appliesTo ?record }
             }
@@ -144,7 +145,7 @@ public class TestResultsSummaryService {
 
         rowsByPhase.forEach((phase, phaseRows) -> {
             builder.append("Phase: ").append(phase).append(" (").append(phaseRows.size()).append(" responses)\n");
-            appendTopCounts(builder, "  Response status + result + comment", tallyOutcomes(phaseRows));
+            appendTopCounts(builder, "  " + outcomeSectionTitle(testType, phaseRows), tallyOutcomes(testType, phaseRows));
             for (String term : informationElements) {
                 appendTopCounts(builder, "  dwc:" + term + " values", tallyTermValues(phaseRows, term));
             }
@@ -224,14 +225,61 @@ public class TestResultsSummaryService {
         return rows;
     }
 
-    private Map<String, Long> tallyOutcomes(List<ResponseRow> rows) {
+    /**
+     * Tallies responses by outcome, with the fields included depending on test type:
+     * {@code VALIDATION}/{@code ISSUE} always by status + result; {@code AMENDMENT} always by
+     * status alone (its result is a proposed key:value change, not a small controlled vocabulary,
+     * so it isn't meaningful to bucket by); {@code MEASURE} by status alone unless the individual
+     * response returns a categorical {@code COMPLETE}/{@code NOT_COMPLETE} result (see
+     * {@link #isCategorical}), in which case it's included too, same as a validation.
+     *
+     * @param testType the test's type, deciding which fields are included
+     * @param rows the phase's response rows to tally
+     * @return counts keyed by the outcome description, per {@code testType}'s rule
+     */
+    private Map<String, Long> tallyOutcomes(TestType testType, List<ResponseRow> rows) {
         Map<String, Long> counts = new LinkedHashMap<>();
         for (ResponseRow row : rows) {
-            String result = row.result() != null ? localName(row.result()) : row.resultValue();
-            String key = defaulted(localName(row.status())) + " | " + defaulted(result) + " | " + defaulted(row.comment());
+            String status = defaulted(localName(row.status()));
+            String key = includeResultInOutcome(testType, row) ? status + " | " + defaulted(localName(row.result())) : status;
             counts.merge(key, 1L, Long::sum);
         }
         return counts;
+    }
+
+    /**
+     * Titles the outcome section for a phase, matching the fields {@link #tallyOutcomes} actually
+     * includes for at least one of {@code phaseRows} (a {@code MEASURE} phase may be a mix, though
+     * in practice a given test's result convention is consistent within a phase).
+     *
+     * @param testType the test's type
+     * @param phaseRows the phase's response rows
+     * @return {@code "Response status + result"} or {@code "Response status"}
+     */
+    private String outcomeSectionTitle(TestType testType, List<ResponseRow> phaseRows) {
+        boolean includesResult = phaseRows.stream().anyMatch(row -> includeResultInOutcome(testType, row));
+        return includesResult ? "Response status + result" : "Response status";
+    }
+
+    private boolean includeResultInOutcome(TestType testType, ResponseRow row) {
+        return switch (testType) {
+            case VALIDATION, ISSUE -> true;
+            case MEASURE -> isCategorical(row);
+            case AMENDMENT, UNKNOWN -> false;
+        };
+    }
+
+    /**
+     * A {@code MEASURE} response is categorical (as opposed to numeric) exactly when it carries
+     * {@code hasResponseResult} (an object property restricted to {@code COMPLETE}/
+     * {@code NOT_COMPLETE}) rather than {@code hasResponseResultValue} (the numeric literal) — see
+     * {@link RdfResponseExporter#addResult}.
+     *
+     * @param row the response row to inspect
+     * @return {@code true} if this measure response is categorical
+     */
+    private static boolean isCategorical(ResponseRow row) {
+        return row.result() != null;
     }
 
     private Map<String, Long> tallyTermValues(List<ResponseRow> rows, String term) {
@@ -304,13 +352,11 @@ public class TestResultsSummaryService {
     private record TestMetadata(String label, String description, String dimension, String criterion, String enhancement) {
     }
 
-    private record ResponseRow(String status, String result, String resultValue, String comment, String phase, String record) {
+    private record ResponseRow(String status, String result, String phase, String record) {
         private static ResponseRow from(QuerySolution solution) {
             return new ResponseRow(
                     uriOrNull(solution, "status"),
                     uriOrNull(solution, "result"),
-                    literalOrNull(solution, "resultValue"),
-                    literalOrNull(solution, "comment"),
                     literalOrNull(solution, "phase"),
                     uriOrNull(solution, "record"));
         }
