@@ -7,15 +7,18 @@
 @prefix dcterms: <http://purl.org/dc/terms/> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix dwc: <http://rs.tdwg.org/dwc/terms/> .
 
 # Trimmed excerpt of the real, ratified tdwg/bdq bdqtest.ttl (tg2/_review/dist/bdqtest.ttl),
-# kept just large enough to exercise BdqSpecificationIndex's resolution paths: the bare test
-# IRI, its dated/versioned IRI (linked via dcterms:isVersionOf), the ValidationMethod that
-# links the two together, and the Specification it uses.
+# kept just large enough to exercise BdqSpecificationIndex's/TestResultsSummaryService's
+# resolution paths: the bare test IRI, its dated/versioned IRI (linked via dcterms:isVersionOf),
+# the ValidationMethod that links the two together, the Specification it uses, and the
+# ActedUpon information element it declares.
 
 bdqtest:0493bcfb-652e-4d17-815b-b0cce0742fbe-2025-03-07 a bdqffdq:Validation;
   bdqffdq:hasResourceType bdqffdq:SingleRecord;
   bdqffdq:hasDataQualityDimension bdqdim:Conformance;
+  dcterms:description "Is the value of dwc:countryCode a valid ISO 3166-1-alpha-2 country code?";
   bdqffdq:hasCriterion bdqcrit:Standard;
   bdqffdq:hasActedUponInformationElement <urn:uuid:c3620a97-65d6-4f9c-8a03-32e0d240a423>;
   dcterms:issued "2025-03-07"^^xsd:date;
@@ -24,6 +27,12 @@ bdqtest:0493bcfb-652e-4d17-815b-b0cce0742fbe-2025-03-07 a bdqffdq:Validation;
   skos:prefLabel "Validation dwc:countryCode Standard for SingleRecord" .
 
 bdqffdq:Validation rdfs:subClassOf bdqffdq:DataQualityNeed .
+
+<urn:uuid:c3620a97-65d6-4f9c-8a03-32e0d240a423> a bdqffdq:ActedUpon;
+  bdqffdq:composedOf dwc:countryCode;
+  rdfs:label "Information Element ActedUpon dwc:countryCode" .
+
+bdqffdq:ActedUpon rdfs:subClassOf bdqffdq:InformationElement .
 
 <urn:uuid:02f5a440-a473-42cf-a3f1-6c10334d5eb8> a bdqffdq:ValidationMethod;
   bdqffdq:hasSpecification <urn:uuid:01b96157-e4a1-4884-95d7-3bcfc5f3c047>;

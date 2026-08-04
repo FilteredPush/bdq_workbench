@@ -22,10 +22,12 @@ import org.apache.jena.shacl.Shapes;
 import org.apache.jena.shacl.ValidationReport;
 import org.apache.jena.shacl.validation.ReportEntry;
 import org.apache.jena.shacl.validation.Severity;
+import org.filteredpush.bdq_workbench.model.CanonicalRecord;
 import org.filteredpush.bdq_workbench.model.ExecutionSummary;
 import org.filteredpush.bdq_workbench.model.ExecutionSummaryMetadata;
 import org.filteredpush.bdq_workbench.model.OutcomeStatus;
 import org.filteredpush.bdq_workbench.model.Phase;
+import org.filteredpush.bdq_workbench.model.RecordDataset;
 import org.filteredpush.bdq_workbench.model.Response;
 import org.filteredpush.bdq_workbench.model.TestType;
 import org.junit.jupiter.api.Test;
@@ -51,7 +53,9 @@ class RdfResponseExporterTest {
                         amendmentResponse(),
                         measurementResponse(),
                         unableToRunPlaceholder()),
-                new ExecutionSummaryMetadata("urn:usecase:1", "Use Case One", "/tmp/input.csv", 3, 1, Map.of(), Map.of()));
+                new ExecutionSummaryMetadata("urn:usecase:1", "Use Case One", "/tmp/input.csv", 3, 1, Map.of(), Map.of()),
+                new RecordDataset(List.of(new CanonicalRecord(
+                        "record-1", Map.of("dwc:countryCode", "GL", "dwc:country", "Greenland")))));
 
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         exporter.export(summary, output);
@@ -65,6 +69,18 @@ class RdfResponseExporterTest {
         assertThat(exported.contains(null, exported.createProperty("https://rs.tdwg.org/bdqffdq/terms/usesSpecification"),
                 exported.createResource(EXPECTED_SPECIFICATION_IRI)))
                 .as("an Implementation uses the Specification resolved from the loaded RDF definitions")
+                .isTrue();
+
+        assertThat(exported.contains(
+                exported.createResource("urn:bdq-workbench:record:record-1"),
+                exported.createProperty("http://rs.tdwg.org/dwc/terms/countryCode"),
+                "GL"))
+                .as("the record resource carries its dwc:-prefixed term values from the run's dataset")
+                .isTrue();
+
+        assertThat(exported.contains(null, exported.createProperty("https://github.com/FilteredPush/bdq_workbench/terms/phase"),
+                Phase.PRE_AMENDMENT.name()))
+                .as("responses carry a bdqwb:phase literal")
                 .isTrue();
 
         // The exporter deliberately does not duplicate bdqtest.ttl's Method/Specification/

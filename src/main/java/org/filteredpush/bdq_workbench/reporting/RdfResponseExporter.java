@@ -32,6 +32,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 import org.apache.jena.rdf.model.Model;
 import org.apache.jena.rdf.model.ModelFactory;
 import org.apache.jena.rdf.model.Property;
@@ -39,6 +40,7 @@ import org.apache.jena.rdf.model.Resource;
 import org.apache.jena.riot.Lang;
 import org.apache.jena.riot.RDFDataMgr;
 import org.apache.jena.vocabulary.RDF;
+import org.filteredpush.bdq_workbench.model.CanonicalRecord;
 import org.filteredpush.bdq_workbench.model.ExecutionSummary;
 import org.filteredpush.bdq_workbench.model.Response;
 import org.filteredpush.bdq_workbench.model.TestType;
@@ -62,6 +64,12 @@ import org.slf4j.LoggerFactory;
  * a Web Annotation ({@code oa:Annotation}) — {@code bdqffdq:DataQualityReport} is the native,
  * unwrapped container.
  *
+ * <p>Each response's record resource (the object of {@code bdqffdq:appliesTo}) is enriched with
+ * the record's {@code dwc:}-prefixed term values from {@link ExecutionSummary#dataset()}, and each
+ * response carries a {@code bdqwb:phase} literal (a workbench-local extension property, since
+ * execution phase has no equivalent in the ratified ontology) so that a test bound in more than
+ * one phase has its responses distinguishable by phase when queried.
+ *
  * <p>Registered under format {@code "rdf"}, written as Turtle to {@code bdq-report-rdf.ttl} (see
  * {@link #fileExtension()}).
  */
@@ -72,7 +80,17 @@ public class RdfResponseExporter implements ReportExporter {
     private static final String DWC = "http://rs.tdwg.org/dwc/terms/";
     private static final String DCTERMS = "http://purl.org/dc/terms/";
     private static final String XSD = "http://www.w3.org/2001/XMLSchema#";
+
+    /**
+     * Namespace for workbench-local extension properties that have no equivalent in the ratified
+     * bdqffdq ontology (currently just {@code phase}, distinguishing a response's execution round
+     * — {@code PRE_AMENDMENT}/{@code AMENDMENT}/{@code POST_AMENDMENT} — since the same test can
+     * legitimately produce responses in more than one phase).
+     */
+    private static final String BDQWB = "https://github.com/FilteredPush/bdq_workbench/terms/";
+
     private static final String RECORD_URI_PREFIX = "urn:bdq-workbench:record:";
+    private static final String DWC_TERM_KEY_PREFIX = "dwc:";
     private static final String MULTIRECORD_SENTINEL = "MULTIRECORD";
     private static final String UNRESOLVED_SENTINEL = "*";
 
@@ -130,6 +148,10 @@ public class RdfResponseExporter implements ReportExporter {
         model.setNsPrefix("dcterms", DCTERMS);
         model.setNsPrefix("rdfs", rdfs(""));
         model.setNsPrefix("xsd", XSD);
+        model.setNsPrefix("bdqwb", BDQWB);
+
+        Map<String, CanonicalRecord> recordsById = summary.dataset().records().stream()
+                .collect(Collectors.toMap(CanonicalRecord::id, record -> record, (left, right) -> left));
 
         Resource report = model.createResource(BDQFFDQ + "DataQualityReport");
         Resource reportInstance = model.createResource()
@@ -146,7 +168,7 @@ public class RdfResponseExporter implements ReportExporter {
             Resource implementation = implementations.computeIfAbsent(
                     ImplementationKey.of(response),
                     key -> buildImplementation(model, key));
-            Resource responseResource = buildResponse(model, response);
+            Resource responseResource = buildResponse(model, response, recordsById);
             implementation.addProperty(model.createProperty(BDQFFDQ, "producesResponse"), responseResource);
             reportInstance.addProperty(containsResponse, responseResource);
         }
@@ -187,13 +209,15 @@ public class RdfResponseExporter implements ReportExporter {
      * {@link Response#responseStatus()} is one of the ratified controlled-vocabulary values for
      * that type; otherwise left as a plain, untyped {@code bdqffdq:Response} carrying only its
      * comment) for one {@link Response}, with record linkage via {@code bdqffdq:appliesTo} where
-     * applicable.
+     * applicable and a {@code bdqwb:phase} literal identifying its execution phase.
      *
      * @param model the model to add resources to
      * @param response the response to render
+     * @param recordsById the run's input records, keyed by ID, used to enrich the response's
+     *     record resource with term values
      * @return the new {@code Response} resource
      */
-    private Resource buildResponse(Model model, Response response) {
+    private Resource buildResponse(Model model, Response response, Map<String, CanonicalRecord> recordsById) {
         Resource resource = model.createResource();
         String subtype = subtypeClassFor(response.testType());
         Set<String> allowedStatuses = allowedStatusesFor(response.testType());
@@ -215,8 +239,11 @@ public class RdfResponseExporter implements ReportExporter {
         if (comment != null) {
             resource.addProperty(model.createProperty(BDQFFDQ, "hasResponseComment"), comment);
         }
+        if (response.phase() != null) {
+            resource.addProperty(model.createProperty(BDQWB, "phase"), response.phase().name());
+        }
 
-        recordResourceFor(model, response.recordId())
+        recordResourceFor(model, response.recordId(), recordsById)
                 .ifPresent(recordResource -> resource.addProperty(model.createProperty(BDQFFDQ, "appliesTo"), recordResource));
         return resource;
     }
@@ -281,21 +308,37 @@ public class RdfResponseExporter implements ReportExporter {
 
     /**
      * Resolves a stable, synthetic IRI for a record ID, for use as the object of
-     * {@code bdqffdq:appliesTo}.
+     * {@code bdqffdq:appliesTo}, enriched with the record's {@code dwc:}-prefixed term values
+     * when the record is found in {@code recordsById}.
+     *
+     * <p>Term values reflect the record's state at export time: for a {@code POST_AMENDMENT}
+     * response this is the correct (amended) value examined, but for an earlier-phase response
+     * whose term was later amended, it will show the final rather than the original value — a
+     * known, accepted limitation rather than something this exporter attempts to reconstruct.
      *
      * @param model the model to create the resource in
      * @param recordId the response's record ID
+     * @param recordsById the run's input records, keyed by ID
      * @return the record's resource, typed {@code dwc:Occurrence}; empty for the
      *     {@code "MULTIRECORD"} (aggregate) and {@code "*"} (synthesized unresolved/unbound
      *     placeholder) sentinel record IDs, which do not refer to a single real record
      */
-    private Optional<Resource> recordResourceFor(Model model, String recordId) {
+    private Optional<Resource> recordResourceFor(Model model, String recordId, Map<String, CanonicalRecord> recordsById) {
         if (recordId == null || recordId.isBlank()
                 || MULTIRECORD_SENTINEL.equals(recordId) || UNRESOLVED_SENTINEL.equals(recordId)) {
             return Optional.empty();
         }
-        return Optional.of(model.createResource(RECORD_URI_PREFIX + recordId)
-                .addProperty(RDF.type, model.createResource(DWC + "Occurrence")));
+        Resource recordResource = model.createResource(RECORD_URI_PREFIX + recordId)
+                .addProperty(RDF.type, model.createResource(DWC + "Occurrence"));
+        CanonicalRecord record = recordsById.get(recordId);
+        if (record != null) {
+            record.terms().forEach((term, value) -> {
+                if (term != null && term.startsWith(DWC_TERM_KEY_PREFIX) && value != null && !value.isBlank()) {
+                    recordResource.addProperty(model.createProperty(DWC, term.substring(DWC_TERM_KEY_PREFIX.length())), value);
+                }
+            });
+        }
+        return Optional.of(recordResource);
     }
 
     private static String subtypeClassFor(TestType testType) {
