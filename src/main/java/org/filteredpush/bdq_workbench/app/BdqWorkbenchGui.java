@@ -59,6 +59,8 @@ import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
+import javax.swing.event.PopupMenuEvent;
+import javax.swing.event.PopupMenuListener;
 import javax.swing.table.TableCellRenderer;
 import org.filteredpush.bdq_workbench.execution.ExecutionProgressListener;
 import org.filteredpush.bdq_workbench.execution.ParallelPhaseExecutionService;
@@ -558,6 +560,12 @@ final class BdqWorkbenchGui {
             }
 
             @Override
+            public void onTaskStarted(org.filteredpush.bdq_workbench.model.Phase phase) {
+                tracker.onTaskStarted(phase);
+                progressConsumer.accept(tracker.snapshot());
+            }
+
+            @Override
             public void onResponse(org.filteredpush.bdq_workbench.model.Phase phase, Response response, int completed, int total) {
                 tracker.onResponse(phase, response, completed, total);
                 progressConsumer.accept(tracker.snapshot());
@@ -572,10 +580,14 @@ final class BdqWorkbenchGui {
     }
 
     /**
-     * Attaches a right-click popup menu ("Set Parameters...", "Inspect / Run Test") to the
-     * binding review grid, and a mouse listener that selects the clicked row before showing the
-     * popup and hides/disables the "Set Parameters..." item for tests that do not support
-     * parameter editing.
+     * Attaches a right-click popup menu ("Inspect / Run Test", "Set Parameters...", "Show Test
+     * Results") to the binding review grid: a mouse listener selects the clicked row, and a
+     * {@link PopupMenuListener} disables "Set Parameters..." for tests that do not support
+     * parameter editing and "Show Test Results" until a run has produced
+     * {@code reports/bdq-report-rdf.ttl} — refreshed in {@code popupMenuWillBecomeVisible} rather
+     * than the mouse listener, since {@link javax.swing.JComponent#setComponentPopupMenu}'s
+     * automatic display isn't reliably ordered after a plain
+     * {@link java.awt.event.MouseListener}'s state changes.
      *
      * @param frame owner frame for dialogs opened from the popup items
      * @param bindingGrid the binding review table the popup is attached to
@@ -637,18 +649,32 @@ final class BdqWorkbenchGui {
                     return;
                 }
                 int row = bindingGrid.rowAtPoint(e.getPoint());
-                if (row < 0) {
-                    return;
+                if (row >= 0) {
+                    bindingGrid.setRowSelectionInterval(row, row);
                 }
-                bindingGrid.setRowSelectionInterval(row, row);
-                if (bindingGrid.getModel() instanceof BindingReviewTableModel reviewModel) {
-                    boolean parameterized = reviewModel.supportsParameterEditing(bindingGrid.convertRowIndexToModel(row));
-                    parameterItem.setVisible(parameterized);
-                    parameterItem.setEnabled(parameterized);
-                }
-                boolean resultsAvailable = Files.exists(Path.of("reports", "bdq-report-rdf.ttl"));
-                resultsItem.setVisible(resultsAvailable);
-                resultsItem.setEnabled(resultsAvailable);
+            }
+        });
+        // Menu item enabled state is refreshed here, immediately before the popup is actually
+        // shown, rather than in the MouseListener above: JComponent's automatic
+        // setComponentPopupMenu display isn't reliably ordered after a plain MouseListener's
+        // mutations, so changes made there were not consistently reflected on screen.
+        popupMenu.addPopupMenuListener(new PopupMenuListener() {
+            @Override
+            public void popupMenuWillBecomeVisible(PopupMenuEvent e) {
+                int viewRow = bindingGrid.getSelectedRow();
+                boolean parameterized = viewRow >= 0
+                        && bindingGrid.getModel() instanceof BindingReviewTableModel reviewModel
+                        && reviewModel.supportsParameterEditing(bindingGrid.convertRowIndexToModel(viewRow));
+                parameterItem.setEnabled(parameterized);
+                resultsItem.setEnabled(Files.exists(Path.of("reports", "bdq-report-rdf.ttl")));
+            }
+
+            @Override
+            public void popupMenuWillBecomeInvisible(PopupMenuEvent e) {
+            }
+
+            @Override
+            public void popupMenuCanceled(PopupMenuEvent e) {
             }
         });
     }

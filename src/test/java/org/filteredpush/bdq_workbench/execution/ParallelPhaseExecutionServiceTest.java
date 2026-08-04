@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.filteredpush.bdq_workbench.model.BindingStatus;
 import org.filteredpush.bdq_workbench.model.BuiltInMeasureSpec;
 import org.filteredpush.bdq_workbench.model.BoundMethodParameter;
@@ -61,6 +62,37 @@ class ParallelPhaseExecutionServiceTest {
         assertThat(responses.get(2).responseResult()).isEqualTo("COMPLIANT");
         assertThat(responses.get(3).responseResult()).isEqualTo("COMPLIANT");
         assertThat(dataset.records().get(0).terms()).containsEntry("dwc:eventDate", "orig");
+    }
+
+    @Test
+    void notifiesProgressListenerWhenEachTaskActuallyStartsExecuting() throws Exception {
+        AtomicInteger taskStartedCalls = new AtomicInteger();
+        ParallelPhaseExecutionService service = new ParallelPhaseExecutionService(
+                2,
+                new ReflectionExecutionAdapter(),
+                new ExecutionProgressListener() {
+                    @Override
+                    public void onTaskStarted(Phase phase) {
+                        taskStartedCalls.incrementAndGet();
+                    }
+                });
+        Method pre = Impl.class.getMethod("pre", String.class);
+        List<DiscoveredImplementation> discovered = List.of(
+                new DiscoveredImplementation("t1", null, TestType.VALIDATION, Phase.PRE_AMENDMENT, Impl.class.getName(), "pre", null,
+                        List.of(parameter(0, ParameterRole.ACTED_UPON, "dwc:eventDate", String.class)), new Impl(), pre));
+        List<ImplementationBinding> bindings = List.of(binding("t1", TestType.VALIDATION, "pre", Phase.PRE_AMENDMENT));
+        RecordDataset dataset = new RecordDataset(List.of(
+                new CanonicalRecord("r1", Map.of("dwc:eventDate", "a")),
+                new CanonicalRecord("r2", Map.of("dwc:eventDate", "b")),
+                new CanonicalRecord("r3", Map.of("dwc:eventDate", "c"))));
+
+        service.execute(dataset, bindings, discovered);
+
+        // 3 records x 1 binding x 2 phases: a non-amendment PRE_AMENDMENT binding implicitly
+        // re-runs in POST_AMENDMENT too (see bindingsForPhase), and each individual invocation is
+        // reported exactly once as its worker thread picks it up - this is what the GUI's progress
+        // display relies on for genuine concurrency reporting.
+        assertThat(taskStartedCalls.get()).isEqualTo(6);
     }
 
     @Test
