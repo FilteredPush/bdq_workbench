@@ -28,12 +28,12 @@ import org.filteredpush.bdq_workbench.model.ExecutionSummary;
  *
  * <p>Implementations are collected into a {@link java.util.List} held by {@link ReportingService}
  * and invoked by {@link ReportingService#export(ExecutionSummary)}, one output file per
- * implementation, using {@link #format()} to name the resulting file and
- * {@link #export(ExecutionSummary, OutputStream)} to write its content. Current implementations
+ * implementation, using {@link #format()} and {@link #fileExtension()} to name the resulting file
+ * and {@link #export(ExecutionSummary, OutputStream)} to write its content. Current implementations
  * are {@link DetailedResponseStreamExporter} (a tab-delimited dump of every response),
- * {@link SummaryReportExporter} (a human-readable aggregate report), and
+ * {@link SummaryReportExporter} (a human-readable aggregate report),
  * {@link XlsCompatibilityExporter} (a placeholder hook for kurator-ffdq-compatible spreadsheet
- * export).
+ * export), and {@link RdfResponseExporter} (an RDF {@code bdqffdq:DataQualityReport}).
  */
 public interface ReportExporter {
 
@@ -44,6 +44,16 @@ public interface ReportExporter {
      * @return a short, filesystem-safe identifier for this format
      */
     String format();
+
+    /**
+     * Identifies the file extension {@link ReportingService} should use for the file this
+     * exporter writes (e.g. {@code "txt"} for {@code bdq-report-summary.txt}).
+     *
+     * @return the file extension, without a leading dot; defaults to {@code "txt"}
+     */
+    default String fileExtension() {
+        return "txt";
+    }
 
     /**
      * Renders the given execution summary and writes it to the output stream.

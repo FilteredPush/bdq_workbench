@@ -35,8 +35,9 @@ import org.slf4j.LoggerFactory;
  * <p>Holds the configured list of {@link ReportExporter} implementations and, on each
  * {@link #export(ExecutionSummary)} call, writes one output file per exporter into a
  * {@code reports} directory (created if it does not already exist) beneath the current working
- * directory, named {@code bdq-report-<format>.txt} where {@code <format>} is the exporter's
- * {@link ReportExporter#format()}.
+ * directory, named {@code bdq-report-<format>.<extension>} where {@code <format>} and
+ * {@code <extension>} are the exporter's {@link ReportExporter#format()} and
+ * {@link ReportExporter#fileExtension()}.
  */
 public class ReportingService {
 
@@ -69,7 +70,7 @@ public class ReportingService {
         try {
             Files.createDirectories(reportDir);
             for (ReportExporter exporter : exporters) {
-                Path outputFile = reportDir.resolve("bdq-report-" + exporter.format() + ".txt");
+                Path outputFile = reportDir.resolve("bdq-report-" + exporter.format() + "." + exporter.fileExtension());
                 try (OutputStream out = Files.newOutputStream(outputFile)) {
                     exporter.export(summary, out);
                 }

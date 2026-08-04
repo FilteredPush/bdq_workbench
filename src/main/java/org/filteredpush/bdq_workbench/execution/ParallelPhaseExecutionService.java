@@ -195,10 +195,17 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
                     futures.add(new PendingExecution(
                             record.id(),
                             binding,
-                            executor.submit(() -> executionAdapter.execute(
-                                    record,
-                                    binding,
-                                    discoveredByKey.get(implementationKey)))));
+                            executor.submit(() -> {
+                                progressListener.onTaskStarted(phase);
+                                try {
+                                    return executionAdapter.execute(
+                                            record,
+                                            binding,
+                                            discoveredByKey.get(implementationKey));
+                                } finally {
+                                    progressListener.onTaskFinished(phase);
+                                }
+                            })));
                 }
             }
             List<Response> responses = new ArrayList<>();
