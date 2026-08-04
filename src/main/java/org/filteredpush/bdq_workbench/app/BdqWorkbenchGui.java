@@ -31,6 +31,7 @@ import java.awt.Frame;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -79,6 +80,7 @@ import org.filteredpush.bdq_workbench.reporting.DetailedResponseStreamExporter;
 import org.filteredpush.bdq_workbench.reporting.RdfResponseExporter;
 import org.filteredpush.bdq_workbench.reporting.ReportingService;
 import org.filteredpush.bdq_workbench.reporting.SummaryReportExporter;
+import org.filteredpush.bdq_workbench.reporting.TestResultsSummaryService;
 import org.filteredpush.bdq_workbench.reporting.XlsCompatibilityExporter;
 import org.filteredpush.bdq_workbench.test_discovery.ClasspathAnnotationTestDiscoveryService;
 import org.filteredpush.bdq_workbench.test_discovery.DefaultTestBindingService;
@@ -191,14 +193,19 @@ final class BdqWorkbenchGui {
         JProgressBar progress = new JProgressBar();
         progress.setStringPainted(true);
         progress.setVisible(false);
-        monitorPanel.add(progress, BorderLayout.NORTH);
+        JLabel monitorHeader = new JLabel("Setup Tests");
+        monitorHeader.setFont(monitorHeader.getFont().deriveFont(java.awt.Font.BOLD, monitorHeader.getFont().getSize() + 4f));
+        JPanel monitorHeaderPanel = new JPanel(new BorderLayout());
+        monitorHeaderPanel.add(monitorHeader, BorderLayout.NORTH);
+        monitorHeaderPanel.add(progress, BorderLayout.SOUTH);
+        monitorPanel.add(monitorHeaderPanel, BorderLayout.NORTH);
 
         JPanel monitorControls = new JPanel(new FlowLayout(FlowLayout.RIGHT));
         JButton loadParameters = new JButton("Load Parameters...");
         loadParameters.setEnabled(false);
         JButton saveParameters = new JButton("Save Parameters...");
         saveParameters.setEnabled(false);
-        JButton backToSetup = new JButton("Back to Setup");
+        JButton backToSetup = new JButton("Back to Select Inputs");
         JButton startRun = new JButton("Start Run");
         startRun.setEnabled(false);
         JButton closeButton = new JButton("Quit");
@@ -212,6 +219,12 @@ final class BdqWorkbenchGui {
         JPanel setupPanel = new JPanel(new BorderLayout(10, 10));
         JPanel form = new JPanel();
         form.setLayout(new BoxLayout(form, BoxLayout.Y_AXIS));
+
+        JLabel setupHeader = new JLabel("Select Inputs");
+        setupHeader.setFont(setupHeader.getFont().deriveFont(java.awt.Font.BOLD, setupHeader.getFont().getSize() + 4f));
+        JPanel setupHeaderRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        setupHeaderRow.add(setupHeader);
+        form.add(setupHeaderRow);
 
         PickerField dataset = addPickerField(form, frame, "Dataset", defaults.datasetPath().toString());
 
@@ -303,7 +316,8 @@ final class BdqWorkbenchGui {
                 startRun,
                 runWithAvailableOnly,
                 saveParameters,
-                loadParameters);
+                loadParameters,
+                monitorHeader);
 
         toggleAdvanced.addActionListener(e -> {
             advanced.setVisible(!advanced.isVisible());
@@ -351,7 +365,8 @@ final class BdqWorkbenchGui {
                 startRun,
                 runWithAvailableOnly,
                 saveParameters,
-                loadParameters));
+                loadParameters,
+                monitorHeader));
 
         backToSetup.addActionListener(e -> {
             if (!progress.isVisible()) {
@@ -397,7 +412,8 @@ final class BdqWorkbenchGui {
                                 startRun,
                                 runWithAvailableOnly,
                                 saveParameters,
-                                loadParameters);
+                                loadParameters,
+                                monitorHeader);
                     } catch (Exception ex) {
                         Throwable cause = ex.getCause() == null ? ex : ex.getCause();
                         LOG.error("Preflight mapping failed", cause);
@@ -420,6 +436,7 @@ final class BdqWorkbenchGui {
             }
             startRun.setEnabled(false);
             backToSetup.setEnabled(false);
+            monitorHeader.setText("Run Tests");
             progress.setVisible(true);
             progress.setMinimum(0);
             progress.setValue(0);
@@ -452,6 +469,7 @@ final class BdqWorkbenchGui {
                     try {
                         ExecutionSummary summary = get();
                         LOG.info("BDQ Workbench execution complete: {} outcomes", summary.responses().size());
+                        monitorHeader.setText("Test Results");
                         appendStatus(statusArea, "Completed: " + summary.responses().size() + " outcomes\n");
                         resultSummaryArea.setText(renderResultSummary(summary));
                         updateBindingGridExecutionOutputs(bindingGrid, summary);
@@ -553,6 +571,9 @@ final class BdqWorkbenchGui {
      * @param runWithAvailableOnly whether the run may proceed with unresolved tests
      * @param saveParameters enabled state refreshed after edits
      * @param loadParameters enabled state refreshed after edits
+     * @param monitorHeader the monitor page's title label, passed through to
+     *     {@link #openParameterDialog} (reset after edits) and read by "Show Test Results" (not
+     *     currently used to decide anything, but consistent with the other popup actions)
      */
     private static void installBindingDebugPopup(
             JFrame frame,
@@ -563,12 +584,15 @@ final class BdqWorkbenchGui {
             JButton startRun,
             JCheckBox runWithAvailableOnly,
             JButton saveParameters,
-            JButton loadParameters) {
+            JButton loadParameters,
+            JLabel monitorHeader) {
         JPopupMenu popupMenu = new JPopupMenu();
         JMenuItem parameterItem = new JMenuItem("Set Parameters...");
         JMenuItem inspectItem = new JMenuItem("Inspect / Run Test");
+        JMenuItem resultsItem = new JMenuItem("Show Test Results");
         popupMenu.add(parameterItem);
         popupMenu.add(inspectItem);
+        popupMenu.add(resultsItem);
         parameterItem.addActionListener(e -> openParameterDialog(
                 frame,
                 bindingGrid,
@@ -578,8 +602,10 @@ final class BdqWorkbenchGui {
                 startRun,
                 runWithAvailableOnly,
                 saveParameters,
-                loadParameters));
+                loadParameters,
+                monitorHeader));
         inspectItem.addActionListener(e -> openBindingDebugDialog(frame, bindingGrid, state));
+        resultsItem.addActionListener(e -> openTestResultsDialog(frame, bindingGrid, state));
         bindingGrid.setComponentPopupMenu(popupMenu);
         bindingGrid.addMouseListener(new MouseAdapter() {
             @Override
@@ -625,6 +651,7 @@ final class BdqWorkbenchGui {
      * @param runWithAvailableOnly whether the run may proceed with unresolved tests
      * @param saveParameters enabled state refreshed after applying parameter edits
      * @param loadParameters enabled state refreshed after applying parameter edits
+     * @param monitorHeader the monitor page's title label, reset by {@link #updatePreflightUi}
      */
     private static void openParameterDialog(
             JFrame frame,
@@ -635,7 +662,8 @@ final class BdqWorkbenchGui {
             JButton startRun,
             JCheckBox runWithAvailableOnly,
             JButton saveParameters,
-            JButton loadParameters) {
+            JButton loadParameters,
+            JLabel monitorHeader) {
         if (state[0] == null || !(bindingGrid.getModel() instanceof BindingReviewTableModel reviewModel)) {
             return;
         }
@@ -703,7 +731,8 @@ final class BdqWorkbenchGui {
                     startRun,
                     runWithAvailableOnly,
                     saveParameters,
-                    loadParameters);
+                    loadParameters,
+                    monitorHeader);
             dialog.dispose();
         });
         cancelButton.addActionListener(e -> dialog.dispose());
@@ -797,6 +826,67 @@ final class BdqWorkbenchGui {
 
         dialog.add(dialogProgress, BorderLayout.NORTH);
         dialog.add(splitPane, BorderLayout.CENTER);
+        dialog.add(controls, BorderLayout.SOUTH);
+        dialog.setLocationRelativeTo(frame);
+        dialog.setVisible(true);
+    }
+
+    /**
+     * Handles "Show Test Results" from the binding grid popup: builds a
+     * {@link TestResultsSummaryService} over the run's RDF definitions, use case source, and
+     * exported results ({@code reports/bdq-report-rdf.ttl}), and shows the selected test's
+     * {@link TestResultsSummaryService#summarize(String, TestType) summary} — what the test does
+     * (from its ratified definition) and how it performed on this run's input, broken out by
+     * phase — in a non-modal, read-only dialog.
+     *
+     * @param frame owner frame for the dialog and any error/info dialog
+     * @param bindingGrid the binding review table the selected row is read from
+     * @param state holder for the current {@link PreflightState}, used for its
+     *     {@link PreparedRun#config()} (RDF definitions and use case source)
+     */
+    private static void openTestResultsDialog(JFrame frame, JTable bindingGrid, PreflightState[] state) {
+        if (state[0] == null || !(bindingGrid.getModel() instanceof BindingReviewTableModel reviewModel)) {
+            return;
+        }
+        int viewRow = bindingGrid.getSelectedRow();
+        if (viewRow < 0) {
+            return;
+        }
+        int row = bindingGrid.convertRowIndexToModel(viewRow);
+        TestDefinition test = reviewModel.reviewAt(row).test();
+
+        Path resultsPath = Path.of("reports", "bdq-report-rdf.ttl");
+        if (Files.notExists(resultsPath)) {
+            JOptionPane.showMessageDialog(
+                    frame,
+                    "Run the tests first to see results for this test.",
+                    "No Results Yet",
+                    JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+
+        AppConfig config = state[0].preparedRun().config();
+        List<Path> rdfSources = new ArrayList<>(config.rdfDefinitions());
+        rdfSources.add(config.useCaseXml());
+        rdfSources.add(resultsPath);
+        String summary = new TestResultsSummaryService(rdfSources).summarize(test.id(), test.type());
+
+        JDialog dialog = new JDialog(frame, "Test Results: " + test.label(), false);
+        dialog.setSize(760, 560);
+        dialog.setLayout(new BorderLayout(8, 8));
+
+        JTextArea summaryArea = new JTextArea(summary);
+        summaryArea.setEditable(false);
+        summaryArea.setLineWrap(true);
+        summaryArea.setWrapStyleWord(true);
+        installTextAreaClipboardSupport(summaryArea);
+
+        JButton closeButton = new JButton("Close");
+        closeButton.addActionListener(e -> dialog.dispose());
+        JPanel controls = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        controls.add(closeButton);
+
+        dialog.add(new JScrollPane(summaryArea), BorderLayout.CENTER);
         dialog.add(controls, BorderLayout.SOUTH);
         dialog.setLocationRelativeTo(frame);
         dialog.setVisible(true);
@@ -1637,6 +1727,8 @@ final class BdqWorkbenchGui {
      * @param runWithAvailableOnly whether the run may proceed with unresolved tests
      * @param saveParameters enabled if the run has any binding reviews
      * @param loadParameters enabled if the run has any binding reviews
+     * @param monitorHeader the monitor page's title label, reset to {@code "Setup Tests"} since
+     *     this method is only called while reviewing/editing bindings, before a run has started
      */
     private static void updatePreflightUi(
             PreflightState[] state,
@@ -1647,8 +1739,10 @@ final class BdqWorkbenchGui {
             JButton startRun,
             JCheckBox runWithAvailableOnly,
             JButton saveParameters,
-            JButton loadParameters) {
+            JButton loadParameters,
+            JLabel monitorHeader) {
         state[0] = new PreflightState(preparedRun);
+        monitorHeader.setText("Setup Tests");
         LOG.debug("Preflight mapping complete: {} runnable, {} unresolved",
                 state[0].preparedRun().bindingResult().bindings().size(),
                 state[0].preparedRun().bindingResult().unresolved().size());
@@ -1870,6 +1964,7 @@ final class BdqWorkbenchGui {
      * @param runWithAvailableOnly whether the run may proceed with unresolved tests
      * @param saveParameters enabled state refreshed after loading settings
      * @param loadParameters enabled state refreshed after loading settings
+     * @param monitorHeader the monitor page's title label, reset by {@link #updatePreflightUi}
      */
     private static void loadParameterSettings(
             JFrame frame,
@@ -1880,7 +1975,8 @@ final class BdqWorkbenchGui {
             JButton startRun,
             JCheckBox runWithAvailableOnly,
             JButton saveParameters,
-            JButton loadParameters) {
+            JButton loadParameters,
+            JLabel monitorHeader) {
         if (state[0] == null || !(bindingGrid.getModel() instanceof BindingReviewTableModel reviewModel)) {
             return;
         }
@@ -1901,7 +1997,8 @@ final class BdqWorkbenchGui {
                     startRun,
                     runWithAvailableOnly,
                     saveParameters,
-                    loadParameters);
+                    loadParameters,
+                    monitorHeader);
         } catch (IOException e) {
             JOptionPane.showMessageDialog(
                     frame,
