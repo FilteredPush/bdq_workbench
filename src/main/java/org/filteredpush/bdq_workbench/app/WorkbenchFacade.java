@@ -220,7 +220,8 @@ public class WorkbenchFacade {
                 .thenComparing(Response::recordId));
         ExecutionSummary summary = new ExecutionSummary(
                 List.copyOf(responses),
-                buildSummaryMetadata(preparedRun, responses));
+                buildSummaryMetadata(preparedRun, responses),
+                preparedRun.dataset());
         reportingService.export(summary);
         return summary;
     }
