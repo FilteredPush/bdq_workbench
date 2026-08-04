@@ -1,6 +1,10 @@
 # bdq_workbench
 
-BDQ Workbench is a Java 17 application scaffold for policy-driven Biodiversity Data Quality (BDQ) execution over Darwin Core Archives (DwC-A) and Darwin Core Data Packages.
+BDQ Workbench is a Java 17 application for policy-driven Biodiversity Data Quality (BDQ) execution over Darwin Core Archives (DwC-A) and Darwin Core Data Packages.
+
+BDQ Workbench takes DarwinCore Archive files or Darwin Core Data Package files as input, identifies tests that apply to a bdqffdq:UseCase (purpose to which data are to be put and need to have fitness for) that are available in the implemntation, then runs those tests on the data (in pre-amendment, amendment, and post-amendment phases) and produces a data quality report (in several formats).  It also evaluates the binding of information elements in the input data with the test implementations, can provide parameters to parameterized tests, and can run tests from a use case individually.
+
+See: https://bdq.tdwg.org/
 
 ## Build and test
 
@@ -99,15 +103,16 @@ Each execution result is normalized into a response stream entry with:
 
 `DQResponse` objects are adapted reflectively by reading `getResultState()`, `getValue().getObject()`, and `getComment()`. Amendment results are preserved as normalized amendment maps and then applied to the amendment working copy before post-amendment execution.
 
-Reports now include:
+Reports include:
 
-- `reports/bdq-report-summary.txt`
-- `reports/bdq-report-responses.txt`
-- `reports/bdq-report-xls-hook.txt`
+- `reports/bdq-report-summary.txt` Human readable summary of test execution results.
+- `reports/bdq-report-responses.txt` Human readable list of test execution Response values.
+- `bdq-report-rdf.ttl` RDF test responses serialized as Turtle.
+- `reports/bdq-report-xls-hook.txt` Placeholder for kurator-ffdq produced result spreadhseet.
 
 ## Multi-record measure preparation
 
-`ExecutionSummary` now exposes filtering and counting helpers over the normalized response stream so downstream multi-record measure work can count and filter by:
+`ExecutionSummary` exposes filtering and counting helpers over the normalized response stream so downstream multi-record measure work can count and filter by:
 
 - phase
 - test type
@@ -116,13 +121,33 @@ Reports now include:
 
 This is the initial plumbing layer for multi-record calculations. Full multi-record execution remains a follow-up item, but downstream code can now consume the normalized response stream instead of raw input rows.
 
-## Updated GUI workflow
+## GUI workflow
 
-The desktop GUI now supports:
+The desktop GUI supports:
 
 1. selecting a dataset and use case
 2. running a preflight review that discovers implementations and populates a test grid
 3. reviewing binding status, method selection, and parameterization capability
 4. editing parameter values or keeping defaults before execution
-5. monitoring live per-phase progress and response/result counters
-6. reviewing a post-run summary and saved output locations
+5. saving and loading parameters for parameterized tests
+6. running a bound test in isolation
+7. monitoring live per-phase progress and response/result counters
+8. reviewing a post-run summary and saved output locations
+
+
+## Development
+
+### AI-assisted development disclosure
+
+This project has used GitHub Copilot and Claude Code as AI coding assistants during development.
+
+Copilot and Claude contributions are limited to suggested code and documentation text.  
+All accepted changes were reviewed, edited as needed, and validated by human maintainers before 
+inclusion in the master branch.
+
+#### Provenance and responsibility
+
+- Human maintainers are responsible for all design decisions, semantics, and released content.
+- AI-generated suggestions are treated as draft material and may contain errors.
+- Ontology-aligned terminology and normative language in this project are curated by the tdwg/bdq maintainers.
+
