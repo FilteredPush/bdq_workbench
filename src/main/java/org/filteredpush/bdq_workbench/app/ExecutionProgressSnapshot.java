@@ -32,8 +32,8 @@ import org.filteredpush.bdq_workbench.model.Phase;
  *
  * @param phase the phase currently executing (or last executed)
  * @param queued number of tests not yet started
- * @param running number of tests currently in flight (0 or 1, since progress is reported one
- *     completed response at a time)
+ * @param running number of tests genuinely executing concurrently right now (up to the run's
+ *     configured thread count)
  * @param completed number of tests completed so far in this phase
  * @param total total number of tests in this phase
  * @param statusCounts running tally of responses by {@code responseStatus}, keyed by status

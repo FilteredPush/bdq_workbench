@@ -468,10 +468,11 @@ final class BdqWorkbenchGui {
                         progress.setMaximum(max);
                         progress.setValue(snapshot.completed());
                         progress.setString(String.format(
-                                "%s queued=%d running=%d completed=%d/%d",
+                                "%s %s (%d active threads) queued=%d completed=%d/%d",
                                 snapshot.phase(),
-                                snapshot.queued(),
+                                snapshot.running() > 0 ? "running" : "idle",
                                 snapshot.running(),
+                                snapshot.queued(),
                                 snapshot.completed(),
                                 snapshot.total()));
                         resultSummaryArea.setText(renderProgressSnapshot(snapshot));
@@ -1567,7 +1568,8 @@ final class BdqWorkbenchGui {
         return "Execution progress\n"
                 + "Phase: " + snapshot.phase() + "\n"
                 + "Queued: " + snapshot.queued() + "\n"
-                + "Running: " + snapshot.running() + "\n"
+                + "Status: " + (snapshot.running() > 0 ? "running" : "idle")
+                + " (" + snapshot.running() + " active thread(s))\n"
                 + "Completed: " + snapshot.completed() + "/" + snapshot.total() + "\n"
                 + "Status counts: " + snapshot.statusCounts() + "\n"
                 + "Result counts: " + snapshot.resultCounts() + "\n";

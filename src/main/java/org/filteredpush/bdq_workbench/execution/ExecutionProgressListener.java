@@ -29,9 +29,11 @@ import org.filteredpush.bdq_workbench.model.Response;
  * <p>All methods have empty default implementations, so implementers need only override the
  * callbacks they care about. {@link ParallelPhaseExecutionService} drives these callbacks as it
  * works through each {@link Phase} of a run in turn: {@link #onPhaseStarted} once at the start of
- * a phase, {@link #onResponse} once for every response produced (including synthesized built-in
- * measure responses) as work streams back from its thread pool, and {@link #onPhaseCompleted}
- * once the phase's work is exhausted.
+ * a phase, {@link #onTaskStarted} once per record/test invocation as a worker thread picks it up
+ * (not called for synthesized built-in measures, which are computed synchronously rather than via
+ * the thread pool), {@link #onResponse} once for every response produced (including synthesized
+ * built-in measure responses) as work streams back from its thread pool, and
+ * {@link #onPhaseCompleted} once the phase's work is exhausted.
  */
 public interface ExecutionProgressListener {
 
@@ -43,6 +45,18 @@ public interface ExecutionProgressListener {
      *     measures) expected to complete during this phase
      */
     default void onPhaseStarted(Phase phase, int total) {
+    }
+
+    /**
+     * Invoked once per record/test invocation, from the worker thread that picks it up, right
+     * before the implementation is actually invoked — i.e. while it is genuinely executing
+     * concurrently with up to {@code threadCount} other invocations. Used to track true
+     * concurrency (as opposed to {@link #onResponse}, which is reported from the thread collecting
+     * completed futures, in submission order).
+     *
+     * @param phase the phase the invocation belongs to
+     */
+    default void onTaskStarted(Phase phase) {
     }
 
     /**

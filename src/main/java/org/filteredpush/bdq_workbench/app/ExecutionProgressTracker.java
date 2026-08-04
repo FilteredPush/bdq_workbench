@@ -40,6 +40,7 @@ public class ExecutionProgressTracker implements ExecutionProgressListener {
     private Phase phase;
     private int total;
     private int completed;
+    private int running;
     private final Map<String, Long> statusCounts = new LinkedHashMap<>();
     private final Map<String, Long> resultCounts = new LinkedHashMap<>();
 
@@ -54,8 +55,21 @@ public class ExecutionProgressTracker implements ExecutionProgressListener {
         this.phase = phase;
         this.total = total;
         this.completed = 0;
+        this.running = 0;
         statusCounts.clear();
         resultCounts.clear();
+    }
+
+    /**
+     * Records that a worker thread has picked up one record/test invocation and is now genuinely
+     * executing it concurrently with any others already in flight.
+     *
+     * @param phase the phase the invocation belongs to
+     */
+    @Override
+    public synchronized void onTaskStarted(Phase phase) {
+        this.phase = phase;
+        this.running++;
     }
 
     /**
@@ -72,6 +86,7 @@ public class ExecutionProgressTracker implements ExecutionProgressListener {
         this.phase = phase;
         this.total = total;
         this.completed = completed;
+        this.running = Math.max(0, running - 1);
         increment(statusCounts, response.responseStatus());
         increment(resultCounts, response.responseResult());
     }
@@ -79,14 +94,13 @@ public class ExecutionProgressTracker implements ExecutionProgressListener {
     /**
      * Captures the current progress state as an immutable snapshot.
      *
-     * <p>{@code running} is derived as {@code min(1, total - completed)} since progress is
-     * reported one completed response at a time, and {@code queued} is whatever remains after
-     * that.
+     * <p>{@code running} reflects the number of record/test invocations genuinely executing
+     * concurrently right now (up to the configured thread count), tracked via {@link #onTaskStarted}
+     * and {@link #onResponse}; {@code queued} is whatever remains after that.
      *
      * @return a snapshot of the current phase, progress counts, and status/result tallies
      */
     public synchronized ExecutionProgressSnapshot snapshot() {
-        int running = total == 0 ? 0 : Math.min(1, total - completed);
         int queued = Math.max(0, total - completed - running);
         return new ExecutionProgressSnapshot(
                 phase,
