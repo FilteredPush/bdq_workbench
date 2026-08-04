@@ -176,6 +176,12 @@ final class BdqWorkbenchGui {
         statusArea.setWrapStyleWord(true);
         installTextAreaClipboardSupport(statusArea);
         JTable bindingGrid = new JTable(new BindingReviewTableModel(List.of()));
+        // The grid starts empty (no rows until preflight resolves bindings), so without an
+        // explicit preferred size its JScrollPane reports a near-zero preferred height and the
+        // split panes below compress it down permanently — it doesn't grow back once rows are
+        // added. A fixed viewport size keeps it the visual focus of this page regardless of when
+        // (or whether) it's currently populated.
+        bindingGrid.setPreferredScrollableViewportSize(new java.awt.Dimension(760, 320));
         JTextArea resultSummaryArea = new JTextArea();
         resultSummaryArea.setEditable(false);
         resultSummaryArea.setLineWrap(true);
@@ -183,13 +189,21 @@ final class BdqWorkbenchGui {
         installTextAreaClipboardSupport(resultSummaryArea);
 
         JPanel monitorPanel = new JPanel(new BorderLayout(8, 8));
+        JSplitPane bindingGridSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT,
+                new JScrollPane(bindingGrid),
+                new JScrollPane(resultSummaryArea));
+        bindingGridSplit.setResizeWeight(0.7d);
         JSplitPane monitorSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT,
                 new JScrollPane(statusArea),
-                new JSplitPane(JSplitPane.VERTICAL_SPLIT,
-                        new JScrollPane(bindingGrid),
-                        new JScrollPane(resultSummaryArea)));
-        monitorSplit.setResizeWeight(0.45d);
+                bindingGridSplit);
+        monitorSplit.setResizeWeight(0.25d);
         monitorPanel.add(monitorSplit, BorderLayout.CENTER);
+        // JSplitPane's initial (pre-realization) divider placement is unreliable when driven
+        // purely by preferred sizes, so set it explicitly once the frame is actually showing.
+        SwingUtilities.invokeLater(() -> {
+            monitorSplit.setDividerLocation(0.25d);
+            bindingGridSplit.setDividerLocation(0.7d);
+        });
         JProgressBar progress = new JProgressBar();
         progress.setStringPainted(true);
         progress.setVisible(false);
