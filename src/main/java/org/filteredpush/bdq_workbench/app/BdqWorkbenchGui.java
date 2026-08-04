@@ -450,7 +450,7 @@ final class BdqWorkbenchGui {
             }
             startRun.setEnabled(false);
             backToSetup.setEnabled(false);
-            monitorHeader.setText("Run Tests");
+            monitorHeader.setText(monitorHeaderText("Run Tests", state[0].preparedRun()));
             progress.setVisible(true);
             progress.setMinimum(0);
             progress.setValue(0);
@@ -483,7 +483,7 @@ final class BdqWorkbenchGui {
                     try {
                         ExecutionSummary summary = get();
                         LOG.info("BDQ Workbench execution complete: {} outcomes", summary.responses().size());
-                        monitorHeader.setText("Test Results");
+                        monitorHeader.setText(monitorHeaderText("Test Results", state[0].preparedRun()));
                         appendStatus(statusArea, "Completed: " + summary.responses().size() + " outcomes\n");
                         resultSummaryArea.setText(renderResultSummary(summary));
                         updateBindingGridExecutionOutputs(bindingGrid, summary);
@@ -1728,6 +1728,20 @@ final class BdqWorkbenchGui {
     }
 
     /**
+     * Builds the monitor page's title text: the given phase name, plus {@code ": <use case
+     * label>"} when {@code preparedRun}'s use case has a non-blank label.
+     *
+     * @param phase the current phase name ({@code "Setup Tests"}, {@code "Run Tests"}, or
+     *     {@code "Test Results"})
+     * @param preparedRun the run whose selected use case's label is appended, if any
+     * @return the title text to show in the monitor header label
+     */
+    private static String monitorHeaderText(String phase, PreparedRun preparedRun) {
+        String useCaseLabel = preparedRun == null ? null : preparedRun.plan().useCase().label();
+        return useCaseLabel == null || useCaseLabel.isBlank() ? phase : phase + ": " + useCaseLabel;
+    }
+
+    /**
      * Applies a newly prepared (or re-bound) run to the monitor UI: stores it as the current
      * {@link PreflightState}, renders the preflight summary into {@code statusArea}, replaces the
      * binding grid's model with the new bindings, resets the result summary area, and
@@ -1744,8 +1758,9 @@ final class BdqWorkbenchGui {
      * @param runWithAvailableOnly whether the run may proceed with unresolved tests
      * @param saveParameters enabled if the run has any binding reviews
      * @param loadParameters enabled if the run has any binding reviews
-     * @param monitorHeader the monitor page's title label, reset to {@code "Setup Tests"} since
-     *     this method is only called while reviewing/editing bindings, before a run has started
+     * @param monitorHeader the monitor page's title label, reset to {@code "Setup Tests"} (plus
+     *     the selected use case's label, see {@link #monitorHeaderText}) since this method is only
+     *     called while reviewing/editing bindings, before a run has started
      */
     private static void updatePreflightUi(
             PreflightState[] state,
@@ -1759,7 +1774,7 @@ final class BdqWorkbenchGui {
             JButton loadParameters,
             JLabel monitorHeader) {
         state[0] = new PreflightState(preparedRun);
-        monitorHeader.setText("Setup Tests");
+        monitorHeader.setText(monitorHeaderText("Setup Tests", preparedRun));
         LOG.debug("Preflight mapping complete: {} runnable, {} unresolved",
                 state[0].preparedRun().bindingResult().bindings().size(),
                 state[0].preparedRun().bindingResult().unresolved().size());
