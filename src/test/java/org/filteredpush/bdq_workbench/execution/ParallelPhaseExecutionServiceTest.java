@@ -65,8 +65,9 @@ class ParallelPhaseExecutionServiceTest {
     }
 
     @Test
-    void notifiesProgressListenerWhenEachTaskActuallyStartsExecuting() throws Exception {
+    void notifiesProgressListenerWhenEachTaskActuallyStartsAndFinishesExecuting() throws Exception {
         AtomicInteger taskStartedCalls = new AtomicInteger();
+        AtomicInteger taskFinishedCalls = new AtomicInteger();
         ParallelPhaseExecutionService service = new ParallelPhaseExecutionService(
                 2,
                 new ReflectionExecutionAdapter(),
@@ -74,6 +75,11 @@ class ParallelPhaseExecutionServiceTest {
                     @Override
                     public void onTaskStarted(Phase phase) {
                         taskStartedCalls.incrementAndGet();
+                    }
+
+                    @Override
+                    public void onTaskFinished(Phase phase) {
+                        taskFinishedCalls.incrementAndGet();
                     }
                 });
         Method pre = Impl.class.getMethod("pre", String.class);
@@ -90,9 +96,11 @@ class ParallelPhaseExecutionServiceTest {
 
         // 3 records x 1 binding x 2 phases: a non-amendment PRE_AMENDMENT binding implicitly
         // re-runs in POST_AMENDMENT too (see bindingsForPhase), and each individual invocation is
-        // reported exactly once as its worker thread picks it up - this is what the GUI's progress
-        // display relies on for genuine concurrency reporting.
+        // reported exactly once (start and finish) as its worker thread picks it up and completes
+        // it - this is what the GUI's progress display relies on for genuine concurrency
+        // reporting, independent of the main thread's submission-order future collection.
         assertThat(taskStartedCalls.get()).isEqualTo(6);
+        assertThat(taskFinishedCalls.get()).isEqualTo(6);
     }
 
     @Test

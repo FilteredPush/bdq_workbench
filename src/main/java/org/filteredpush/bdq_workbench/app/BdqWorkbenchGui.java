@@ -566,6 +566,12 @@ final class BdqWorkbenchGui {
             }
 
             @Override
+            public void onTaskFinished(org.filteredpush.bdq_workbench.model.Phase phase) {
+                tracker.onTaskFinished(phase);
+                progressConsumer.accept(tracker.snapshot());
+            }
+
+            @Override
             public void onResponse(org.filteredpush.bdq_workbench.model.Phase phase, Response response, int completed, int total) {
                 tracker.onResponse(phase, response, completed, total);
                 progressConsumer.accept(tracker.snapshot());

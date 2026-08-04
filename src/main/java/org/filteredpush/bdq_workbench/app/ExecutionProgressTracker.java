@@ -73,8 +73,23 @@ public class ExecutionProgressTracker implements ExecutionProgressListener {
     }
 
     /**
-     * Records a completed response, updating progress counts and the running
-     * status/result tallies.
+     * Records that a worker thread has finished one record/test invocation. Deliberately not tied
+     * to {@link #onResponse}: the main thread collects futures strictly in submission order, so if
+     * an early-submitted task runs long while later-submitted ones finish first, decrementing on
+     * {@code onResponse} would lag far behind actual completions (it would only decrement once the
+     * main thread's blocking {@code future.get()} for that slow task finally returns) — this method
+     * is called from the worker thread itself, the moment the invocation actually finishes.
+     *
+     * @param phase the phase the invocation belongs to
+     */
+    @Override
+    public synchronized void onTaskFinished(Phase phase) {
+        this.phase = phase;
+        this.running = Math.max(0, running - 1);
+    }
+
+    /**
+     * Records a completed response, updating progress counts and the status/result tallies.
      *
      * @param phase the phase the response belongs to
      * @param response the completed response
@@ -86,7 +101,6 @@ public class ExecutionProgressTracker implements ExecutionProgressListener {
         this.phase = phase;
         this.total = total;
         this.completed = completed;
-        this.running = Math.max(0, running - 1);
         increment(statusCounts, response.responseStatus());
         increment(resultCounts, response.responseResult());
     }
@@ -95,8 +109,12 @@ public class ExecutionProgressTracker implements ExecutionProgressListener {
      * Captures the current progress state as an immutable snapshot.
      *
      * <p>{@code running} reflects the number of record/test invocations genuinely executing
-     * concurrently right now (up to the configured thread count), tracked via {@link #onTaskStarted}
-     * and {@link #onResponse}; {@code queued} is whatever remains after that.
+     * concurrently right now (up to the configured thread count), tracked via
+     * {@link #onTaskStarted}/{@link #onTaskFinished}; {@code queued} is whatever remains after
+     * that. Note {@code completed} (from {@link #onResponse}, gated by the main thread's
+     * submission-order future collection) and {@code running}/{@code queued} (gated by actual
+     * worker-thread activity) can therefore momentarily disagree under out-of-order completion —
+     * {@code queued} is floored at zero rather than allowed to go negative in that case.
      *
      * @return a snapshot of the current phase, progress counts, and status/result tallies
      */

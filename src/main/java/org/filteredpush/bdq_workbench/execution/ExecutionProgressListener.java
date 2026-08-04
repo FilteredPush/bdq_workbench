@@ -29,11 +29,18 @@ import org.filteredpush.bdq_workbench.model.Response;
  * <p>All methods have empty default implementations, so implementers need only override the
  * callbacks they care about. {@link ParallelPhaseExecutionService} drives these callbacks as it
  * works through each {@link Phase} of a run in turn: {@link #onPhaseStarted} once at the start of
- * a phase, {@link #onTaskStarted} once per record/test invocation as a worker thread picks it up
- * (not called for synthesized built-in measures, which are computed synchronously rather than via
- * the thread pool), {@link #onResponse} once for every response produced (including synthesized
- * built-in measure responses) as work streams back from its thread pool, and
- * {@link #onPhaseCompleted} once the phase's work is exhausted.
+ * a phase, {@link #onTaskStarted}/{@link #onTaskFinished} bracketing each record/test invocation
+ * from the worker thread that runs it (not called for synthesized built-in measures, which are
+ * computed synchronously rather than via the thread pool), {@link #onResponse} once for every
+ * response produced (including synthesized built-in measure responses) as work streams back from
+ * its thread pool, and {@link #onPhaseCompleted} once the phase's work is exhausted.
+ *
+ * <p>{@code onTaskStarted}/{@code onTaskFinished} are deliberately separate from
+ * {@code onResponse} for tracking genuine concurrency: futures are collected by the main thread
+ * strictly in submission order, so if an early-submitted task happens to run long, the main thread
+ * can be blocked reporting no responses yet while many later-submitted tasks have already started
+ * and finished out of order. Pairing the increment/decrement with actual task start/finish (from
+ * the worker thread itself) keeps the count accurate regardless of collection order.
  */
 public interface ExecutionProgressListener {
 
@@ -50,13 +57,23 @@ public interface ExecutionProgressListener {
     /**
      * Invoked once per record/test invocation, from the worker thread that picks it up, right
      * before the implementation is actually invoked — i.e. while it is genuinely executing
-     * concurrently with up to {@code threadCount} other invocations. Used to track true
-     * concurrency (as opposed to {@link #onResponse}, which is reported from the thread collecting
-     * completed futures, in submission order).
+     * concurrently with up to {@code threadCount} other invocations. Always paired with a matching
+     * {@link #onTaskFinished} call from the same worker thread once the invocation completes.
      *
      * @param phase the phase the invocation belongs to
      */
     default void onTaskStarted(Phase phase) {
+    }
+
+    /**
+     * Invoked once per record/test invocation, from the worker thread that ran it, immediately
+     * after the implementation has finished (successfully or not) — the counterpart to
+     * {@link #onTaskStarted}, used to track true concurrency independent of when the main thread
+     * gets around to collecting that invocation's result via {@link #onResponse}.
+     *
+     * @param phase the phase the invocation belongs to
+     */
+    default void onTaskFinished(Phase phase) {
     }
 
     /**

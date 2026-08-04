@@ -197,10 +197,14 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
                             binding,
                             executor.submit(() -> {
                                 progressListener.onTaskStarted(phase);
-                                return executionAdapter.execute(
-                                        record,
-                                        binding,
-                                        discoveredByKey.get(implementationKey));
+                                try {
+                                    return executionAdapter.execute(
+                                            record,
+                                            binding,
+                                            discoveredByKey.get(implementationKey));
+                                } finally {
+                                    progressListener.onTaskFinished(phase);
+                                }
                             })));
                 }
             }
