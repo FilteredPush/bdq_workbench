@@ -221,7 +221,8 @@ public class WorkbenchFacade {
         ExecutionSummary summary = new ExecutionSummary(
                 List.copyOf(responses),
                 buildSummaryMetadata(preparedRun, responses),
-                preparedRun.dataset());
+                preparedRun.dataset(),
+                bindingResult.bindings());
         reportingService.export(summary);
         return summary;
     }

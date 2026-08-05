@@ -35,7 +35,7 @@ import org.filteredpush.bdq_workbench.reporting.DetailedResponseStreamExporter;
 import org.filteredpush.bdq_workbench.reporting.RdfResponseExporter;
 import org.filteredpush.bdq_workbench.reporting.ReportingService;
 import org.filteredpush.bdq_workbench.reporting.SummaryReportExporter;
-import org.filteredpush.bdq_workbench.reporting.XlsCompatibilityExporter;
+import org.filteredpush.bdq_workbench.reporting.XlsxReportExporter;
 import org.filteredpush.bdq_workbench.test_discovery.ClasspathAnnotationTestDiscoveryService;
 import org.filteredpush.bdq_workbench.test_discovery.DefaultTestBindingService;
 import org.slf4j.Logger;
@@ -240,7 +240,7 @@ public final class BdqWorkbenchApplication {
                 new ReportingService(List.of(
                         new SummaryReportExporter(),
                         new DetailedResponseStreamExporter(),
-                        new XlsCompatibilityExporter(),
+                        new XlsxReportExporter(),
                         new RdfResponseExporter(config.rdfDefinitions()))));
         return facade.run(config);
     }
