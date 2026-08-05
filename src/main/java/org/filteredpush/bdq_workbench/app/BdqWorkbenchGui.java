@@ -83,7 +83,7 @@ import org.filteredpush.bdq_workbench.reporting.RdfResponseExporter;
 import org.filteredpush.bdq_workbench.reporting.ReportingService;
 import org.filteredpush.bdq_workbench.reporting.SummaryReportExporter;
 import org.filteredpush.bdq_workbench.reporting.TestResultsSummaryService;
-import org.filteredpush.bdq_workbench.reporting.XlsCompatibilityExporter;
+import org.filteredpush.bdq_workbench.reporting.XlsxReportExporter;
 import org.filteredpush.bdq_workbench.test_discovery.ClasspathAnnotationTestDiscoveryService;
 import org.filteredpush.bdq_workbench.test_discovery.DefaultTestBindingService;
 import org.filteredpush.bdq_workbench.test_discovery.DiscoveredImplementation;
@@ -1051,7 +1051,7 @@ final class BdqWorkbenchGui {
                 new ReportingService(List.of(
                         new SummaryReportExporter(),
                         new DetailedResponseStreamExporter(),
-                        new XlsCompatibilityExporter(),
+                        new XlsxReportExporter(),
                         new RdfResponseExporter(config.rdfDefinitions()))));
     }
 
@@ -1616,7 +1616,7 @@ final class BdqWorkbenchGui {
      */
     private static String renderResultSummary(ExecutionSummary summary) {
         return SummaryReportExporter.renderSummaryText("Results summary", summary)
-                + "Saved files: reports/bdq-report-summary.txt, reports/bdq-report-response-stream.txt, reports/bdq-report-xls-hook.txt, reports/bdq-report-rdf.ttl\n";
+                + "Saved files: reports/bdq-report-summary.txt, reports/bdq-report-responses.txt, reports/bdq-report-xls.xlsx, reports/bdq-report-rdf.ttl\n";
     }
 
     /**

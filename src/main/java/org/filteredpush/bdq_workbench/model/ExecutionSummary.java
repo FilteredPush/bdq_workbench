@@ -40,18 +40,40 @@ import java.util.stream.Collectors;
  *     {@link org.filteredpush.bdq_workbench.reporting.RdfResponseExporter} to enrich each
  *     response's record resource with its term values; empty when not supplied (e.g. by the two
  *     convenience constructors)
+ * @param bindings the test/implementation bindings produced during {@link
+ *     org.filteredpush.bdq_workbench.test_discovery.TestBindingService binding}, used by {@link
+ *     org.filteredpush.bdq_workbench.reporting.XlsxReportExporter} to determine which Darwin Core
+ *     terms each test acts upon or consults (from each binding's {@code ACTED_UPON}/{@code
+ *     CONSULTED} {@link BoundMethodParameter}s), including terms absent from the input data;
+ *     empty when not supplied (e.g. by the two convenience constructors)
  */
-public record ExecutionSummary(List<Response> responses, ExecutionSummaryMetadata metadata, RecordDataset dataset) {
+public record ExecutionSummary(
+        List<Response> responses,
+        ExecutionSummaryMetadata metadata,
+        RecordDataset dataset,
+        List<ImplementationBinding> bindings) {
 
     /**
-     * Canonical constructor; defensively copies {@code responses}, substitutes
-     * {@link ExecutionSummaryMetadata#empty()} for a null {@code metadata}, and substitutes an
-     * empty dataset for a null {@code dataset}.
+     * Canonical constructor; defensively copies {@code responses} and {@code bindings},
+     * substitutes {@link ExecutionSummaryMetadata#empty()} for a null {@code metadata}, and
+     * substitutes an empty dataset/binding list for null {@code dataset}/{@code bindings}.
      */
     public ExecutionSummary {
         responses = List.copyOf(responses);
         metadata = metadata == null ? ExecutionSummaryMetadata.empty() : metadata;
         dataset = dataset == null ? new RecordDataset(List.of()) : dataset;
+        bindings = List.copyOf(bindings == null ? List.of() : bindings);
+    }
+
+    /**
+     * Creates a summary with the given metadata and dataset, and no bindings.
+     *
+     * @param responses all responses for the run, executed and synthesized
+     * @param metadata aggregated metadata about the run
+     * @param dataset the input dataset the run was executed against
+     */
+    public ExecutionSummary(List<Response> responses, ExecutionSummaryMetadata metadata, RecordDataset dataset) {
+        this(responses, metadata, dataset, List.of());
     }
 
     /**
@@ -61,7 +83,7 @@ public record ExecutionSummary(List<Response> responses, ExecutionSummaryMetadat
      * @param metadata aggregated metadata about the run
      */
     public ExecutionSummary(List<Response> responses, ExecutionSummaryMetadata metadata) {
-        this(responses, metadata, new RecordDataset(List.of()));
+        this(responses, metadata, new RecordDataset(List.of()), List.of());
     }
 
     /**
@@ -70,7 +92,7 @@ public record ExecutionSummary(List<Response> responses, ExecutionSummaryMetadat
      * @param responses all responses for the run, executed and synthesized
      */
     public ExecutionSummary(List<Response> responses) {
-        this(responses, ExecutionSummaryMetadata.empty(), new RecordDataset(List.of()));
+        this(responses, ExecutionSummaryMetadata.empty(), new RecordDataset(List.of()), List.of());
     }
 
     /**

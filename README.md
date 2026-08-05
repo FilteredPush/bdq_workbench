@@ -61,7 +61,7 @@ The codebase is organized under `org.filteredpush.bdq_workbench` with explicit m
 - `rdf_policy`: use-case/policy/test RDF resolution
 - `test_discovery`: annotation-based discovery (`@Provides`, `@Validation`, `@Issue`, `@Measure`, `@Amendment`, etc.) and binding
 - `execution`: parallel phase orchestration (pre-amendment, amendment, post-amendment) with deterministic ordering
-- `reporting`: summary output, normalized response stream export, and XLS compatibility hook
+- `reporting`: summary output, normalized response stream export, RDF export, and XLSX spreadsheet export (via kurator-ffdq)
 
 Extension points are interfaces for discovery, binding, execution adapters, and report exporters.
 
@@ -107,8 +107,37 @@ Reports include:
 
 - `reports/bdq-report-summary.txt` Human readable summary of test execution results.
 - `reports/bdq-report-responses.txt` Human readable list of test execution Response values.
-- `bdq-report-rdf.ttl` RDF test responses serialized as Turtle.
-- `reports/bdq-report-xls-hook.txt` Placeholder for kurator-ffdq produced result spreadhseet.
+- `reports/bdq-report-rdf.ttl` RDF test responses serialized as Turtle.
+- `reports/bdq-report-xls.xlsx` Spreadsheet report produced via kurator-ffdq's `XLSXPostProcessor` (see below).
+
+## Spreadsheet (XLSX) report export
+
+`XlsxReportExporter` builds an in-memory kurator-ffdq `FFDQModel` directly from the run's
+`ExecutionSummary` — one data resource per input record and one response per `Response` — and
+renders it with kurator-ffdq's `XLSXPostProcessor`, which produces `Summary`, `Initial Values`,
+`Final Values`, `Measures`, `Validations`, `Amendments`, and `Issues` sheets, with per-record rows
+color-coded by outcome.
+
+A few behaviors worth knowing about:
+
+- **Missing information elements are padded, not omitted.** If a use case's tests expect a Darwin
+  Core term as an input information element (acted upon or consulted) and that term isn't present
+  in the input data at all, it still appears as a column in the report, with an empty value for
+  every record — rather than being silently missing from the spreadsheet. This comes from the
+  run's test/implementation bindings (`ExecutionSummary.bindings()`), not from re-resolving the
+  ratified ontology, so it reflects exactly what the bound implementations look for.
+- **Responses that don't apply to one record** — built-in multi-record measures and
+  synthesized unresolved/unbound placeholder responses — are listed on an extra
+  `"Unresolved & Multi-record"` sheet, since kurator-ffdq's per-record model has no place for them.
+- **Issues sheet coloring is a known gap.** kurator-ffdq's `Issue` context class lacks a no-arg
+  constructor (unlike `Measure`/`Validation`/`Amendment`), which breaks RDFBeans deserialization if
+  one is attached to a saved response. `XlsxReportExporter` leaves it unset, so ISSUE-type
+  responses still get their row and every field column, just without per-cell acted-upon/consulted
+  coloring.
+- **Build dependency:** this depends on kurator-ffdq's "restored and productized"
+  `XLSXPostProcessor`, which as of this writing only exists in a `3.3.0-SNAPSHOT` build (the
+  `pom.xml` dependency is pinned there, with a comment to move it to a released `3.3.0` once one is
+  cut). Building this project currently requires that SNAPSHOT installed locally.
 
 ## Multi-record measure preparation
 

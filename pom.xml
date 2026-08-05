@@ -64,7 +64,10 @@
         <dependency>
             <groupId>org.datakurator</groupId>
             <artifactId>kurator-ffdq</artifactId>
-            <version>3.2.0</version>
+            <!-- TODO: pin to a released 3.3.0 once cut; the productized XLSXPostProcessor
+                 (used by XlsxReportExporter) only exists in this SNAPSHOT today. Building this
+                 project currently requires installing kurator-ffdq 3.3.0-SNAPSHOT locally. -->
+            <version>3.3.0-SNAPSHOT</version>
         </dependency>
 
                 <dependency>
@@ -117,6 +120,14 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.5.2</version>
+                <configuration>
+                    <!-- Apache POI (used by XlsxReportExporter/kurator-ffdq's XLSXPostProcessor)
+                         touches java.awt.Font metrics on first use, which permanently latches
+                         GraphicsEnvironment.isHeadless() for the rest of the forked JVM. Force
+                         headless up front so that latch always resolves the same way, regardless
+                         of test execution order. -->
+                    <argLine>-Djava.awt.headless=true</argLine>
+                </configuration>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -124,6 +135,9 @@
                 <version>3.5.2</version>
                 <configuration>
                     <skipITs>${skipITs}</skipITs>
+                    <!-- Same headless AWT latch fix as surefire: POI touches Font metrics on first
+                         use, latching GraphicsEnvironment.isHeadless() for the forked JVM. -->
+                    <argLine>-Djava.awt.headless=true</argLine>
                 </configuration>
                 <executions>
                     <execution>

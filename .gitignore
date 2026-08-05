@@ -17,6 +17,9 @@ buildNumber.properties
 # JDT-specific (Eclipse Java Development Tools)
 .classpath
 
+# Claude files
+.claude/
+
 # bdq_workbench default report output
 reports/
 output.log
