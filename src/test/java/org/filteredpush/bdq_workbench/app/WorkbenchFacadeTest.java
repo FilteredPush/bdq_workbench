@@ -34,7 +34,7 @@ class WorkbenchFacadeTest {
         TestDefinition bindingUnresolved =
                 new TestDefinition("urn:test:binding", "Binding unresolved", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of());
         PreparedRun preparedRun = new PreparedRun(
-                new AppConfig(Path.of("usecase.xml"), List.of(), Path.of("dataset.zip"), "uc1", List.of("org.filteredpush"), 1),
+                new AppConfig(Path.of("usecase.xml"), List.of(), Path.of("dataset.zip"), "uc1", List.of("org.filteredpush"), 1, true),
                 new RecordDataset(List.of(new CanonicalRecord("r1", Map.of("dwc:eventDate", "2025-01-01")))),
                 new ExecutionPlan(
                         new UseCase("uc1", "Use Case", "policy:1"),
@@ -78,7 +78,7 @@ class WorkbenchFacadeTest {
         TestDefinition amendment =
                 new TestDefinition("urn:test:amend", "Amend", TestType.AMENDMENT, Phase.AMENDMENT, Map.of());
         PreparedRun preparedRun = new PreparedRun(
-                new AppConfig(Path.of("usecase.xml"), List.of(), Path.of("input.zip"), "uc1", List.of("org.filteredpush"), 1),
+                new AppConfig(Path.of("usecase.xml"), List.of(), Path.of("input.zip"), "uc1", List.of("org.filteredpush"), 1, true),
                 new RecordDataset(List.of(
                         new CanonicalRecord("r1", Map.of("dwc:countryCode", "SU", "dwc:eventDate", "")),
                         new CanonicalRecord("r2", Map.of("dwc:countryCode", "", "dwc:basisOfRecord", "HumanObservation")))),

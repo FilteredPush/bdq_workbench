@@ -77,7 +77,8 @@ public class ConfigLoader {
                 Path.of(getValue(defaults, overrides, "bdq.dataset", "dataset.zip")),
                 getValue(defaults, overrides, "bdq.usecase.id", ""),
                 implPackages,
-                parseThreadCount(getValue(defaults, overrides, "bdq.threads", "4")));
+                parseThreadCount(getValue(defaults, overrides, "bdq.threads", "4")),
+                parseBoolean(getValue(defaults, overrides, "bdq.execution.dedup", "true"), "bdq.execution.dedup"));
     }
 
     /**
@@ -93,6 +94,25 @@ public class ConfigLoader {
         } catch (NumberFormatException e) {
             throw new AppException("Invalid thread count: bdq.threads must be a whole number", e);
         }
+    }
+
+    /**
+     * Parses a strict {@code "true"}/{@code "false"} boolean setting.
+     *
+     * @param raw the raw setting value
+     * @param propertyName the property name, used in the error message if {@code raw} is invalid
+     * @return the parsed boolean
+     * @throws AppException if {@code raw} is neither {@code "true"} nor {@code "false"}
+     *     (case-insensitive)
+     */
+    private static boolean parseBoolean(String raw, String propertyName) {
+        if ("true".equalsIgnoreCase(raw)) {
+            return true;
+        }
+        if ("false".equalsIgnoreCase(raw)) {
+            return false;
+        }
+        throw new AppException("Invalid value for " + propertyName + ": must be true or false");
     }
 
     /**

@@ -45,7 +45,7 @@ java -jar target/bdq_workbench-0.1.0-SNAPSHOT.jar --help
 
 Configuration defaults live in `src/main/resources/application.properties`
 (`bdq.usecase.file`, `bdq.rdf.files`, `bdq.dataset`, `bdq.usecase.id`, `bdq.discovery.packages`,
-`bdq.threads`) and are merged with CLI/GUI overrides by `ConfigLoader`. By default the GUI fetches
+`bdq.threads`, `bdq.execution.dedup`) and are merged with CLI/GUI overrides by `ConfigLoader`. By default the GUI fetches
 and caches use-case/test-definition/ontology RDF from `bdq.tdwg.org` (`CachedResourceResolver`);
 RDF/XML, Turtle, and JSON-LD serializations are all supported. Logging is DEBUG-by-default to the
 console via `src/main/resources/logback.xml`.
@@ -87,15 +87,30 @@ understanding how the stages connect — read its class Javadoc first. The pipel
      the GUI's preflight review grid before execution.
 5. **`execution`** — `ParallelPhaseExecutionService` runs bound tests across records in phase
    order (`PRE_AMENDMENT` → `AMENDMENT` → `POST_AMENDMENT`) with deterministic ordering but
-   parallel execution within a phase (`bdq.threads` workers).  `ReflectionExecutionAdapter` is the
-   actual per-record invocation adapter: it builds a reflective argument array from the record's
-   bound parameters, invokes the target method, and reads back an ffdq-style result purely
-   reflectively (`getResultState()`, `getValue().getObject()`, `getComment()`) so this module has
-   no compile-time dependency on ffdq result types. Amendments are detected two ways — a `Map`
-   returned as the result's value, and (for AMENDMENT phase only) a before/after diff of the
-   record's term map, since some implementations mutate the record in place instead of returning
-   changed values. Any exception during argument binding or invocation is caught and turned into
-   an `OutcomeStatus.ERROR` response rather than propagated.
+   parallel execution within a phase (`bdq.threads` workers). Rather than invoking a binding once
+   per record, it partitions the phase's records into distinct-value groups per binding (one group
+   per distinct combination of the Darwin Core term values the binding declares as
+   `ACTED_UPON`/`CONSULTED` input, via `RecordGroupPartitioner`), invokes the binding once per
+   group, and copies that one response to every record in the group — relying on a BDQ test being
+   a pure function of its declared inputs. Two bindings that declare the same field set (regardless
+   of test type, or whether a term is `ACTED_UPON` for one and `CONSULTED` for the other) share the
+   same partitioning work via a `PhaseGroupCache` scoped to the phase, rather than each
+   recomputing it. Bindings with a `LEGACY_RECORD`/`LEGACY_PARAMETERS` parameter (whole
+   record/parameter map, not specific declared terms) are never dedup-eligible and always run once
+   per record, as does every binding when `bdq.execution.dedup` is `false` (default `true`).
+   Because one binding's amendment can change values a later binding in the same phase groups or
+   reads by, AMENDMENT-phase bindings are processed one at a time — each binding's groups are
+   computed, invoked, applied to every group member, and any cached partition touching the changed
+   fields is invalidated, before the next binding's groups are computed; PRE_AMENDMENT and
+   POST_AMENDMENT never mutate records mid-phase, so their bindings' groups are all submitted
+   together. `ReflectionExecutionAdapter` is the actual per-invocation adapter: it builds a
+   reflective argument array from the record's bound parameters, invokes the target method, and
+   reads back an ffdq-style result purely reflectively (`getResultState()`, `getValue().getObject()`,
+   `getComment()`) so this module has no compile-time dependency on ffdq result types. Amendments
+   are detected two ways — a `Map` returned as the result's value, and (for AMENDMENT phase only) a
+   before/after diff of the record's term map, since some implementations mutate the record in
+   place instead of returning changed values. Any exception during argument binding or invocation
+   is caught and turned into an `OutcomeStatus.ERROR` response rather than propagated.
 6. **`reporting`** — `ReportingService`/`ReportExporter` implementations turn the final
    `ExecutionSummary` (normalized `Response` stream + `ExecutionSummaryMetadata`) into
    `reports/bdq-report-summary.txt` (human-readable summary), `reports/bdq-report-responses.txt`
@@ -160,7 +175,12 @@ run.
 
 ## Significant work yet to be done: 
 
-1. Workflow that allows the reduction of the input data into sets of distinct values of input information elements, test execution over those sets, and the synthesis of the results back into the original data. This reduces the number of test executions. This is a significant enhancement to the execution model and will require careful design and implementation.
+1. ~~Workflow that allows the reduction of the input data into sets of distinct values of input
+   information elements, test execution over those sets, and the synthesis of the results back
+   into the original data~~ — done via `ParallelPhaseExecutionService`'s distinct-value execution
+   (see the `execution` section above): a test is invoked once per distinct combination of its
+   declared input values, not once per record, with the result copied back to every record sharing
+   that combination. Controlled by `bdq.execution.dedup` (default `true`).
 2. ~~Integration of the workbench with the kurator-ffdq spreadsheet exporter~~ — done via
    `XlsxReportExporter` (see the `reporting` section above). Follow-up: the `kurator-ffdq`
    dependency in `pom.xml` is currently pinned to a `3.3.0-SNAPSHOT` build, since the "restored and
