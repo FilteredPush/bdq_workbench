@@ -135,6 +135,9 @@
                 <version>3.5.2</version>
                 <configuration>
                     <skipITs>${skipITs}</skipITs>
+                    <!-- Same headless AWT latch fix as surefire: POI touches Font metrics on first
+                         use, latching GraphicsEnvironment.isHeadless() for the forked JVM. -->
+                    <argLine>-Djava.awt.headless=true</argLine>
                 </configuration>
                 <executions>
                     <execution>
