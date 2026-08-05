@@ -23,3 +23,6 @@ buildNumber.properties
 # bdq_workbench default report output
 reports/
 output.log
+
+# cached darwin cloud file
+darwin_cloud.txt
