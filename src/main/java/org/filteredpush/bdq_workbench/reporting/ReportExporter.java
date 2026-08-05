@@ -33,7 +33,9 @@ import org.filteredpush.bdq_workbench.model.ExecutionSummary;
  * are {@link DetailedResponseStreamExporter} (a tab-delimited dump of every response),
  * {@link SummaryReportExporter} (a human-readable aggregate report),
  * {@link XlsxReportExporter} (an XLSX spreadsheet via kurator-ffdq's {@code XLSXPostProcessor}),
- * and {@link RdfResponseExporter} (an RDF {@code bdqffdq:DataQualityReport}).
+ * {@link UnresolvedResponsesExporter} (a small companion XLSX workbook for responses that don't
+ * apply to a single real record), and {@link RdfResponseExporter} (an RDF
+ * {@code bdqffdq:DataQualityReport}).
  */
 public interface ReportExporter {
 

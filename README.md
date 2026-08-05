@@ -114,9 +114,9 @@ Reports include:
 
 `XlsxReportExporter` builds an in-memory kurator-ffdq `FFDQModel` directly from the run's
 `ExecutionSummary` — one data resource per input record and one response per `Response` — and
-renders it with kurator-ffdq's `XLSXPostProcessor`, which produces `Summary`, `Initial Values`,
-`Final Values`, `Measures`, `Validations`, `Amendments`, and `Issues` sheets, with per-record rows
-color-coded by outcome.
+streams it directly to `bdq-report-xls.xlsx` with kurator-ffdq's `XLSXPostProcessor`, which
+produces `Summary`, `Initial Values`, `Final Values`, `Measures`, `Validations`, `Amendments`, and
+`Issues` sheets, with per-record rows color-coded by outcome.
 
 A few behaviors worth knowing about:
 
@@ -126,9 +126,15 @@ A few behaviors worth knowing about:
   every record — rather than being silently missing from the spreadsheet. This comes from the
   run's test/implementation bindings (`ExecutionSummary.bindings()`), not from re-resolving the
   ratified ontology, so it reflects exactly what the bound implementations look for.
-- **Responses that don't apply to one record** — built-in multi-record measures and
-  synthesized unresolved/unbound placeholder responses — are listed on an extra
-  `"Unresolved & Multi-record"` sheet, since kurator-ffdq's per-record model has no place for them.
+- **Responses that don't apply to one record** — built-in multi-record measures and synthesized
+  unresolved/unbound placeholder responses — are excluded from `bdq-report-xls.xlsx` and instead
+  listed in their own small companion workbook, `bdq-report-xls-unresolved.xlsx` (via
+  `UnresolvedResponsesExporter`), since kurator-ffdq's per-record model has no place for them. This
+  is a separate file rather than an extra sheet appended afterward: appending would require
+  reopening the (potentially very large) written workbook as a plain `XSSFWorkbook`, which for a
+  large dataset can exceed Apache POI's single-zip-entry read cap and fail with a
+  `RecordFormatException`. Keeping the two files separate means the main export is a pure,
+  one-pass stream straight to disk regardless of dataset size.
 - **Issues sheet coloring is a known gap.** kurator-ffdq's `Issue` context class lacks a no-arg
   constructor (unlike `Measure`/`Validation`/`Amendment`), which breaks RDFBeans deserialization if
   one is attached to a saved response. `XlsxReportExporter` leaves it unset, so ISSUE-type

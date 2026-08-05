@@ -35,6 +35,7 @@ import org.filteredpush.bdq_workbench.reporting.DetailedResponseStreamExporter;
 import org.filteredpush.bdq_workbench.reporting.RdfResponseExporter;
 import org.filteredpush.bdq_workbench.reporting.ReportingService;
 import org.filteredpush.bdq_workbench.reporting.SummaryReportExporter;
+import org.filteredpush.bdq_workbench.reporting.UnresolvedResponsesExporter;
 import org.filteredpush.bdq_workbench.reporting.XlsxReportExporter;
 import org.filteredpush.bdq_workbench.test_discovery.ClasspathAnnotationTestDiscoveryService;
 import org.filteredpush.bdq_workbench.test_discovery.DefaultTestBindingService;
@@ -241,6 +242,7 @@ public final class BdqWorkbenchApplication {
                         new SummaryReportExporter(),
                         new DetailedResponseStreamExporter(),
                         new XlsxReportExporter(),
+                        new UnresolvedResponsesExporter(),
                         new RdfResponseExporter(config.rdfDefinitions()))));
         return facade.run(config);
     }
