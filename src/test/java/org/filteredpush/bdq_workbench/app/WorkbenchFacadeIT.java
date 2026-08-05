@@ -61,7 +61,8 @@ class WorkbenchFacadeIT {
                 base.resolve("dataset.zip"),
                 "uc1",
                 List.of("org.filteredpush"),
-                1));
+                1,
+                true));
 
         assertThat(summary.responses()).isNotEmpty();
         assertThat(summary.responses()).anyMatch(r -> r.testId().equals("urn:test:validate"));

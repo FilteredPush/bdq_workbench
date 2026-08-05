@@ -39,6 +39,9 @@ import java.util.List;
  * @param implementationPackages Java package names to scan for annotated test implementations
  * @param threadCount number of worker threads used for parallel test execution, must be at
  *     least 1
+ * @param dedupEnabled whether to invoke each test once per distinct combination of values of the
+ *     Darwin Core terms it declares as input, rather than once per record, applying the result to
+ *     every record sharing that combination; defaults to {@code true}
  */
 public record AppConfig(
         Path useCaseXml,
@@ -46,5 +49,6 @@ public record AppConfig(
         Path datasetPath,
         String useCaseId,
         List<String> implementationPackages,
-        int threadCount) {
+        int threadCount,
+        boolean dedupEnabled) {
 }

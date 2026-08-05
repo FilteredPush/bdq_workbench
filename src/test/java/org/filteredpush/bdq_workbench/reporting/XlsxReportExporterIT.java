@@ -90,7 +90,8 @@ class XlsxReportExporterIT {
                 base.resolve("dataset.zip"),
                 "uc1",
                 List.of("org.filteredpush"),
-                1));
+                1,
+                true));
 
         assertThat(summary.responses()).isNotEmpty();
 

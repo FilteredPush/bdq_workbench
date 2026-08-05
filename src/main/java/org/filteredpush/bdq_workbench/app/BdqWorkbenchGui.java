@@ -1047,7 +1047,7 @@ final class BdqWorkbenchGui {
                 new RdfPolicyResolverService(config.useCaseXml(), config.rdfDefinitions()),
                 new ClasspathAnnotationTestDiscoveryService(config.implementationPackages()),
                 new DefaultTestBindingService(),
-                new ParallelPhaseExecutionService(config.threadCount(), new ReflectionExecutionAdapter(), progressListener),
+                new ParallelPhaseExecutionService(config.threadCount(), new ReflectionExecutionAdapter(), progressListener, config.dedupEnabled()),
                 new ReportingService(List.of(
                         new SummaryReportExporter(),
                         new DetailedResponseStreamExporter(),
@@ -1070,7 +1070,8 @@ final class BdqWorkbenchGui {
      * @param discoveryPackages comma-separated implementation discovery packages
      * @param threads thread count field value
      * @param resolver resolves and caches remote/local resource paths
-     * @param defaults fallback values (currently just discovery packages) used when a field is blank
+     * @param defaults fallback values (discovery packages, and the dedup-execution setting, which
+     *     has no dedicated form field yet) used when a field is blank
      * @return the assembled configuration, ready for {@link WorkbenchFacade#prepare(AppConfig)}
      */
     private static AppConfig buildConfig(
@@ -1107,7 +1108,8 @@ final class BdqWorkbenchGui {
                 Path.of(dataset),
                 selectedUseCaseId,
                 List.copyOf(packages),
-                parseThreads(threads));
+                parseThreads(threads),
+                defaults.dedupEnabled());
     }
 
     /**

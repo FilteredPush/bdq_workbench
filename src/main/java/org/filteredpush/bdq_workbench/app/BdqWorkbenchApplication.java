@@ -179,6 +179,7 @@ public final class BdqWorkbenchApplication {
                 case "--usecase-id" -> "bdq.usecase.id";
                 case "--discovery-packages" -> "bdq.discovery.packages";
                 case "--threads" -> "bdq.threads";
+                case "--dedup" -> "bdq.execution.dedup";
                 default -> null;
             };
             if (key == null) {
@@ -210,6 +211,8 @@ public final class BdqWorkbenchApplication {
         out.println("  --usecase-id <id>              Optional use case identifier");
         out.println("  --discovery-packages <pkgs>    Comma-separated implementation packages");
         out.println("  --threads <n>                  Worker thread count (>= 1)");
+        out.println("  --dedup <true|false>           Run each test once per distinct combination of");
+        out.println("                                 input values instead of once per record (default true)");
     }
 
     /**
@@ -236,7 +239,7 @@ public final class BdqWorkbenchApplication {
                 new RdfPolicyResolverService(config.useCaseXml(), config.rdfDefinitions()),
                 new ClasspathAnnotationTestDiscoveryService(config.implementationPackages()),
                 new DefaultTestBindingService(),
-                new ParallelPhaseExecutionService(config.threadCount(), new ReflectionExecutionAdapter()),
+                new ParallelPhaseExecutionService(config.threadCount(), new ReflectionExecutionAdapter(), config.dedupEnabled()),
                 new ReportingService(List.of(
                         new SummaryReportExporter(),
                         new DetailedResponseStreamExporter(),

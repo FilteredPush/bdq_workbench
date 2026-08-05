@@ -60,7 +60,7 @@ The codebase is organized under `org.filteredpush.bdq_workbench` with explicit m
 - `ingest`: DwC-A and Data Package ingestion into canonical records
 - `rdf_policy`: use-case/policy/test RDF resolution
 - `test_discovery`: annotation-based discovery (`@Provides`, `@Validation`, `@Issue`, `@Measure`, `@Amendment`, etc.) and binding
-- `execution`: parallel phase orchestration (pre-amendment, amendment, post-amendment) with deterministic ordering
+- `execution`: parallel phase orchestration (pre-amendment, amendment, post-amendment) with deterministic ordering and distinct-value test call reduction
 - `reporting`: summary output, normalized response stream export, RDF export, and XLSX spreadsheet export (via kurator-ffdq)
 
 Extension points are interfaces for discovery, binding, execution adapters, and report exporters.
@@ -109,6 +109,40 @@ Reports include:
 - `reports/bdq-report-responses.txt` Human readable list of test execution Response values.
 - `reports/bdq-report-rdf.ttl` RDF test responses serialized as Turtle.
 - `reports/bdq-report-xls.xlsx` Spreadsheet report produced via kurator-ffdq's `XLSXPostProcessor` (see below).
+
+## Distinct-value execution (test call reduction)
+
+A BDQ test is specified as a pure function of the Darwin Core terms it declares as input
+(`@ActedUpon`/`@Consulted`), so records that share identical values for exactly those terms must
+produce identical results. Rather than invoking a test once per record, `ParallelPhaseExecutionService`
+partitions each phase's records into distinct-value groups per binding (via `RecordGroupPartitioner`),
+invokes the test once against one representative record per group, and copies that one response to
+every record in the group — the final response list has exactly the same shape (one response per
+record per test) as running per-record would, just with fewer real invocations.
+
+A few behaviors worth knowing about:
+
+- **Grouping is shared across tests, not just per test.** Two bindings that happen to declare the
+  same set of term names — regardless of test type, or whether a term is `ACTED_UPON` for one and
+  `CONSULTED` for the other — share the same partitioning work for a phase via a `PhaseGroupCache`,
+  rather than each recomputing it from scratch. E.g. ten different validations that each act upon
+  only `dwc:country` all reuse one partition of the dataset's distinct country values.
+- **Grouping is exact-match only.** Term values are compared with plain string equality — no
+  case-folding or other normalization — since many BDQ tests are sensitive to exact formatting.
+- **Amendments are sequenced correctly within the AMENDMENT phase.** Since one amendment test's
+  output can change values a later amendment test in the same phase groups or reads by,
+  AMENDMENT-phase bindings are processed one at a time: each binding's groups are computed,
+  invoked, and its resulting amendments applied to every group member, and any cached partition
+  touching the changed fields is discarded, before the next binding's groups are computed.
+  PRE_AMENDMENT and POST_AMENDMENT never mutate records mid-phase, so their bindings' groups are
+  all computed and submitted together.
+- **Not every binding is eligible.** Implementations bound via the legacy `(Map record)`/
+  `(Map record, Map parameters)` signatures read the whole record or parameter map rather than
+  specific declared terms, so the workbench can't know what subset of fields they actually depend
+  on — these always run once per record.
+- **Configurable via `bdq.execution.dedup`** (CLI `--dedup true|false`, default `true`). Disabling
+  it runs every binding once per record exactly as if none were dedup-eligible, useful for
+  debugging or comparing behavior against the pre-reduction execution path.
 
 ## Spreadsheet (XLSX) report export
 

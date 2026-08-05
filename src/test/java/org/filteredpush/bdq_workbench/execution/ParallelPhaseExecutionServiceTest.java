@@ -273,6 +273,262 @@ class ParallelPhaseExecutionServiceTest {
                         org.assertj.core.groups.Tuple.tuple("urn:test:bad", OutcomeStatus.ERROR, "IllegalStateException: boom"));
     }
 
+    @Test
+    void invokesEachDistinctValueGroupOnceRatherThanOncePerRecord() throws Exception {
+        ParallelPhaseExecutionService service = new ParallelPhaseExecutionService(2, new ReflectionExecutionAdapter());
+        CountingImpl impl = new CountingImpl();
+        Method validate = CountingImpl.class.getMethod("validate", String.class);
+        List<DiscoveredImplementation> discovered = List.of(
+                new DiscoveredImplementation("urn:test:validation", null, TestType.VALIDATION, Phase.PRE_AMENDMENT, CountingImpl.class.getName(), "validate", null,
+                        List.of(parameter(0, ParameterRole.ACTED_UPON, "dwc:country", String.class)), impl, validate));
+        List<ImplementationBinding> bindings = List.of(
+                bindingOnField("urn:test:validation", TestType.VALIDATION, CountingImpl.class.getName(), "validate", Phase.PRE_AMENDMENT, "dwc:country"));
+
+        // 5 records, only 2 distinct dwc:country values.
+        RecordDataset dataset = new RecordDataset(List.of(
+                new CanonicalRecord("r1", Map.of("dwc:country", "Greenland")),
+                new CanonicalRecord("r2", Map.of("dwc:country", "Greenland")),
+                new CanonicalRecord("r3", Map.of("dwc:country", "Greenland")),
+                new CanonicalRecord("r4", Map.of("dwc:country", "Denmark")),
+                new CanonicalRecord("r5", Map.of("dwc:country", "Denmark"))));
+
+        var responses = service.execute(dataset, bindings, discovered);
+
+        assertThat(responses.stream()
+                .filter(r -> r.testId().equals("urn:test:validation") && r.phase() == Phase.PRE_AMENDMENT))
+                .as("one response per record is still produced, regardless of dedup")
+                .hasSize(5);
+        // A non-amendment PRE_AMENDMENT binding also implicitly re-runs in POST_AMENDMENT (see
+        // bindingsForPhase), so 2 distinct values means 2 invocations per phase, 4 total.
+        assertThat(impl.invocationCount.get())
+                .as("only 2 distinct dwc:country values means only 2 real invocations per phase, not 5")
+                .isEqualTo(4);
+    }
+
+    @Test
+    void dedupProducesTheSameResponsesAsRunningOncePerRecord() throws Exception {
+        CountingImpl dedupImpl = new CountingImpl();
+        CountingImpl noDedupImpl = new CountingImpl();
+        Method validate = CountingImpl.class.getMethod("validate", String.class);
+        List<ImplementationBinding> bindings = List.of(
+                bindingOnField("urn:test:validation", TestType.VALIDATION, CountingImpl.class.getName(), "validate", Phase.PRE_AMENDMENT, "dwc:country"));
+        RecordDataset dataset = new RecordDataset(List.of(
+                new CanonicalRecord("r1", Map.of("dwc:country", "Greenland")),
+                new CanonicalRecord("r2", Map.of("dwc:country", "Greenland")),
+                new CanonicalRecord("r3", Map.of("dwc:country", "Denmark"))));
+
+        var dedupOn = new ParallelPhaseExecutionService(2, new ReflectionExecutionAdapter(), true)
+                .execute(dataset.copy(), bindings, List.of(new DiscoveredImplementation(
+                        "urn:test:validation", null, TestType.VALIDATION, Phase.PRE_AMENDMENT, CountingImpl.class.getName(), "validate", null,
+                        List.of(parameter(0, ParameterRole.ACTED_UPON, "dwc:country", String.class)), dedupImpl, validate)));
+        var dedupOff = new ParallelPhaseExecutionService(2, new ReflectionExecutionAdapter(), false)
+                .execute(dataset.copy(), bindings, List.of(new DiscoveredImplementation(
+                        "urn:test:validation", null, TestType.VALIDATION, Phase.PRE_AMENDMENT, CountingImpl.class.getName(), "validate", null,
+                        List.of(parameter(0, ParameterRole.ACTED_UPON, "dwc:country", String.class)), noDedupImpl, validate)));
+
+        // Doubled by the implicit PRE_AMENDMENT -> POST_AMENDMENT re-run (see bindingsForPhase).
+        assertThat(dedupImpl.invocationCount.get()).isEqualTo(4);
+        assertThat(noDedupImpl.invocationCount.get()).isEqualTo(6);
+        assertThat(stripTimestamps(dedupOn)).containsExactlyInAnyOrderElementsOf(stripTimestamps(dedupOff));
+    }
+
+    @Test
+    void amendmentFanOutAppliesOnlyTheChangedTermToEveryGroupMemberLeavingOtherFieldsAlone() throws Exception {
+        ParallelPhaseExecutionService service = new ParallelPhaseExecutionService(2, new ReflectionExecutionAdapter());
+        Method toCode = CountryToCodeImpl.class.getMethod("toCode", String.class);
+        Method echo = EchoLocalityAndCodeImpl.class.getMethod("echo", String.class, String.class);
+
+        List<DiscoveredImplementation> discovered = List.of(
+                new DiscoveredImplementation("urn:test:amend", null, TestType.AMENDMENT, Phase.AMENDMENT, CountryToCodeImpl.class.getName(), "toCode", null,
+                        List.of(parameter(0, ParameterRole.ACTED_UPON, "dwc:country", String.class)), new CountryToCodeImpl(), toCode),
+                new DiscoveredImplementation("urn:test:echo", null, TestType.VALIDATION, Phase.POST_AMENDMENT, EchoLocalityAndCodeImpl.class.getName(), "echo", null,
+                        List.of(parameter(0, ParameterRole.ACTED_UPON, "dwc:locality", String.class),
+                                parameter(1, ParameterRole.ACTED_UPON, "dwc:countryCode", String.class)),
+                        new EchoLocalityAndCodeImpl(), echo));
+
+        ImplementationBinding amend = bindingOnField("urn:test:amend", TestType.AMENDMENT, CountryToCodeImpl.class.getName(), "toCode", Phase.AMENDMENT, "dwc:country");
+        MethodParameter localityParam = parameter(0, ParameterRole.ACTED_UPON, "dwc:locality", String.class);
+        MethodParameter codeParam = parameter(1, ParameterRole.ACTED_UPON, "dwc:countryCode", String.class);
+        ImplementationBinding echoBinding = new ImplementationBinding(
+                "urn:test:echo",
+                TestType.VALIDATION,
+                EchoLocalityAndCodeImpl.class.getName(),
+                "echo",
+                Phase.POST_AMENDMENT,
+                Map.of(),
+                BindingStatus.BOUND,
+                ParameterizationCapability.DEFAULT_ONLY,
+                "test",
+                true,
+                List.of(
+                        new BoundMethodParameter(localityParam, "dwc:locality", null, true, "Mapped"),
+                        new BoundMethodParameter(codeParam, "dwc:countryCode", null, true, "Mapped")),
+                List.of());
+
+        RecordDataset dataset = new RecordDataset(List.of(
+                new CanonicalRecord("r1", Map.of("dwc:country", "Greenland", "dwc:locality", "A")),
+                new CanonicalRecord("r2", Map.of("dwc:country", "Greenland", "dwc:locality", "B"))));
+
+        var responses = service.execute(dataset, List.of(amend, echoBinding), discovered);
+
+        Map<String, String> echoedByRecord = responses.stream()
+                .filter(r -> r.testId().equals("urn:test:echo"))
+                .collect(java.util.stream.Collectors.toMap(Response::recordId, Response::comment));
+
+        assertThat(echoedByRecord)
+                .as("both records share the same amended countryCode but keep their own distinct locality")
+                .containsEntry("r1", "A:GL")
+                .containsEntry("r2", "B:GL");
+    }
+
+    @Test
+    void laterAmendmentPhaseBindingSeesAnEarlierBindingsAmendmentWithinTheSamePhase() throws Exception {
+        ParallelPhaseExecutionService service = new ParallelPhaseExecutionService(2, new ReflectionExecutionAdapter());
+        Method toCode = CountryToCodeImpl.class.getMethod("toCode", String.class);
+        CodeCounterImpl codeCounter = new CodeCounterImpl();
+        Method fromCode = CodeCounterImpl.class.getMethod("fromCode", String.class);
+
+        List<DiscoveredImplementation> discovered = List.of(
+                new DiscoveredImplementation("urn:test:amend", null, TestType.AMENDMENT, Phase.AMENDMENT, CountryToCodeImpl.class.getName(), "toCode", null,
+                        List.of(parameter(0, ParameterRole.ACTED_UPON, "dwc:country", String.class)), new CountryToCodeImpl(), toCode),
+                new DiscoveredImplementation("urn:test:note", null, TestType.AMENDMENT, Phase.AMENDMENT, CodeCounterImpl.class.getName(), "fromCode", null,
+                        List.of(parameter(0, ParameterRole.ACTED_UPON, "dwc:countryCode", String.class)), codeCounter, fromCode));
+
+        List<ImplementationBinding> bindings = List.of(
+                bindingOnField("urn:test:amend", TestType.AMENDMENT, CountryToCodeImpl.class.getName(), "toCode", Phase.AMENDMENT, "dwc:country"),
+                bindingOnField("urn:test:note", TestType.AMENDMENT, CodeCounterImpl.class.getName(), "fromCode", Phase.AMENDMENT, "dwc:countryCode"));
+
+        // Both records start with the SAME dwc:country but deliberately DIFFERENT stale
+        // dwc:countryCode placeholders; if the second binding grouped on the stale values it
+        // would see 2 distinct groups instead of the 1 that reflects the first binding's amendment.
+        RecordDataset dataset = new RecordDataset(List.of(
+                new CanonicalRecord("r1", Map.of("dwc:country", "Greenland", "dwc:countryCode", "STALE1")),
+                new CanonicalRecord("r2", Map.of("dwc:country", "Greenland", "dwc:countryCode", "STALE2"))));
+
+        service.execute(dataset, bindings, discovered);
+
+        assertThat(codeCounter.invocationCount.get())
+                .as("both records converge on the same amended dwc:countryCode, so the second binding sees only 1 distinct group")
+                .isEqualTo(1);
+    }
+
+    @Test
+    void legacyRoleBindingsAlwaysRunOncePerRecordEvenWithDuplicateValues() throws Exception {
+        ParallelPhaseExecutionService service = new ParallelPhaseExecutionService(2, new ReflectionExecutionAdapter());
+        CountingLegacyImpl impl = new CountingLegacyImpl();
+        Method legacy = CountingLegacyImpl.class.getMethod("validate", Map.class);
+        List<DiscoveredImplementation> discovered = List.of(
+                new DiscoveredImplementation("urn:test:legacy", null, TestType.VALIDATION, Phase.PRE_AMENDMENT, CountingLegacyImpl.class.getName(), "validate", null,
+                        List.of(new MethodParameter(0, "record", ParameterRole.LEGACY_RECORD, "record", Map.class.getName(), true)), impl, legacy));
+        MethodParameter legacyParam = new MethodParameter(0, "record", ParameterRole.LEGACY_RECORD, "record", Map.class.getName(), true);
+        ImplementationBinding binding = new ImplementationBinding(
+                "urn:test:legacy",
+                TestType.VALIDATION,
+                CountingLegacyImpl.class.getName(),
+                "validate",
+                Phase.PRE_AMENDMENT,
+                Map.of(),
+                BindingStatus.BOUND,
+                ParameterizationCapability.DEFAULT_ONLY,
+                "test",
+                true,
+                List.of(new BoundMethodParameter(legacyParam, "record", null, true, "Legacy compatibility binding")),
+                List.of());
+
+        RecordDataset dataset = new RecordDataset(List.of(
+                new CanonicalRecord("r1", Map.of("dwc:country", "Greenland")),
+                new CanonicalRecord("r2", Map.of("dwc:country", "Greenland")),
+                new CanonicalRecord("r3", Map.of("dwc:country", "Greenland"))));
+
+        service.execute(dataset, List.of(binding), discovered);
+
+        // Doubled by the implicit PRE_AMENDMENT -> POST_AMENDMENT re-run (see bindingsForPhase).
+        assertThat(impl.invocationCount.get())
+                .as("legacy whole-record bindings are never dedup-eligible")
+                .isEqualTo(6);
+    }
+
+    @Test
+    void dedupDisabledRunsEveryRecordEvenWithDuplicateValues() throws Exception {
+        ParallelPhaseExecutionService service = new ParallelPhaseExecutionService(2, new ReflectionExecutionAdapter(), false);
+        CountingImpl impl = new CountingImpl();
+        Method validate = CountingImpl.class.getMethod("validate", String.class);
+        List<DiscoveredImplementation> discovered = List.of(
+                new DiscoveredImplementation("urn:test:validation", null, TestType.VALIDATION, Phase.PRE_AMENDMENT, CountingImpl.class.getName(), "validate", null,
+                        List.of(parameter(0, ParameterRole.ACTED_UPON, "dwc:country", String.class)), impl, validate));
+        List<ImplementationBinding> bindings = List.of(
+                bindingOnField("urn:test:validation", TestType.VALIDATION, CountingImpl.class.getName(), "validate", Phase.PRE_AMENDMENT, "dwc:country"));
+        RecordDataset dataset = new RecordDataset(List.of(
+                new CanonicalRecord("r1", Map.of("dwc:country", "Greenland")),
+                new CanonicalRecord("r2", Map.of("dwc:country", "Greenland")),
+                new CanonicalRecord("r3", Map.of("dwc:country", "Greenland"))));
+
+        service.execute(dataset, bindings, discovered);
+
+        // Doubled by the implicit PRE_AMENDMENT -> POST_AMENDMENT re-run (see bindingsForPhase).
+        assertThat(impl.invocationCount.get())
+                .as("dedup disabled means every record is invoked, even with identical values")
+                .isEqualTo(6);
+    }
+
+    @Test
+    void builtInMeasureCountsReflectAllRecordsNotJustDistinctGroups() throws Exception {
+        ParallelPhaseExecutionService service = new ParallelPhaseExecutionService(2, new ReflectionExecutionAdapter());
+        Method pre = CountImpl.class.getMethod("pre", String.class);
+
+        List<DiscoveredImplementation> discovered = List.of(
+                new DiscoveredImplementation("urn:test:validation", null, TestType.VALIDATION, Phase.PRE_AMENDMENT, CountImpl.class.getName(), "pre", null,
+                        List.of(parameter(0, ParameterRole.ACTED_UPON, "dwc:eventDate", String.class)), new CountImpl(), pre));
+
+        List<ImplementationBinding> bindings = List.of(
+                binding("urn:test:validation", TestType.VALIDATION, CountImpl.class.getName(), "pre", Phase.PRE_AMENDMENT),
+                new ImplementationBinding(
+                        "urn:test:measure",
+                        TestType.MEASURE,
+                        BuiltInMeasureSpec.IMPLEMENTATION_CLASS,
+                        BuiltInMeasureSpec.IMPLEMENTATION_METHOD,
+                        Phase.PRE_AMENDMENT,
+                        new BuiltInMeasureSpec(
+                                BuiltInMeasureSpec.MeasureKind.COUNT,
+                                "VALIDATION_BASISOFRECORD_NOTEMPTY",
+                                "urn:test:validation",
+                                "COMPLIANT",
+                                List.of(),
+                                List.of()).asBindingParameters(),
+                        BindingStatus.BOUND,
+                        ParameterizationCapability.DEFAULT_ONLY,
+                        "built-in multi-record count",
+                        true,
+                        List.of(),
+                        List.of("Built-in multi-record COUNT measure")));
+
+        // 4 records all sharing the same dwc:eventDate value ("match"), so the direct validation
+        // binding is invoked only once, but the built-in measure must still count all 4 records.
+        RecordDataset dataset = new RecordDataset(List.of(
+                new CanonicalRecord("r1", Map.of("dwc:eventDate", "match")),
+                new CanonicalRecord("r2", Map.of("dwc:eventDate", "match")),
+                new CanonicalRecord("r3", Map.of("dwc:eventDate", "match")),
+                new CanonicalRecord("r4", Map.of("dwc:eventDate", "match"))));
+
+        var responses = service.execute(dataset, bindings, discovered);
+
+        assertThat(responses.stream()
+                .filter(response -> response.testId().equals("urn:test:measure") && response.phase() == Phase.PRE_AMENDMENT)
+                .toList())
+                .extracting(Response::responseResult, Response::message)
+                .containsExactly(org.assertj.core.groups.Tuple.tuple("4", "4/4 records matched COMPLIANT for VALIDATION_BASISOFRECORD_NOTEMPTY (100.0%)"));
+    }
+
+    private static List<Object> stripTimestamps(List<Response> responses) {
+        return responses.stream()
+                .map(r -> List.of(
+                        r.recordId(), r.testId(), r.testType(), r.phase(),
+                        String.valueOf(r.status()), String.valueOf(r.responseStatus()), String.valueOf(r.responseResult()),
+                        String.valueOf(r.comment()), r.amendments()))
+                .map(Object.class::cast)
+                .toList();
+    }
+
     private static MethodParameter parameter(int index, ParameterRole role, String source, Class<?> type) {
         return new MethodParameter(index, "p" + index, role, source, type.getName(), true);
     }
@@ -282,8 +538,13 @@ class ParallelPhaseExecutionServiceTest {
     }
 
     private static ImplementationBinding binding(String testId, TestType testType, String implementationClass, String method, Phase phase) {
-        MethodParameter parameter = parameter(0, ParameterRole.ACTED_UPON, "dwc:eventDate", String.class);
-        BoundMethodParameter bound = new BoundMethodParameter(parameter, "dwc:eventDate", null, true, "Mapped");
+        return bindingOnField(testId, testType, implementationClass, method, phase, "dwc:eventDate");
+    }
+
+    private static ImplementationBinding bindingOnField(
+            String testId, TestType testType, String implementationClass, String method, Phase phase, String field) {
+        MethodParameter parameter = parameter(0, ParameterRole.ACTED_UPON, field, String.class);
+        BoundMethodParameter bound = new BoundMethodParameter(parameter, field, null, true, "Mapped");
         return new ImplementationBinding(
                 testId,
                 testType,
@@ -340,6 +601,51 @@ class ParallelPhaseExecutionServiceTest {
                 case "prereq" -> new StubDQResponse("INTERNAL_PREREQUISITES_NOT_MET", null, eventDate, Map.of());
                 default -> new StubDQResponse("RUN_HAS_RESULT", "NOT_COMPLIANT", eventDate, Map.of());
             };
+        }
+    }
+
+    static class CountingImpl {
+        final AtomicInteger invocationCount = new AtomicInteger();
+
+        public StubDQResponse validate(String country) {
+            invocationCount.incrementAndGet();
+            return new StubDQResponse(
+                    "RUN_HAS_RESULT",
+                    "Greenland".equals(country) ? "COMPLIANT" : "NOT_COMPLIANT",
+                    country,
+                    Map.of());
+        }
+    }
+
+    static class CountingLegacyImpl {
+        final AtomicInteger invocationCount = new AtomicInteger();
+
+        public StubDQResponse validate(Map<String, String> record) {
+            invocationCount.incrementAndGet();
+            return new StubDQResponse("RUN_HAS_RESULT", "COMPLIANT", "ok", Map.of());
+        }
+    }
+
+    static class CountryToCodeImpl {
+        public StubDQResponse toCode(String country) {
+            String code = "Greenland".equals(country) ? "GL" : "XX";
+            return new StubDQResponse("AMENDED", Map.of("dwc:countryCode", code), "coded to " + code, Map.of("dwc:countryCode", code));
+        }
+    }
+
+    static class CodeCounterImpl {
+        final AtomicInteger invocationCount = new AtomicInteger();
+
+        public StubDQResponse fromCode(String countryCode) {
+            invocationCount.incrementAndGet();
+            return new StubDQResponse("AMENDED", Map.of("dwc:localityNote", "coded:" + countryCode), "noted", Map.of("dwc:localityNote", "coded:" + countryCode));
+        }
+    }
+
+    static class EchoLocalityAndCodeImpl {
+        public StubDQResponse echo(String locality, String countryCode) {
+            String echoed = locality + ":" + countryCode;
+            return new StubDQResponse("RUN_HAS_RESULT", echoed, echoed, Map.of());
         }
     }
 

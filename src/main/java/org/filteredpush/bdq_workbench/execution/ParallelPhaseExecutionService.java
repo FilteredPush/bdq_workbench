@@ -1,6 +1,6 @@
 /** ParallelPhaseExecutionService.java
  *
- * TestExecutionService implementation that executes bound tests phase by phase using a fixed-size thread pool, applying amendments between phases and synthesizing built-in measure responses.
+ * TestExecutionService implementation that executes bound tests phase by phase using a fixed-size thread pool, invoking each test once per distinct combination of its declared input values rather than once per record, applying amendments between phases, and synthesizing built-in measure responses.
  *
  * Copyright 2026 President and Fellows of Harvard College
  *
@@ -22,6 +22,7 @@ package org.filteredpush.bdq_workbench.execution;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -30,9 +31,12 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import org.filteredpush.bdq_workbench.model.BoundMethodParameter;
 import org.filteredpush.bdq_workbench.model.BuiltInMeasureSpec;
+import org.filteredpush.bdq_workbench.model.CanonicalRecord;
 import org.filteredpush.bdq_workbench.model.ImplementationBinding;
 import org.filteredpush.bdq_workbench.model.OutcomeStatus;
+import org.filteredpush.bdq_workbench.model.ParameterRole;
 import org.filteredpush.bdq_workbench.model.Phase;
 import org.filteredpush.bdq_workbench.model.RecordDataset;
 import org.filteredpush.bdq_workbench.model.Response;
@@ -46,37 +50,68 @@ import org.slf4j.LoggerFactory;
  * PRE_AMENDMENT/AMENDMENT/POST_AMENDMENT phases, in that order, with deterministic response
  * ordering.
  *
- * <p>Within a phase, this service submits one {@link ExecutionAdapter#execute} invocation per
- * record/binding pair to a fixed-size {@link ExecutorService}, then collects the resulting
- * {@link Future}s in submission order (not completion order) so that any exception is attributed
- * to the correct record/binding and, for the AMENDMENT phase, so amendments are applied to the
- * dataset in a stable order. The PRE_AMENDMENT phase runs against an immutable copy of the input
- * dataset; the AMENDMENT and POST_AMENDMENT phases share a second copy, into which each
- * AMENDMENT-phase response's term amendments are merged (via {@link #applyAmendments}) before the
- * POST_AMENDMENT phase begins, so validation/measure tests in POST_AMENDMENT observe amended term
- * values. {@link #bindingsForPhase} additionally re-binds non-amendment PRE_AMENDMENT bindings
- * (validations and measures without an explicit POST_AMENDMENT binding) into the POST_AMENDMENT
- * phase, so that such tests are evaluated against post-amendment data by default.
+ * <p><b>Distinct-value execution.</b> Within a phase, a test is a pure function of the Darwin
+ * Core terms it declares as {@code ACTED_UPON}/{@code CONSULTED} input (see
+ * {@link org.filteredpush.bdq_workbench.model.ParameterRole}), so records sharing identical values
+ * for exactly those terms must produce identical results. Rather than invoking
+ * {@link ExecutionAdapter#execute} once per record/binding pair, this service partitions the
+ * phase's records into distinct-value groups per binding (via {@link RecordGroupPartitioner}),
+ * invokes the binding once against one representative record per group, and then copies that one
+ * {@link Response} to every other record in the group. The resulting response list has exactly the
+ * same shape as invoking per-record would have produced — one response per record per binding —
+ * just with fewer real invocations. Two bindings that happen to declare the same set of term names
+ * (regardless of test type, or whether a term is {@code ACTED_UPON} for one and {@code CONSULTED}
+ * for the other) share the same partitioning work via a {@link PhaseGroupCache} scoped to the
+ * phase, rather than each recomputing it. Bindings with any {@code LEGACY_RECORD}/
+ * {@code LEGACY_PARAMETERS} parameter (whose implementation reads the whole record or parameter
+ * map, not specific declared terms) are not eligible for this and always run once per record, as
+ * is every binding when {@link #dedupEnabled} is {@code false}.
+ *
+ * <p><b>Amendment sequencing.</b> PRE_AMENDMENT and POST_AMENDMENT never mutate records mid-phase
+ * (amendments are only ever applied for the AMENDMENT phase), so every eligible binding's groups
+ * for either of those phases are computed and submitted together, and the resulting responses are
+ * collected in submission order. The AMENDMENT phase is different: one binding's amendment can
+ * change term values a later binding in the same phase groups or reads by, so AMENDMENT-phase
+ * bindings are processed one at a time — each binding's groups are computed, invoked, fanned out
+ * to every group member, and its resulting amendments applied to the dataset, before the next
+ * binding's groups are computed. Any cached partition whose field set overlaps the fields just
+ * changed is discarded (via {@link PhaseGroupCache#invalidate}) so the next binding needing one of
+ * those fields recomputes it from the now-amended values; partitions for unrelated field sets stay
+ * cached and shared. The PRE_AMENDMENT phase runs against an immutable copy of the input dataset;
+ * the AMENDMENT and POST_AMENDMENT phases share a second copy, so that validation/measure tests in
+ * POST_AMENDMENT observe amended term values. {@link #bindingsForPhase} additionally re-binds
+ * non-amendment PRE_AMENDMENT bindings (validations and measures without an explicit
+ * POST_AMENDMENT binding) into the POST_AMENDMENT phase, so that such tests are evaluated against
+ * post-amendment data by default.
  *
  * <p>Bindings identified by {@link BuiltInMeasureSpec#isBuiltIn} (synthetic COMPLETENESS/COUNT
- * measures with no real implementation to invoke) are not submitted to the executor; instead
- * {@link #synthesizeBuiltInMeasure} computes their result directly from the other responses
- * already produced in the same phase, once their target test's direct bindings have also run in
- * that phase.
+ * measures with no real implementation to invoke) are not submitted to the executor at all (grouped
+ * or otherwise); instead {@link #synthesizeBuiltInMeasure} computes their result directly from the
+ * other responses already produced in the same phase, once their target test's direct bindings
+ * have also run in that phase.
  *
- * <p>Execution progress is reported via the configured {@link ExecutionProgressListener}, and any
- * unhandled exception from a submitted task, or a built-in measure synthesis failure, is caught
- * and converted into an {@link OutcomeStatus#ERROR} response rather than aborting the phase.
+ * <p>Execution progress is reported via the configured {@link ExecutionProgressListener}:
+ * {@link ExecutionProgressListener#onTaskStarted}/{@link ExecutionProgressListener#onTaskFinished}
+ * bracket each actual invocation (i.e. once per distinct group, not once per record — they
+ * genuinely track concurrent work happening, which distinct-value execution reduces), while
+ * {@link ExecutionProgressListener#onResponse} and the {@code total} passed to
+ * {@link ExecutionProgressListener#onPhaseStarted}/{@link ExecutionProgressListener#onPhaseCompleted}
+ * count responses (one per record per binding, plus built-in measures) exactly as before, since
+ * that is what represents how much of the input data has been evaluated. Any unhandled exception
+ * from a submitted task, or a built-in measure synthesis failure, is caught and converted into an
+ * {@link OutcomeStatus#ERROR} response (fanned out to every member of the group that failed, since
+ * they would have failed identically) rather than aborting the phase.
  */
 public class ParallelPhaseExecutionService implements TestExecutionService {
     private static final Logger LOG = LoggerFactory.getLogger(ParallelPhaseExecutionService.class);
     private final int threadCount;
     private final ExecutionAdapter executionAdapter;
     private final ExecutionProgressListener progressListener;
+    private final boolean dedupEnabled;
 
     /**
      * Creates a service with no progress reporting (an {@link ExecutionProgressListener} with all
-     * default no-op callbacks).
+     * default no-op callbacks) and distinct-value execution enabled.
      *
      * @param threadCount the number of worker threads to use per phase; values less than 1 are
      *     treated as 1
@@ -84,11 +119,26 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
      */
     public ParallelPhaseExecutionService(int threadCount, ExecutionAdapter executionAdapter) {
         this(threadCount, executionAdapter, new ExecutionProgressListener() {
-        });
+        }, true);
     }
 
     /**
-     * Creates a service that reports progress to the given listener.
+     * Creates a service with no progress reporting and the given distinct-value execution setting.
+     *
+     * @param threadCount the number of worker threads to use per phase; values less than 1 are
+     *     treated as 1
+     * @param executionAdapter the adapter used to invoke each binding against each record
+     * @param dedupEnabled whether to invoke each eligible binding once per distinct combination of
+     *     its declared input values rather than once per record
+     */
+    public ParallelPhaseExecutionService(int threadCount, ExecutionAdapter executionAdapter, boolean dedupEnabled) {
+        this(threadCount, executionAdapter, new ExecutionProgressListener() {
+        }, dedupEnabled);
+    }
+
+    /**
+     * Creates a service that reports progress to the given listener, with distinct-value execution
+     * enabled.
      *
      * @param threadCount the number of worker threads to use per phase; values less than 1 are
      *     treated as 1
@@ -100,9 +150,31 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
             int threadCount,
             ExecutionAdapter executionAdapter,
             ExecutionProgressListener progressListener) {
+        this(threadCount, executionAdapter, progressListener, true);
+    }
+
+    /**
+     * Creates a service that reports progress to the given listener, with the given distinct-value
+     * execution setting.
+     *
+     * @param threadCount the number of worker threads to use per phase; values less than 1 are
+     *     treated as 1
+     * @param executionAdapter the adapter used to invoke each binding against each record
+     * @param progressListener the listener notified as each phase starts, as each response is
+     *     produced, and as each phase completes
+     * @param dedupEnabled whether to invoke each eligible binding once per distinct combination of
+     *     its declared input values rather than once per record; when {@code false}, every
+     *     binding runs once per record exactly as if none were dedup-eligible
+     */
+    public ParallelPhaseExecutionService(
+            int threadCount,
+            ExecutionAdapter executionAdapter,
+            ExecutionProgressListener progressListener,
+            boolean dedupEnabled) {
         this.threadCount = Math.max(1, threadCount);
         this.executionAdapter = executionAdapter;
         this.progressListener = progressListener;
+        this.dedupEnabled = dedupEnabled;
     }
 
     /**
@@ -146,11 +218,14 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
     }
 
     /**
-     * Executes a single phase: submits one {@link ExecutionAdapter#execute} call per
-     * record/binding pair (for non-built-in bindings) to a fresh fixed-size thread pool, collects
-     * results in submission order, applies amendments to {@code dataset} as AMENDMENT-phase
-     * responses arrive, then synthesizes responses for any built-in measure bindings whose target
-     * test also ran directly in this phase.
+     * Executes a single phase: for each non-built-in binding, partitions the phase's records into
+     * distinct-value groups (or one group per record, if the binding is not dedup-eligible or
+     * {@link #dedupEnabled} is {@code false}) and submits one {@link ExecutionAdapter#execute} call
+     * per group to a fresh fixed-size thread pool, then fans each group's resulting response out to
+     * every record in the group. For the AMENDMENT phase, bindings are processed one at a time (see
+     * the class Javadoc); for PRE_AMENDMENT/POST_AMENDMENT, every binding's groups are submitted
+     * together. Finally synthesizes responses for any built-in measure bindings whose target test
+     * also ran directly in this phase.
      *
      * @param phase the phase being executed, used for logging, progress reporting, and to decide
      *     whether to apply amendments and whether built-in measures are eligible
@@ -160,7 +235,7 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
      *     {@link #bindingsForPhase}
      * @param discoveredByKey discovered implementations keyed by
      *     {@code "<implementationClass>#<implementationMethod>"}
-     * @return the responses produced in this phase, in the order completed (direct invocations
+     * @return the responses produced in this phase (direct invocations, fanned out per record,
      *     followed by synthesized built-in measures); empty if there is no work to do
      * @throws RuntimeException if the executor is interrupted while awaiting results, or if an
      *     unexpected (non-{@link ExecutionException}) failure occurs while collecting results
@@ -188,50 +263,39 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
         progressListener.onPhaseStarted(phase, total);
         ExecutorService executor = Executors.newFixedThreadPool(threadCount);
         try {
-            List<PendingExecution> futures = new ArrayList<>();
-            for (var record : dataset.records()) {
-                for (var binding : phaseBindings) {
-                    String implementationKey = binding.implementationClass() + "#" + binding.implementationMethod();
-                    futures.add(new PendingExecution(
-                            record.id(),
-                            binding,
-                            executor.submit(() -> {
-                                progressListener.onTaskStarted(phase);
-                                try {
-                                    return executionAdapter.execute(
-                                            record,
-                                            binding,
-                                            discoveredByKey.get(implementationKey));
-                                } finally {
-                                    progressListener.onTaskFinished(phase);
-                                }
-                            })));
-                }
-            }
+            Map<String, CanonicalRecord> recordsById = new LinkedHashMap<>();
+            dataset.records().forEach(record -> recordsById.put(record.id(), record));
+            PhaseGroupCache groupCache = new PhaseGroupCache(dataset.records());
+
             List<Response> responses = new ArrayList<>();
             int completed = 0;
-            for (PendingExecution pending : futures) {
-                Response response;
-                try {
-                    response = pending.future().get();
-                } catch (ExecutionException e) {
-                    Throwable cause = e.getCause() == null ? e : e.getCause();
-                    LOG.error("Unhandled execution failure in phase {} for test {} using {}.{} on record {}: {}",
-                            phase,
-                            pending.binding().testId(),
-                            pending.binding().implementationClass(),
-                            pending.binding().implementationMethod(),
-                            pending.recordId(),
-                            cause.getMessage(),
-                            cause);
-                    response = errorResponse(pending.recordId(), pending.binding(), cause);
+            if (phase == Phase.AMENDMENT) {
+                for (ImplementationBinding binding : phaseBindings) {
+                    List<GroupInvocation> invocations = submitGroupedBinding(phase, binding, dataset.records(), groupCache, discoveredByKey, executor);
+                    Set<String> changedFields = new LinkedHashSet<>();
+                    for (GroupInvocation invocation : invocations) {
+                        for (Response response : collectAndFanOut(phase, invocation)) {
+                            responses.add(response);
+                            completed++;
+                            applyAmendments(recordsById, response);
+                            changedFields.addAll(response.amendments().keySet());
+                            progressListener.onResponse(phase, response, completed, total);
+                        }
+                    }
+                    groupCache.invalidate(changedFields);
                 }
-                responses.add(response);
-                completed++;
-                if (phase == Phase.AMENDMENT) {
-                    applyAmendments(dataset, response);
+            } else {
+                List<GroupInvocation> invocations = new ArrayList<>();
+                for (ImplementationBinding binding : phaseBindings) {
+                    invocations.addAll(submitGroupedBinding(phase, binding, dataset.records(), groupCache, discoveredByKey, executor));
                 }
-                progressListener.onResponse(phase, response, completed, total);
+                for (GroupInvocation invocation : invocations) {
+                    for (Response response : collectAndFanOut(phase, invocation)) {
+                        responses.add(response);
+                        completed++;
+                        progressListener.onResponse(phase, response, completed, total);
+                    }
+                }
             }
             for (ImplementationBinding measureBinding : builtInMeasures) {
                 Response response;
@@ -249,10 +313,6 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
             progressListener.onPhaseCompleted(phase, completed, total);
             LOG.debug("Completed phase {} with {} responses", phase, completed);
             return responses;
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            LOG.error("Execution interrupted in phase {}", phase, e);
-            throw new RuntimeException("Execution interrupted in phase " + phase, e);
         } catch (Exception e) {
             LOG.error("Execution failed in phase {} with {} records, {} direct bindings, {} built-in measures",
                     phase, dataset.records().size(), phaseBindings.size(), builtInMeasures.size(), e);
@@ -260,6 +320,168 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
         } finally {
             executor.shutdownNow();
         }
+    }
+
+    /**
+     * Partitions {@code records} into groups for {@code binding} (via the shared
+     * {@code groupCache} when {@code binding} is dedup-eligible and {@link #dedupEnabled}, or one
+     * singleton group per record otherwise) and submits one {@link ExecutionAdapter#execute} task
+     * per group to {@code executor}.
+     *
+     * @param phase the phase being executed, passed through to progress reporting
+     * @param binding the binding to submit invocations for
+     * @param records the phase's records
+     * @param groupCache the phase-scoped shared partition cache
+     * @param discoveredByKey discovered implementations keyed by
+     *     {@code "<implementationClass>#<implementationMethod>"}
+     * @param executor the thread pool to submit invocations to
+     * @return one pending {@link GroupInvocation} per group, in group order
+     */
+    private List<GroupInvocation> submitGroupedBinding(
+            Phase phase,
+            ImplementationBinding binding,
+            List<CanonicalRecord> records,
+            PhaseGroupCache groupCache,
+            Map<String, DiscoveredImplementation> discoveredByKey,
+            ExecutorService executor) {
+        List<RecordGroup> groups = groupsForBinding(binding, records, groupCache);
+        String implementationKey = binding.implementationClass() + "#" + binding.implementationMethod();
+        List<GroupInvocation> invocations = new ArrayList<>(groups.size());
+        for (RecordGroup group : groups) {
+            invocations.add(new GroupInvocation(binding, group, executor.submit(() -> {
+                progressListener.onTaskStarted(phase);
+                try {
+                    return executionAdapter.execute(
+                            group.representative(),
+                            binding,
+                            discoveredByKey.get(implementationKey));
+                } finally {
+                    progressListener.onTaskFinished(phase);
+                }
+            })));
+        }
+        return invocations;
+    }
+
+    /**
+     * Resolves the distinct-value groups a binding should be invoked against: the shared
+     * {@code groupCache}'s partition for {@code binding}'s declared fields when it is
+     * dedup-eligible and {@link #dedupEnabled} is {@code true}, or one singleton group per record
+     * (bypassing the cache entirely) otherwise — exactly reproducing today's one-invocation-per-record
+     * behavior for ineligible bindings or when dedup is disabled.
+     *
+     * @param binding the binding to resolve groups for
+     * @param records the phase's records
+     * @param groupCache the phase-scoped shared partition cache
+     * @return the groups to invoke {@code binding} against
+     */
+    private List<RecordGroup> groupsForBinding(ImplementationBinding binding, List<CanonicalRecord> records, PhaseGroupCache groupCache) {
+        if (!dedupEnabled || !isDedupEligible(binding)) {
+            return records.stream().map(record -> new RecordGroup(record, List.of(record.id()))).toList();
+        }
+        return groupCache.groupsFor(canonicalFields(binding));
+    }
+
+    /**
+     * Determines whether a binding's declared inputs are precise enough to safely group records
+     * by: {@code true} unless any of its parameters has role {@code LEGACY_RECORD} or
+     * {@code LEGACY_PARAMETERS}, which read the whole record/parameter map rather than specific
+     * declared Darwin Core terms, so the workbench cannot know what subset of fields the
+     * implementation actually depends on.
+     *
+     * @param binding the binding to check
+     * @return {@code true} if {@code binding} may be grouped by its declared
+     *     {@code ACTED_UPON}/{@code CONSULTED} terms
+     */
+    private static boolean isDedupEligible(ImplementationBinding binding) {
+        return binding.parameterBindings().stream()
+                .map(bound -> bound.parameter().role())
+                .noneMatch(role -> role == ParameterRole.LEGACY_RECORD || role == ParameterRole.LEGACY_PARAMETERS);
+    }
+
+    /**
+     * Extracts the canonical (sorted, deduplicated) Darwin Core term names a binding declares as
+     * {@code ACTED_UPON} or {@code CONSULTED} input, in exactly the form
+     * {@link ReflectionExecutionAdapter} looks them up by
+     * ({@link BoundMethodParameter#resolvedSource()}), so the resulting group partition reflects
+     * precisely the values the binding's implementation would read at invocation time.
+     *
+     * @param binding the binding to extract fields from
+     * @return the binding's canonical field set; empty if it declares no such terms, in which case
+     *     every record groups together since the binding is invariant across all of them
+     */
+    private static List<String> canonicalFields(ImplementationBinding binding) {
+        return binding.parameterBindings().stream()
+                .filter(bound -> bound.parameter().role() == ParameterRole.ACTED_UPON || bound.parameter().role() == ParameterRole.CONSULTED)
+                .map(BoundMethodParameter::resolvedSource)
+                .filter(source -> source != null)
+                .distinct()
+                .sorted()
+                .toList();
+    }
+
+    /**
+     * Collects one group's invocation result (converting an execution failure into an
+     * {@link OutcomeStatus#ERROR} response, exactly as {@link #executePhase} did per-record before
+     * distinct-value execution) and copies it to every member of the group.
+     *
+     * @param phase the phase the invocation belongs to, used for error logging
+     * @param invocation the pending group invocation to collect
+     * @return one response per {@link RecordGroup#memberRecordIds()} of {@code invocation}'s group,
+     *     all identical except for {@link Response#recordId()}
+     */
+    private List<Response> collectAndFanOut(Phase phase, GroupInvocation invocation) {
+        Response representative;
+        try {
+            representative = invocation.future().get();
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause() == null ? e : e.getCause();
+            LOG.error("Unhandled execution failure in phase {} for test {} using {}.{} on record {}: {}",
+                    phase,
+                    invocation.binding().testId(),
+                    invocation.binding().implementationClass(),
+                    invocation.binding().implementationMethod(),
+                    invocation.group().representative().id(),
+                    cause.getMessage(),
+                    cause);
+            representative = errorResponse(invocation.group().representative().id(), invocation.binding(), cause);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Execution interrupted in phase " + phase, e);
+        }
+        List<String> memberIds = invocation.group().memberRecordIds();
+        List<Response> fanned = new ArrayList<>(memberIds.size());
+        for (String memberId : memberIds) {
+            fanned.add(memberId.equals(representative.recordId()) ? representative : withRecordId(representative, memberId));
+        }
+        return fanned;
+    }
+
+    /**
+     * Copies a response, replacing only its {@link Response#recordId()}, used to fan a single
+     * group invocation's result out to every other record sharing that group.
+     *
+     * @param response the response to copy
+     * @param recordId the record ID the copy should carry
+     * @return an identical response except for its record ID
+     */
+    private static Response withRecordId(Response response, String recordId) {
+        return new Response(
+                recordId,
+                response.testId(),
+                response.testType(),
+                response.implementationClass(),
+                response.implementationMethod(),
+                response.phase(),
+                response.parameters(),
+                response.status(),
+                response.responseStatus(),
+                response.responseResult(),
+                response.comment(),
+                response.message(),
+                response.amendments(),
+                response.startedAt(),
+                response.finishedAt());
     }
 
     /**
@@ -503,23 +725,24 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
     }
 
     /**
-     * Merges an AMENDMENT-phase response's amendments into the matching record's term map in
-     * {@code dataset}, so that later bindings in the same (or a subsequent) phase observe the
-     * amended values. Does nothing if the response carries no amendments or if no record with a
-     * matching ID is found.
+     * Merges an AMENDMENT-phase response's amendments into the matching record's term map, so
+     * that later bindings in the same (or a subsequent) phase observe the amended values. Does
+     * nothing if the response carries no amendments or if no record with a matching ID is found.
      *
-     * @param dataset the dataset whose matching record's terms are updated in place
+     * @param recordsById the phase's records, keyed by ID, whose matching entry's terms are
+     *     updated in place
      * @param response the response whose {@link Response#amendments()} are to be applied
      */
-    private static void applyAmendments(RecordDataset dataset, Response response) {
+    private static void applyAmendments(Map<String, CanonicalRecord> recordsById, Response response) {
         if (response.amendments().isEmpty()) {
             return;
         }
+        CanonicalRecord record = recordsById.get(response.recordId());
+        if (record == null) {
+            return;
+        }
         LOG.debug("Applying amendments for record {}: {}", response.recordId(), response.amendments());
-        dataset.records().stream()
-                .filter(record -> record.id().equals(response.recordId()))
-                .findFirst()
-                .ifPresent(record -> response.amendments().forEach(record.terms()::put));
+        response.amendments().forEach(record.terms()::put);
     }
 
     /**
@@ -555,14 +778,15 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
     }
 
     /**
-     * A submitted invocation awaiting completion, paired with the record and binding it was
-     * submitted for so that failures and amendments can be attributed correctly once the future
-     * completes.
+     * A submitted group invocation awaiting completion, paired with the binding and group it was
+     * submitted for so that failures can be attributed correctly and the result can be fanned out
+     * to every member of the group once the future completes.
      *
-     * @param recordId the ID of the record the invocation was submitted for
      * @param binding the binding the invocation was submitted for
+     * @param group the distinct-value group the invocation was submitted for (invoked against
+     *     {@link RecordGroup#representative()}, applicable to every {@link RecordGroup#memberRecordIds()})
      * @param future the pending result of the invocation
      */
-    private record PendingExecution(String recordId, ImplementationBinding binding, Future<Response> future) {
+    private record GroupInvocation(ImplementationBinding binding, RecordGroup group, Future<Response> future) {
     }
 }
