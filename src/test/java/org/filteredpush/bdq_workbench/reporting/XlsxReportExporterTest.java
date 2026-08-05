@@ -118,7 +118,7 @@ class XlsxReportExporterTest {
     }
 
     @Test
-    void appendsUnresolvedAndMultiRecordSheetForSentinelResponses() throws Exception {
+    void excludesSentinelResponsesFromThePerRecordWorkbook() throws Exception {
         CanonicalRecord record1 = new CanonicalRecord("REC1", Map.of("occurrenceID", "REC1"));
         List<ImplementationBinding> bindings = List.of(actedUponBinding(MEASURE_TEST, TestType.MEASURE, "occurrenceID"));
 
@@ -144,12 +144,13 @@ class XlsxReportExporterTest {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         exporter.export(summary, output);
 
+        // Sentinel responses (MULTIRECORD/*) are excluded here, not appended as an extra sheet —
+        // see UnresolvedResponsesExporterTest for where they're actually reported. Excluding them
+        // means this workbook never needs to be reopened/rebuilt, which for a large dataset could
+        // otherwise exceed Apache POI's single-zip-entry read cap.
         try (XSSFWorkbook workbook = new XSSFWorkbook(new ByteArrayInputStream(output.toByteArray()))) {
-            Sheet sentinelSheet = workbook.getSheet("Unresolved & Multi-record");
-            assertThat(sentinelSheet).as("sentinel sheet").isNotNull();
-            assertThat(sentinelSheet.getLastRowNum()).isEqualTo(2);
-            assertThat(cellString(sentinelSheet.getRow(1), 0)).isEqualTo("MULTIRECORD");
-            assertThat(cellString(sentinelSheet.getRow(2), 0)).isEqualTo("*");
+            assertThat(workbook.getSheet("Unresolved & Multi-record")).isNull();
+            assertThat(workbook.getSheet("Measures")).as("Measures sheet").isNotNull();
         }
     }
 
@@ -171,7 +172,6 @@ class XlsxReportExporterTest {
 
         try (XSSFWorkbook workbook = new XSSFWorkbook(new ByteArrayInputStream(output.toByteArray()))) {
             assertThat(workbook.getSheet("Summary")).isNotNull();
-            assertThat(workbook.getSheet("Unresolved & Multi-record")).isNotNull();
         }
     }
 

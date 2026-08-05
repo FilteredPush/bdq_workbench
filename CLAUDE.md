@@ -99,17 +99,23 @@ understanding how the stages connect — read its class Javadoc first. The pipel
 6. **`reporting`** — `ReportingService`/`ReportExporter` implementations turn the final
    `ExecutionSummary` (normalized `Response` stream + `ExecutionSummaryMetadata`) into
    `reports/bdq-report-summary.txt` (human-readable summary), `reports/bdq-report-responses.txt`
-   (human-readable response list), `bdq-report-rdf.ttl` (RDF/Turtle), and `bdq-report-xls.xlsx`
-   (Office Open XML spreadsheet, via `XlsxReportExporter`). `XlsxReportExporter` builds an
+   (human-readable response list), `bdq-report-rdf.ttl` (RDF/Turtle), `bdq-report-xls.xlsx`
+   (Office Open XML spreadsheet, via `XlsxReportExporter`), and `bdq-report-xls-unresolved.xlsx`
+   (a small companion workbook, via `UnresolvedResponsesExporter`). `XlsxReportExporter` builds an
    in-memory kurator-ffdq `FFDQModel` directly from the run's `ExecutionSummary` — one
    `DataResource` per input record, one `bdqffdq:*Response` per `Response` — rather than
-   round-tripping through `RdfResponseExporter`'s Turtle output, and renders it with kurator-ffdq's
-   `XLSXPostProcessor`. A test's Darwin Core information elements (for per-field cell coloring, and
-   for padding every record with an empty value for any field a use case's tests expect but the
-   input data lacks entirely) are derived from `ExecutionSummary.bindings()`'s
+   round-tripping through `RdfResponseExporter`'s Turtle output, and streams it directly to the
+   output file with kurator-ffdq's `XLSXPostProcessor` (backed by `SXSSFWorkbook`, so it never
+   holds the whole workbook in memory). A test's Darwin Core information elements (for per-field
+   cell coloring, and for padding every record with an empty value for any field a use case's
+   tests expect but the input data lacks entirely) are derived from `ExecutionSummary.bindings()`'s
    `ACTED_UPON`/`CONSULTED` `BoundMethodParameter`s, not re-resolved from the ratified ontology.
    Responses whose record ID is the `"MULTIRECORD"` or `"*"` sentinel don't correspond to a single
-   real record, so they're listed on an extra `"Unresolved & Multi-record"` sheet instead. Note:
+   real record, so `XlsxReportExporter` excludes them and `UnresolvedResponsesExporter` lists them
+   in its own small workbook instead — a separate file rather than an extra sheet appended to the
+   main one, since appending would mean reopening the (potentially very large) written workbook as
+   a plain `XSSFWorkbook`, which for a large enough dataset can exceed Apache POI's single-zip-entry
+   read cap (`RecordFormatException: ... maximum length for this record type`). Note:
    kurator-ffdq's `Issue` context class has no no-arg constructor (unlike `Measure`/`Validation`/
    `Amendment`), so RDFBeans cannot deserialize an `IssueResponse` that carries one —
    `XlsxReportExporter` leaves it unset, so ISSUE-type responses round-trip correctly but without

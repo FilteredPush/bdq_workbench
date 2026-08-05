@@ -19,8 +19,6 @@
  */
 package org.filteredpush.bdq_workbench.reporting;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.URI;
@@ -79,8 +77,12 @@ import org.slf4j.LoggerFactory;
  * <p>Responses whose record ID is one of the sentinel values {@code "MULTIRECORD"} (built-in
  * multi-record measures) or {@code "*"} (synthesized unresolved/unbound placeholders) don't
  * correspond to a single real record, so {@link XLSXPostProcessor} has no place for them; they are
- * instead listed on an extra {@code "Unresolved & Multi-record"} sheet appended after the
- * per-record sheets it produces.
+ * excluded here and instead listed in {@link UnresolvedResponsesExporter}'s own small workbook.
+ * Keeping them out of this file (rather than appending a sheet to it) avoids ever having to read
+ * this workbook back into memory as a plain {@link org.apache.poi.xssf.usermodel.XSSFWorkbook} —
+ * {@link XLSXPostProcessor} streams its output directly to {@code outputStream} via {@code
+ * SXSSFWorkbook}, and reopening a large one to append a sheet has previously hit Apache POI's
+ * ~100MB single-zip-entry read cap on real, large datasets.
  *
  * <p>ISSUE-type responses are a known exception to the per-field coloring above: kurator-ffdq's
  * {@code Issue} context class (unlike {@code Measure}/{@code Validation}/{@code Amendment}) has no
@@ -117,9 +119,9 @@ public class XlsxReportExporter implements ReportExporter {
     }
 
     /**
-     * Builds an in-memory {@link FFDQModel} for {@code summary} and renders it to an XLSX
-     * workbook via {@link XLSXPostProcessor}, appending an extra sheet for any responses that
-     * don't apply to a single real record.
+     * Builds an in-memory {@link FFDQModel} for {@code summary} and streams it to an XLSX
+     * workbook directly to {@code outputStream} via {@link XLSXPostProcessor}. Responses that
+     * don't apply to a single real record are excluded (see {@link UnresolvedResponsesExporter}).
      *
      * @param summary the execution summary (responses, dataset, and bindings) to export
      * @param outputStream the stream to write the XLSX workbook to; not closed by this method
@@ -137,11 +139,9 @@ public class XlsxReportExporter implements ReportExporter {
         Map<String, DataResource> dataResourcesByRecordId = buildDataResources(
                 model, vocab, summary.dataset().records(), allExpectedFields);
 
-        List<Response> sentinelResponses = new ArrayList<>();
         boolean wroteAnyResponse = false;
         for (Response response : summary.responses()) {
             if (SENTINEL_RECORD_IDS.contains(response.recordId())) {
-                sentinelResponses.add(response);
                 continue;
             }
             DataResource dataResource = dataResourcesByRecordId.get(response.recordId());
@@ -154,16 +154,10 @@ public class XlsxReportExporter implements ReportExporter {
             wroteAnyResponse = true;
         }
 
-        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
         if (wroteAnyResponse) {
-            new XLSXPostProcessor(model).postprocess(buffer);
+            new XLSXPostProcessor(model).postprocess(outputStream);
         } else {
-            writeEmptyWorkbook(buffer);
-        }
-
-        try (XSSFWorkbook workbook = new XSSFWorkbook(new ByteArrayInputStream(buffer.toByteArray()))) {
-            appendSentinelSheet(workbook, sentinelResponses);
-            workbook.write(outputStream);
+            writeEmptyWorkbook(outputStream);
         }
     }
 
@@ -413,58 +407,21 @@ public class XlsxReportExporter implements ReportExporter {
      * Writes a minimal single-sheet workbook noting that the run produced no per-record
      * responses, so {@link XLSXPostProcessor} (which requires at least one) is not invoked.
      *
-     * @param buffer the stream to write the placeholder workbook to
+     * @param outputStream the stream to write the placeholder workbook to
      * @throws IOException if writing fails
      */
-    private void writeEmptyWorkbook(ByteArrayOutputStream buffer) throws IOException {
+    private void writeEmptyWorkbook(OutputStream outputStream) throws IOException {
         try (XSSFWorkbook workbook = new XSSFWorkbook()) {
             Sheet sheet = workbook.createSheet("Summary");
             Row row = sheet.createRow(0);
             row.createCell(0).setCellValue(
-                    "This run produced no responses applicable to a single record; see the "
-                            + "\"Unresolved & Multi-record\" sheet, if present, for details.");
-            workbook.write(buffer);
-        }
-    }
-
-    /**
-     * Appends a sheet listing responses that don't apply to a single real record (built-in
-     * multi-record measures and synthesized unresolved/unbound placeholders), if any.
-     *
-     * @param workbook the workbook to append the sheet to
-     * @param sentinelResponses the sentinel-record responses to list
-     */
-    private void appendSentinelSheet(XSSFWorkbook workbook, List<Response> sentinelResponses) {
-        if (sentinelResponses.isEmpty()) {
-            return;
-        }
-        Sheet sheet = workbook.createSheet("Unresolved & Multi-record");
-        Row header = sheet.createRow(0);
-        String[] columns = {"Record Id", "Test Id", "Phase", "Response Status", "Response Result", "Comment"};
-        for (int i = 0; i < columns.length; i++) {
-            header.createCell(i).setCellValue(columns[i]);
-        }
-        int rowNum = 1;
-        for (Response response : sentinelResponses) {
-            Row row = sheet.createRow(rowNum++);
-            row.createCell(0).setCellValue(response.recordId());
-            row.createCell(1).setCellValue(response.testId());
-            row.createCell(2).setCellValue(response.phase() == null ? "" : response.phase().name());
-            row.createCell(3).setCellValue(defaulted(response.responseStatus()));
-            row.createCell(4).setCellValue(defaulted(response.responseResult()));
-            String comment = firstNonBlank(response.comment(), response.message());
-            row.createCell(5).setCellValue(comment == null ? "" : comment);
+                    "This run produced no responses applicable to a single record; see "
+                            + "bdq-report-xls-unresolved.xlsx, if present, for details.");
+            workbook.write(outputStream);
         }
     }
 
     private static String defaulted(String value) {
         return value == null || value.isBlank() ? "" : value;
-    }
-
-    private static String firstNonBlank(String first, String second) {
-        if (first != null && !first.isBlank()) {
-            return first;
-        }
-        return second != null && !second.isBlank() ? second : null;
     }
 }
