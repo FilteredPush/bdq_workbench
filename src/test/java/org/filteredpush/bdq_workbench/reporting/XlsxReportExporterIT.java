@@ -97,7 +97,7 @@ class XlsxReportExporterIT {
         Path xlsxPath = Path.of("reports", "bdq-report-xls.xlsx");
         assertThat(Files.exists(xlsxPath)).as("XLSX report was written to %s", xlsxPath).isTrue();
 
-        try (XSSFWorkbook workbook = new XSSFWorkbook(Files.newInputStream(xlsxPath))) {
+		try (var in = Files.newInputStream(xlsxPath); XSSFWorkbook workbook = new XSSFWorkbook(in)) {
             Sheet validations = workbook.getSheet("Validations");
             assertThat(validations).as("Validations sheet").isNotNull();
 
