@@ -379,9 +379,10 @@ public class XlsxReportExporter implements ReportExporter {
         Result result = new Result();
         result.setState(state);
         result.setComment(response.comment());
-        if (response.amendments() != null && !response.amendments().isEmpty()) {
-            DataResource amendedResource = new DataResource(model.getVocab(), new LinkedHashMap<>(response.amendments()));
-            model.load(amendedResource.asModel());
+		if (response.amendments() != null && !response.amendments().isEmpty()) {
+			Map<String, String> normalizedAmendments = new LinkedHashMap<>();
+			response.amendments().forEach((term, value) -> normalizedAmendments.put(stripDwcPrefix(term), value == null ? "" : value));
+			DataResource amendedResource = new DataResource(model.getVocab(), normalizedAmendments);
             Entity entity = new Entity();
             entity.setValue(amendedResource.getURI());
             model.save(entity);
