@@ -270,6 +270,8 @@ final class BdqWorkbenchGui {
         recordFilterRow.setBorder(BorderFactory.createEmptyBorder(2, 0, 2, 0));
         form.add(recordFilterRow);
         form.add(recordFilterSummary);
+        JCheckBox dedupEnabled = new JCheckBox("Reduce repeated test calls by distinct input values", defaults.dedupEnabled());
+        form.add(dedupEnabled);
 
         JComboBox<UseCaseChoice> useCaseChoice = new JComboBox<>();
         addComboRow(form, "Use case", useCaseChoice);
@@ -323,8 +325,6 @@ final class BdqWorkbenchGui {
                 advanced,
                 "Threads",
                 Integer.toString(defaultThreadCount()));
-        JCheckBox dedupEnabled = new JCheckBox("Reduce repeated test calls by distinct input values", defaults.dedupEnabled());
-        advanced.add(dedupEnabled);
 
         JCheckBox runWithAvailableOnly = new JCheckBox("Continue when some tests are unresolved", true);
         advanced.add(runWithAvailableOnly);
@@ -513,8 +513,11 @@ final class BdqWorkbenchGui {
                         int max = Math.max(1, snapshot.total());
                         progress.setMaximum(max);
                         progress.setValue(snapshot.completed());
+                        int currentStageNumber = currentWorkflowStageNumber(editedRun, snapshot.phase(), false);
                         progress.setString(String.format(
-                                "%s %s (%d active threads) queued=%d completed=%d/%d",
+                                "Workflow stage %d/%d • %s %s (%d active threads) queued=%d completed=%d/%d",
+                                currentStageNumber,
+                                totalWorkflowStageCount(),
                                 snapshot.phase(),
                                 snapshot.running() > 0 ? "running" : "idle",
                                 snapshot.running(),
@@ -2063,7 +2066,22 @@ final class BdqWorkbenchGui {
         int unresolved = preparedRun == null
                 ? 0
                 : preparedRun.plan().unresolvedTests().size() + preparedRun.bindingResult().unresolved().size();
+        int completedStages = completedWorkflowStageCount(preparedRun, activePhase, runCompleted);
         StringBuilder builder = new StringBuilder("Process stages\n");
+        builder.append("Workflow progress: ")
+                .append(completedStages)
+                .append("/")
+                .append(totalWorkflowStageCount())
+                .append(" stages completed\n");
+        if (preparedRun != null && activePhase != null && !runCompleted && !runFailed) {
+            builder.append("Current stage: ")
+                    .append(activePhase)
+                    .append(" (stage ")
+                    .append(currentWorkflowStageNumber(preparedRun, activePhase, false))
+                    .append("/")
+                    .append(totalWorkflowStageCount())
+                    .append(")\n");
+        }
         builder.append(stageLine("Load dataset", "completed", filterSummary.originalRecordCount() + " records loaded")).append('\n');
         builder.append(stageLine(
                 "Apply record filters",
@@ -2132,13 +2150,72 @@ final class BdqWorkbenchGui {
      * @return the formatted phase line
      */
     private static String stagePhaseLine(Phase phase, Phase activePhase, boolean runCompleted, boolean runFailed) {
-        String state = runCompleted ? "completed"
-                : runFailed ? "failed"
-                : phase == activePhase ? "running" : "pending";
-        String detail = runCompleted ? "phase complete"
-                : runFailed ? "phase incomplete"
-                : phase == activePhase ? "phase in progress" : "phase not started";
+        String state;
+        String detail;
+        if (runCompleted) {
+            state = "completed";
+            detail = "phase complete";
+        } else if (runFailed && phase == activePhase) {
+            state = "failed";
+            detail = "phase incomplete";
+        } else if (activePhase != null && phase.ordinal() < activePhase.ordinal()) {
+            state = "completed";
+            detail = "phase complete";
+        } else if (phase == activePhase) {
+            state = "running";
+            detail = "phase in progress";
+        } else {
+            state = "pending";
+            detail = "phase not started";
+        }
         return stageLine(phase.name(), state, detail);
+    }
+
+    /**
+     * Returns the total number of coarse workflow stages shown in the monitor UI.
+     *
+     * @return the total number of displayed stages
+     */
+    private static int totalWorkflowStageCount() {
+        return 9;
+    }
+
+    /**
+     * Counts how many displayed workflow stages have completed so far.
+     *
+     * @param preparedRun the run being displayed
+     * @param activePhase the currently running phase, if any
+     * @param runCompleted whether the full run has completed
+     * @return the number of completed stages in the monitor view
+     */
+    private static int completedWorkflowStageCount(PreparedRun preparedRun, Phase activePhase, boolean runCompleted) {
+        if (preparedRun == null) {
+            return 0;
+        }
+        if (runCompleted) {
+            return totalWorkflowStageCount();
+        }
+        int completed = 5;
+        if (activePhase != null) {
+            completed += activePhase.ordinal();
+        }
+        return completed;
+    }
+
+    /**
+     * Returns the currently active one-based workflow stage number for progress display.
+     *
+     * @param preparedRun the run being displayed
+     * @param activePhase the currently running phase, if any
+     * @param runCompleted whether the full run has completed
+     * @return the one-based stage number currently in progress or just completed
+     */
+    private static int currentWorkflowStageNumber(PreparedRun preparedRun, Phase activePhase, boolean runCompleted) {
+        int completed = completedWorkflowStageCount(preparedRun, activePhase, runCompleted);
+        if (runCompleted || preparedRun == null) {
+            return completed;
+        }
+        return Math.min(totalWorkflowStageCount(), completed + 1);
     }
 
     /**

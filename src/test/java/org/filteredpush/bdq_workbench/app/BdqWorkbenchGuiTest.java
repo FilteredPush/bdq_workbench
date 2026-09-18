@@ -490,10 +490,38 @@ class BdqWorkbenchGuiTest {
 
         String overview = (String) helper.invoke(null, preparedRun, null, false, false);
 
+        assertThat(overview).contains("Workflow progress: 5/9 stages completed");
         assertThat(overview).contains("[completed] Load dataset - 3 records loaded");
         assertThat(overview).contains("[completed] Apply record filters - 1 kept, 2 excluded");
         assertThat(overview).contains("[pending] PRE_AMENDMENT - phase not started");
         assertThat(overview).contains("[pending] Export reports - reports not written yet");
+    }
+
+    @Test
+    void stageOverviewShowsOverallWorkflowProgressWhileRunning() throws Exception {
+        Method helper = BdqWorkbenchGui.class.getDeclaredMethod(
+                "renderStageOverview",
+                PreparedRun.class,
+                Phase.class,
+                boolean.class,
+                boolean.class);
+        helper.setAccessible(true);
+        PreparedRun preparedRun = new PreparedRun(
+                null,
+                new RecordDataset(List.of(new CanonicalRecord("r1", Map.of("dwc:country", "Canada")))),
+                new ExecutionPlan(new UseCase("urn:usecase", "Use case", "urn:policy"), new Policy("urn:policy", List.of()), List.of(), List.of()),
+                List.of(),
+                new TestBindingResult(List.of(), List.of(), List.of()),
+                RecordFilterSummary.unfiltered(new RecordDataset(List.of(
+                        new CanonicalRecord("r1", Map.of("dwc:country", "Canada"))))));
+
+        String overview = (String) helper.invoke(null, preparedRun, Phase.AMENDMENT, false, false);
+
+        assertThat(overview).contains("Workflow progress: 6/9 stages completed");
+        assertThat(overview).contains("Current stage: AMENDMENT (stage 7/9)");
+        assertThat(overview).contains("[completed] PRE_AMENDMENT - phase complete");
+        assertThat(overview).contains("[running] AMENDMENT - phase in progress");
+        assertThat(overview).contains("[pending] POST_AMENDMENT - phase not started");
     }
 
     @Test
