@@ -311,6 +311,7 @@ class BdqWorkbenchGuiTest {
                         2,
                         1,
                         Map.of(),
+                        Map.of(),
                         Map.of("dwc:countryCode=RU", 1L),
                         Map.of("dwc:countryCode: SU -> RU", 1L)));
 
@@ -667,6 +668,16 @@ class BdqWorkbenchGuiTest {
                 "urn:usecase:1");
 
         assertThat(selected).isEqualTo("urn:usecase:1");
+    }
+
+    @Test
+    void longestSelectableTermUsesLongestNonBlankFieldForStableComboSizing() throws Exception {
+        Method helper = BdqWorkbenchGui.class.getDeclaredMethod("longestSelectableTerm", List.class);
+        helper.setAccessible(true);
+
+        String selected = (String) helper.invoke(null, List.of("", "dwc:genus", "dwc:collectionCode", "dwc:country"));
+
+        assertThat(selected).isEqualTo("dwc:collectionCode");
     }
 
     @Test

@@ -82,6 +82,7 @@ class SummaryReportExporterTest {
                         5,
                         2,
                         Map.of("dwc:country", List.of("Canada"), "dwc:genus", List.of("Abies", "Pinus")),
+                        Map.of(),
                         Map.of(
                                 "dwc:countryCode=RU", 3L,
                                 "dwc:occurrenceStatus=present", 2L),

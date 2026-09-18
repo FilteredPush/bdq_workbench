@@ -37,6 +37,7 @@ import java.util.Collections;
  *     execution subset after filtering
  * @param filteredSingleRecordCount the number of records selected for execution after filtering
  * @param recordFilters active record filters keyed by resolved dataset field name
+ * @param testLabelsById human-readable test labels keyed by test identifier
  * @param filledInValueCounts tallies of {@code term=value} pairs produced by amendments that
  *     filled in a previously empty term, keyed as described in
  *     {@link org.filteredpush.bdq_workbench.app.WorkbenchFacade}
@@ -52,6 +53,7 @@ public record ExecutionSummaryMetadata(
         int filteredDarwinCoreTermCount,
         int filteredSingleRecordCount,
         Map<String, List<String>> recordFilters,
+        Map<String, String> testLabelsById,
         Map<String, Long> filledInValueCounts,
         Map<String, Long> amendedValuePairCounts) {
 
@@ -75,7 +77,7 @@ public record ExecutionSummaryMetadata(
 			Map<String, Long> filledInValueCounts,
 			Map<String, Long> amendedValuePairCounts) {
 		this(useCaseId, useCaseLabel, inputFile, darwinCoreTermCount, singleRecordCount, darwinCoreTermCount,
-				singleRecordCount, Map.of(), filledInValueCounts, amendedValuePairCounts);
+				singleRecordCount, Map.of(), Map.of(), filledInValueCounts, amendedValuePairCounts);
 	}
 
 	/**
@@ -86,6 +88,8 @@ public record ExecutionSummaryMetadata(
 		(recordFilters == null ? Map.<String, List<String>>of() : recordFilters)
 				.forEach((field, values) -> copiedFilters.put(field, List.copyOf(values == null ? List.of() : values)));
 		recordFilters = Collections.unmodifiableMap(copiedFilters);
+		testLabelsById = Collections.unmodifiableMap(new LinkedHashMap<>(
+				testLabelsById == null ? Map.of() : testLabelsById));
 		filledInValueCounts = Collections.unmodifiableMap(new LinkedHashMap<>(
 				filledInValueCounts == null ? Map.of() : filledInValueCounts));
 		amendedValuePairCounts = Collections.unmodifiableMap(new LinkedHashMap<>(
@@ -98,7 +102,7 @@ public record ExecutionSummaryMetadata(
      * @return metadata with blank identity fields, zero counts, and empty tally maps
      */
     public static ExecutionSummaryMetadata empty() {
-        return new ExecutionSummaryMetadata("", "", "", 0, 0, 0, 0, Map.of(), Map.of(), Map.of());
+        return new ExecutionSummaryMetadata("", "", "", 0, 0, 0, 0, Map.of(), Map.of(), Map.of(), Map.of());
     }
 
 	/**

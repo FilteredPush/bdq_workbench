@@ -282,6 +282,10 @@ public class WorkbenchFacade {
                         record -> java.util.Map.copyOf(record.terms()),
                         (left, right) -> left,
                         java.util.LinkedHashMap::new));
+        java.util.Map<String, String> testLabelsById = new java.util.LinkedHashMap<>();
+        preparedRun.plan().tests().forEach(test -> testLabelsById.put(test.id(), test.label()));
+        preparedRun.plan().unresolvedTests().forEach(test -> testLabelsById.put(test.id(), test.label()));
+        preparedRun.bindingResult().unresolved().forEach(test -> testLabelsById.putIfAbsent(test.id(), test.label()));
         return new ExecutionSummaryMetadata(
                 useCase.id(),
                 useCase.label(),
@@ -293,6 +297,7 @@ public class WorkbenchFacade {
                 preparedRun.filterSummary().filteredDarwinCoreTermCount(),
                 preparedRun.filterSummary().filteredRecordCount(),
                 preparedRun.filterSummary().resolvedCriteria(),
+                testLabelsById,
                 summarizeFilledInValues(responses),
                 summarizeAmendedValuePairs(responses, sourceTermsByRecordId));
     }

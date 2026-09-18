@@ -205,8 +205,10 @@ final class BdqWorkbenchGui {
         resetWorkflowVisualizationPanel(workflowVisualizationPanel);
         CardLayout summaryCards = new CardLayout();
         JPanel summaryCardPanel = new JPanel(summaryCards);
-        summaryCardPanel.add(new JScrollPane(resultSummaryArea), "text");
-        summaryCardPanel.add(new JScrollPane(workflowVisualizationPanel), "workflow");
+        JScrollPane resultSummaryScrollPane = new JScrollPane(resultSummaryArea);
+        JScrollPane workflowVisualizationScrollPane = new JScrollPane(workflowVisualizationPanel);
+        summaryCardPanel.add(resultSummaryScrollPane, "text");
+        summaryCardPanel.add(workflowVisualizationScrollPane, "workflow");
 
         JPanel monitorPanel = new JPanel(new BorderLayout(8, 8));
         JSplitPane bindingGridSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT,
@@ -239,7 +241,7 @@ final class BdqWorkbenchGui {
         loadParameters.setEnabled(false);
         JButton saveParameters = new JButton("Save Parameters...");
         saveParameters.setEnabled(false);
-        JButton toggleWorkflowView = new JButton("Show Workflow View");
+        JButton toggleWorkflowView = new JButton("Show Workflow Visualization");
         toggleWorkflowView.setEnabled(false);
         JButton backToSetup = new JButton("Back to Select Inputs");
         JButton startRun = new JButton("Start Run");
@@ -447,12 +449,12 @@ final class BdqWorkbenchGui {
         Runnable showTextSummary = () -> {
             summaryCards.show(summaryCardPanel, "text");
             showingWorkflowView[0] = false;
-            toggleWorkflowView.setText("Show Workflow View");
+            toggleWorkflowView.setText("Show Workflow Visualization");
         };
         Runnable showWorkflowSummary = () -> {
             summaryCards.show(summaryCardPanel, "workflow");
             showingWorkflowView[0] = true;
-            toggleWorkflowView.setText("Show Results Summary");
+            toggleWorkflowView.setText("Hide Workflow Visualization");
         };
         toggleWorkflowView.addActionListener(e -> {
             if (!toggleWorkflowView.isEnabled()) {
@@ -1568,7 +1570,6 @@ final class BdqWorkbenchGui {
 	rows.add(addRecordFilterRow(rowsPanel, profile, null, ""));
 	rowsPanel.revalidate();
 	rowsPanel.repaint();
-	dialog.pack();
         });
 
         JButton apply = new JButton("Apply");
@@ -1639,6 +1640,7 @@ final class BdqWorkbenchGui {
         selectableTerms.addAll(profile.availableTerms());
         JComboBox<String> fieldChoice = new JComboBox<>(selectableTerms.toArray(String[]::new));
         fieldChoice.setMaximumRowCount(20);
+        fieldChoice.setPrototypeDisplayValue(longestSelectableTerm(selectableTerms));
         String unresolvedMessage = null;
         String unresolvedField = null;
         if (initialField != null) {
@@ -1663,6 +1665,7 @@ final class BdqWorkbenchGui {
         suggestionArea.setLineWrap(true);
         suggestionArea.setWrapStyleWord(true);
         suggestionArea.setBorder(BorderFactory.createEtchedBorder());
+        lockTextAreaHeight(suggestionArea);
         installTextAreaClipboardSupport(suggestionArea);
         JButton remove = new JButton("Remove");
         remove.addActionListener(e -> {
@@ -1992,8 +1995,36 @@ final class BdqWorkbenchGui {
         int width = Math.max(preferred.width, 220);
         Dimension normalized = new Dimension(width, targetHeight);
         combo.setPreferredSize(normalized);
-        combo.setMinimumSize(new Dimension(120, targetHeight));
-        combo.setMaximumSize(new Dimension(Integer.MAX_VALUE, targetHeight));
+        combo.setMinimumSize(normalized);
+        combo.setMaximumSize(normalized);
+    }
+
+    /**
+     * Fixes a text area's preferred/minimum/maximum height so dynamic wrapped text does not cause
+     * surrounding filter rows to resize and scroll the selected controls out of view.
+     *
+     * @param textArea the text area whose height should remain stable
+     */
+    private static void lockTextAreaHeight(JTextArea textArea) {
+        Dimension preferred = textArea.getPreferredSize();
+        Dimension normalized = new Dimension(Math.max(preferred.width, 320), preferred.height);
+        textArea.setPreferredSize(normalized);
+        textArea.setMinimumSize(normalized);
+        textArea.setMaximumSize(new Dimension(Integer.MAX_VALUE, normalized.height));
+    }
+
+    /**
+     * Returns a stable prototype display value for a field-selection combo box so its width does
+     * not change when different terms are selected.
+     *
+     * @param selectableTerms all candidate terms shown by the combo box
+     * @return the longest available term, or a short blank placeholder when no terms exist
+     */
+    private static String longestSelectableTerm(List<String> selectableTerms) {
+        return selectableTerms.stream()
+                .max(java.util.Comparator.comparingInt(String::length))
+                .filter(value -> !value.isBlank())
+                .orElse("Select field");
     }
 
     /**

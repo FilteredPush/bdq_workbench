@@ -122,6 +122,8 @@ public class XlsxReportExporter implements ReportExporter {
      * Builds an in-memory {@link FFDQModel} for {@code summary} and streams it to an XLSX
      * workbook directly to {@code outputStream} via {@link XLSXPostProcessor}. Responses that
      * don't apply to a single real record are excluded (see {@link UnresolvedResponsesExporter}).
+     * When {@link ExecutionSummary#metadata()} carries human-readable test labels, those labels are
+     * written into the spreadsheet's test/specification column instead of raw test identifiers.
      *
      * @param summary the execution summary (responses, dataset, and bindings) to export
      * @param outputStream the stream to write the XLSX workbook to; not closed by this method
@@ -133,6 +135,7 @@ public class XlsxReportExporter implements ReportExporter {
         Vocabulary vocab = model.getVocab();
 
         Map<String, List<String>> fieldsByTestId = fieldsExpectedByTest(summary.bindings());
+        Map<String, String> testLabelsById = summary.metadata().testLabelsById();
         Set<String> allExpectedFields = new LinkedHashSet<>();
         fieldsByTestId.values().forEach(allExpectedFields::addAll);
 
@@ -150,7 +153,12 @@ public class XlsxReportExporter implements ReportExporter {
                         response.recordId(), response.testId());
                 continue;
             }
-            addResponse(model, dataResource, response, fieldsByTestId.getOrDefault(response.testId(), List.of()));
+            addResponse(
+                    model,
+                    dataResource,
+                    response,
+                    fieldsByTestId.getOrDefault(response.testId(), List.of()),
+                    testLabelsById.get(response.testId()));
             wroteAnyResponse = true;
         }
 
@@ -252,13 +260,19 @@ public class XlsxReportExporter implements ReportExporter {
      * @param dataResource the record's data resource, linked via {@code bdqffdq:appliesTo}
      * @param response the response to render
      * @param fields the Darwin Core terms this test acts upon or consults, used for cell coloring
+     * @param testLabel the human-readable label for {@code response}'s test, if known
      */
-    private void addResponse(FFDQModel model, DataResource dataResource, Response response, List<String> fields) {
+    private void addResponse(
+            FFDQModel model,
+            DataResource dataResource,
+            Response response,
+            List<String> fields,
+            String testLabel) {
         ResultState state = new ResultState(defaulted(response.responseStatus()));
         model.save(state);
 
         Specification specification = new Specification();
-        specification.setLabel(response.testId());
+        specification.setLabel(testLabel == null || testLabel.isBlank() ? response.testId() : testLabel);
         model.save(specification);
 
         InformationElement informationElement = fields.isEmpty() ? null : new InformationElement(fieldUris(fields));
