@@ -49,6 +49,7 @@ class XlsxReportExporterTest {
     private static final String MEASURE_TEST = "urn:test:measure-occurrenceid-completeness";
     private static final String AMENDMENT_TEST = "urn:test:amendment-eventdate-standardized";
     private static final String ISSUE_TEST = "urn:test:issue-country-ambiguous";
+    private static final String VALIDATION_LABEL = "Country not empty";
 
     @Test
     void formatAndFileExtensionIdentifyAnXlsxWorkbook() {
@@ -175,6 +176,39 @@ class XlsxReportExporterTest {
         }
     }
 
+    @Test
+    void usesHumanReadableTestLabelsWhenAvailableInMetadata() throws Exception {
+        CanonicalRecord record1 = new CanonicalRecord(
+                "REC1", new LinkedHashMap<>(Map.of("occurrenceID", "REC1", "country", "Greenland")));
+        List<ImplementationBinding> bindings = List.of(actedUponBinding(VALIDATION_TEST, TestType.VALIDATION, "country"));
+        ExecutionSummary summary = new ExecutionSummary(
+                List.of(validationResponse("REC1", "COMPLIANT")),
+                new org.filteredpush.bdq_workbench.model.ExecutionSummaryMetadata(
+                        "urn:usecase:1",
+                        "Use Case One",
+                        "/tmp/input.csv",
+                        2,
+                        1,
+                        2,
+                        1,
+                        Map.of(),
+                        Map.of(VALIDATION_TEST, VALIDATION_LABEL),
+                        Map.of(),
+                        Map.of()),
+                new RecordDataset(List.of(record1)),
+                bindings);
+
+        XlsxReportExporter exporter = new XlsxReportExporter();
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        exporter.export(summary, output);
+
+        try (XSSFWorkbook workbook = new XSSFWorkbook(new ByteArrayInputStream(output.toByteArray()))) {
+            Sheet validations = workbook.getSheet("Validations");
+            assertThat(sheetContains(validations, VALIDATION_LABEL)).isTrue();
+            assertThat(sheetContains(validations, VALIDATION_TEST)).isFalse();
+        }
+    }
+
     private static ImplementationBinding actedUponBinding(String testId, TestType testType, String term) {
         MethodParameter parameter = new MethodParameter(0, "term", ParameterRole.ACTED_UPON, "dwc:" + term, "java.lang.String", true);
         BoundMethodParameter bound = new BoundMethodParameter(parameter, term, null, true, "Mapped to " + term);
@@ -239,5 +273,24 @@ class XlsxReportExporterTest {
             return "";
         }
         return row.getCell(column).getStringCellValue();
+    }
+
+    private static boolean sheetContains(Sheet sheet, String value) {
+        if (sheet == null) {
+            return false;
+        }
+        for (int rowIndex = 0; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
+            Row row = sheet.getRow(rowIndex);
+            if (row == null) {
+                continue;
+            }
+            for (int cellIndex = 0; cellIndex < row.getLastCellNum(); cellIndex++) {
+                if (row.getCell(cellIndex) != null
+                        && value.equals(row.getCell(cellIndex).toString())) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 }

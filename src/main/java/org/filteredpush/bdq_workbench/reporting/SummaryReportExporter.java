@@ -123,11 +123,30 @@ public class SummaryReportExporter implements ReportExporter {
                 .append(metadata.inputFile().isBlank() ? "<unknown>" : metadata.inputFile())
                 .append('\n');
         builder.append("Darwin Core terms present in input file: ")
-                .append(metadata.darwinCoreTermCount())
+                .append(metadata.inputDarwinCoreTermCount())
                 .append('\n');
         builder.append("SingleRecords in input file: ")
-                .append(metadata.singleRecordCount())
+                .append(metadata.inputSingleRecordCount())
                 .append('\n');
+        builder.append("Darwin Core terms selected for execution: ")
+                .append(metadata.filteredDarwinCoreTermCount())
+                .append('\n');
+        builder.append("SingleRecords selected for execution: ")
+                .append(metadata.filteredSingleRecordCount())
+                .append('\n');
+        builder.append("SingleRecords excluded by record filters: ")
+                .append(metadata.excludedSingleRecordCount())
+                .append('\n');
+        builder.append("Record filters:\n");
+        if (metadata.recordFilters().isEmpty()) {
+            builder.append(" - none\n");
+        } else {
+            metadata.recordFilters().forEach((field, values) -> builder.append(" - ")
+                	.append(field)
+                	.append(" = ")
+                	.append(String.join(" | ", values))
+                	.append('\n'));
+        }
     }
 
     /**

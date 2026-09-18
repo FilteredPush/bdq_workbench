@@ -2,11 +2,14 @@ package org.filteredpush.bdq_workbench.app;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.awt.CardLayout;
 import java.lang.reflect.Method;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import javax.swing.JButton;
+import javax.swing.JPanel;
 import org.filteredpush.bdq_workbench.model.BuiltInMeasureSpec;
 import org.filteredpush.bdq_workbench.model.ExecutionPlan;
 import org.filteredpush.bdq_workbench.model.ExecutionSummary;
@@ -16,6 +19,7 @@ import org.filteredpush.bdq_workbench.model.PreparedRun;
 import org.filteredpush.bdq_workbench.model.BindingReview;
 import org.filteredpush.bdq_workbench.model.BindingStatus;
 import org.filteredpush.bdq_workbench.model.BoundMethodParameter;
+import org.filteredpush.bdq_workbench.model.CanonicalRecord;
 import org.filteredpush.bdq_workbench.model.ImplementationBinding;
 import org.filteredpush.bdq_workbench.model.ImplementationStatus;
 import org.filteredpush.bdq_workbench.model.MethodParameter;
@@ -25,6 +29,7 @@ import org.filteredpush.bdq_workbench.model.ParameterizationCapability;
 import org.filteredpush.bdq_workbench.model.Phase;
 import org.filteredpush.bdq_workbench.model.Policy;
 import org.filteredpush.bdq_workbench.model.RecordDataset;
+import org.filteredpush.bdq_workbench.model.RecordFilterSummary;
 import org.filteredpush.bdq_workbench.model.Response;
 import org.filteredpush.bdq_workbench.model.TestDefinition;
 import org.filteredpush.bdq_workbench.model.TestType;
@@ -306,6 +311,10 @@ class BdqWorkbenchGuiTest {
                         "/tmp/input.csv",
                         2,
                         1,
+                        2,
+                        1,
+                        Map.of(),
+                        Map.of(),
                         Map.of("dwc:countryCode=RU", 1L),
                         Map.of("dwc:countryCode: SU -> RU", 1L)));
 
@@ -316,6 +325,9 @@ class BdqWorkbenchGuiTest {
         assertThat(text).contains("Input file: /tmp/input.csv\n");
         assertThat(text).contains("Darwin Core terms present in input file: 2\n");
         assertThat(text).contains("SingleRecords in input file: 1\n");
+        assertThat(text).contains("Darwin Core terms selected for execution: 2\n");
+        assertThat(text).contains("SingleRecords selected for execution: 1\n");
+        assertThat(text).contains("Record filters:\n - none\n");
         assertThat(text).contains("By phase:\n - PRE_AMENDMENT: 2\n");
         assertThat(text).contains("By response status:\n - RUN_HAS_RESULT: 2\n");
         assertThat(text).contains("By response result:");
@@ -453,6 +465,389 @@ class BdqWorkbenchGuiTest {
                 .isEqualTo("1 (50.0%)");
         assertThat(model.getValueAt(0, 9))
                 .isEqualTo("2 (100.0%)");
+    }
+
+    @Test
+    void stageOverviewIncludesFilterStageCounts() throws Exception {
+        Method helper = BdqWorkbenchGui.class.getDeclaredMethod(
+                "renderStageOverview",
+                PreparedRun.class,
+                Phase.class,
+                boolean.class,
+                boolean.class);
+        helper.setAccessible(true);
+        PreparedRun preparedRun = new PreparedRun(
+                null,
+                new RecordDataset(List.of(new CanonicalRecord("r1", Map.of("dwc:country", "Canada")))),
+                new ExecutionPlan(new UseCase("urn:usecase", "Use case", "urn:policy"), new Policy("urn:policy", List.of()), List.of(), List.of()),
+                List.of(),
+                new TestBindingResult(List.of(), List.of(), List.of()),
+                new RecordFilterSummary(
+                        new RecordDataset(List.of(new CanonicalRecord("r1", Map.of("dwc:country", "Canada")))),
+                        3,
+                        1,
+                        2,
+                        2,
+                        1,
+                        Map.of("dwc:country", List.of("Canada")),
+                        List.of("Record filter field country resolved to input field dwc:country")));
+
+        String overview = (String) helper.invoke(null, preparedRun, null, false, false);
+
+        assertThat(overview).contains("Workflow progress: 5/9 stages completed");
+        assertThat(overview).contains("[completed] Load dataset - 3 records loaded");
+        assertThat(overview).contains("[completed] Apply record filters - 1 kept, 2 excluded");
+        assertThat(overview).contains("[pending] PRE_AMENDMENT - phase not started");
+        assertThat(overview).contains("[pending] Export reports - reports not written yet");
+    }
+
+    @Test
+    void stageOverviewShowsOverallWorkflowProgressWhileRunning() throws Exception {
+        Method helper = BdqWorkbenchGui.class.getDeclaredMethod(
+                "renderStageOverview",
+                PreparedRun.class,
+                Phase.class,
+                boolean.class,
+                boolean.class);
+        helper.setAccessible(true);
+        PreparedRun preparedRun = new PreparedRun(
+                null,
+                new RecordDataset(List.of(new CanonicalRecord("r1", Map.of("dwc:country", "Canada")))),
+                new ExecutionPlan(new UseCase("urn:usecase", "Use case", "urn:policy"), new Policy("urn:policy", List.of()), List.of(), List.of()),
+                List.of(),
+                new TestBindingResult(List.of(), List.of(), List.of()),
+                RecordFilterSummary.unfiltered(new RecordDataset(List.of(
+                        new CanonicalRecord("r1", Map.of("dwc:country", "Canada"))))));
+
+        String overview = (String) helper.invoke(null, preparedRun, Phase.AMENDMENT, false, false);
+
+        assertThat(overview).contains("Workflow progress: 6/9 stages completed");
+        assertThat(overview).contains("Current stage: AMENDMENT (stage 7/9)");
+        assertThat(overview).contains("[completed] PRE_AMENDMENT - phase complete");
+        assertThat(overview).contains("[running] AMENDMENT - phase in progress");
+        assertThat(overview).contains("[pending] POST_AMENDMENT - phase not started");
+    }
+
+    @Test
+    void setupFilterSummaryEncouragesDatasetInformedDialog() throws Exception {
+        Method helper = BdqWorkbenchGui.class.getDeclaredMethod(
+		"renderRecordFilterSelectionSummary",
+		String.class);
+        helper.setAccessible(true);
+
+        String empty = (String) helper.invoke(null, "");
+        String populated = (String) helper.invoke(null, "dwc:country=Canada; genus=Abies|Pinus");
+
+        assertThat(empty).contains("No record filters configured.");
+        assertThat(empty).contains("Build Record Filters...");
+        assertThat(populated).contains("Configured record filters");
+        assertThat(populated).contains(" - dwc:country = Canada");
+        assertThat(populated).contains(" - genus = Abies | Pinus");
+    }
+
+    @Test
+    void recordFilterProfileSuggestionsSummarizeCommonDatasetValues() throws Exception {
+        Method profileHelper = BdqWorkbenchGui.class.getDeclaredMethod("profileRecordFilters", RecordDataset.class);
+        profileHelper.setAccessible(true);
+        Object profile = profileHelper.invoke(null, new RecordDataset(List.of(
+		new CanonicalRecord("r1", Map.of("dwc:country", "Canada", "dwc:genus", "Abies")),
+		new CanonicalRecord("r2", Map.of("dwc:country", "Canada", "dwc:genus", "Pinus")),
+		new CanonicalRecord("r3", Map.of("dwc:country", "Mexico", "dwc:genus", "Abies")))));
+        Method suggestionHelper = BdqWorkbenchGui.class.getDeclaredMethod(
+		"renderRecordFilterValueSuggestions",
+		profile.getClass(),
+		String.class,
+		String.class);
+        suggestionHelper.setAccessible(true);
+
+        String suggestions = (String) suggestionHelper.invoke(null, profile, "dwc:country", null);
+
+        assertThat(suggestions).contains("Common values for dwc:country");
+        assertThat(suggestions).contains(" - Canada (2)");
+        assertThat(suggestions).contains(" - Mexico (1)");
+    }
+
+    @Test
+    void recordFilterSuggestionsWarnWhenSavedFieldIsMissingFromCurrentDataset() throws Exception {
+        Method profileHelper = BdqWorkbenchGui.class.getDeclaredMethod("profileRecordFilters", RecordDataset.class);
+        profileHelper.setAccessible(true);
+        Object profile = profileHelper.invoke(null, new RecordDataset(List.of(
+		new CanonicalRecord("r1", Map.of("dwc:country", "Canada")))));
+        Method suggestionHelper = BdqWorkbenchGui.class.getDeclaredMethod(
+		"renderRecordFilterValueSuggestions",
+		profile.getClass(),
+		String.class,
+		String.class);
+        suggestionHelper.setAccessible(true);
+
+        String suggestions = (String) suggestionHelper.invoke(
+                null,
+                profile,
+                "",
+                "Saved filter field \"dwc:genus\" is not present in the currently selected dataset.\nChoose a dataset field or remove this row.");
+
+        assertThat(suggestions).contains("dwc:genus");
+        assertThat(suggestions).contains("Choose a dataset field or remove this row.");
+    }
+
+    @Test
+    void buildConfigUsesGuiDedupSelection() throws Exception {
+        Method helper = BdqWorkbenchGui.class.getDeclaredMethod(
+                "buildConfig",
+                String.class,
+                String.class,
+                String.class,
+                String.class,
+                String.class,
+                String.class,
+                String.class,
+                String.class,
+                String.class,
+                boolean.class,
+                CachedResourceResolver.class,
+                AppConfig.class);
+        helper.setAccessible(true);
+        Path base = Path.of("src", "test", "resources", "integration");
+        AppConfig defaults = new AppConfig(
+                base.resolve("bdquc.xml"),
+                List.of(base.resolve("bdqtest.ttl")),
+                base.resolve("dataset.zip"),
+                "uc1",
+                List.of("org.filteredpush"),
+                4,
+                true);
+        CachedResourceResolver resolver = new CachedResourceResolver();
+
+        AppConfig config = (AppConfig) helper.invoke(
+                null,
+                base.resolve("dataset.zip").toString(),
+                "uc1",
+                "",
+                base.resolve("bdquc.xml").toString(),
+                base.resolve("bdqtest.ttl").toString(),
+                "",
+                base.resolve("bdqtest.ttl").toString(),
+                "org.filteredpush",
+                "2",
+                false,
+                resolver,
+                defaults);
+
+        assertThat(config.dedupEnabled()).isFalse();
+    }
+
+    @Test
+    void preferredDefaultUseCaseIdFallsBackToSpatialTemporalPatterns() throws Exception {
+        Method helper = BdqWorkbenchGui.class.getDeclaredMethod(
+                "preferredDefaultUseCaseId",
+                List.class,
+                String.class);
+        helper.setAccessible(true);
+
+        String selected = (String) helper.invoke(
+                null,
+                List.of(
+                        new UseCase("urn:usecase:1", "Taxonomic Completeness", "urn:policy:1"),
+                        new UseCase("urn:usecase:2", "Spatial-Temporal Patterns", "urn:policy:2"),
+                        new UseCase("urn:usecase:3", "Georeference Completeness", "urn:policy:3")),
+                "");
+
+        assertThat(selected).isEqualTo("urn:usecase:2");
+    }
+
+    @Test
+    void preferredDefaultUseCaseIdKeepsExplicitConfiguredDefault() throws Exception {
+        Method helper = BdqWorkbenchGui.class.getDeclaredMethod(
+                "preferredDefaultUseCaseId",
+                List.class,
+                String.class);
+        helper.setAccessible(true);
+
+        String selected = (String) helper.invoke(
+                null,
+                List.of(
+                        new UseCase("urn:usecase:1", "Taxonomic Completeness", "urn:policy:1"),
+                        new UseCase("urn:usecase:2", "Spatial-Temporal Patterns", "urn:policy:2")),
+                "urn:usecase:1");
+
+        assertThat(selected).isEqualTo("urn:usecase:1");
+    }
+
+    @Test
+    void longestSelectableTermUsesLongestNonBlankFieldForStableComboSizing() throws Exception {
+        Method helper = BdqWorkbenchGui.class.getDeclaredMethod("longestSelectableTerm", List.class);
+        helper.setAccessible(true);
+
+        String selected = (String) helper.invoke(null, List.of("", "dwc:genus", "dwc:collectionCode", "dwc:country"));
+
+        assertThat(selected).isEqualTo("dwc:collectionCode");
+    }
+
+    @Test
+    void showWorkflowVisualizationTogglesWholeMonitorContentCardAndButtonLabel() throws Exception {
+        Method helper = BdqWorkbenchGui.class.getDeclaredMethod(
+                "showWorkflowVisualization",
+                CardLayout.class,
+                JPanel.class,
+                JButton.class,
+                boolean[].class,
+                boolean.class);
+        helper.setAccessible(true);
+        CardLayout cards = new CardLayout();
+        JPanel contentPanel = new JPanel(cards);
+        contentPanel.add(new JPanel(), "results");
+        contentPanel.add(new JPanel(), "workflow");
+        JButton toggleButton = new JButton();
+        boolean[] showingWorkflow = new boolean[] {false};
+
+        helper.invoke(null, cards, contentPanel, toggleButton, showingWorkflow, true);
+        assertThat(showingWorkflow[0]).isTrue();
+        assertThat(toggleButton.getText()).isEqualTo("Hide Workflow Visualization");
+
+        helper.invoke(null, cards, contentPanel, toggleButton, showingWorkflow, false);
+        assertThat(showingWorkflow[0]).isFalse();
+        assertThat(toggleButton.getText()).isEqualTo("Show Workflow Visualization");
+    }
+
+    @Test
+    void recordFilterSuggestionsWarnWhenSavedAliasIsAmbiguous() throws Exception {
+        Method profileHelper = BdqWorkbenchGui.class.getDeclaredMethod("profileRecordFilters", RecordDataset.class);
+        profileHelper.setAccessible(true);
+        Object profile = profileHelper.invoke(null, new RecordDataset(List.of(
+		new CanonicalRecord("r1", Map.of("country", "Canada", "dwc:country", "Canada")))));
+        Method suggestionHelper = BdqWorkbenchGui.class.getDeclaredMethod(
+		"renderRecordFilterValueSuggestions",
+		profile.getClass(),
+		String.class,
+		String.class);
+        suggestionHelper.setAccessible(true);
+
+        String suggestions = (String) suggestionHelper.invoke(
+		null,
+		profile,
+		"",
+		"Saved filter field \"country\" matches multiple fields in the currently selected dataset.\nChoose an exact dataset field or remove this row.");
+
+        assertThat(suggestions).contains("matches multiple fields");
+        assertThat(suggestions).contains("Choose an exact dataset field");
+    }
+
+    @Test
+    void applyParameterEditsPreservesFilterSummary() throws Exception {
+        Method helper = BdqWorkbenchGui.class.getDeclaredMethod(
+		"applyParameterEdits",
+		PreparedRun.class,
+		BindingReviewTableModel.class);
+        helper.setAccessible(true);
+        PreparedRun preparedRun = new PreparedRun(
+		null,
+		new RecordDataset(List.of(new CanonicalRecord("r1", Map.of("dwc:country", "Canada")))),
+		new ExecutionPlan(new UseCase("urn:usecase", "Use case", "urn:policy"), new Policy("urn:policy", List.of()), List.of(), List.of()),
+		List.of(),
+		new TestBindingResult(List.of(), List.of(), List.of()),
+		new RecordFilterSummary(
+				new RecordDataset(List.of(new CanonicalRecord("r1", Map.of("dwc:country", "Canada")))),
+				3,
+				1,
+				2,
+				2,
+				1,
+				Map.of("dwc:country", List.of("Canada")),
+				List.of("Record filter field country resolved to input field dwc:country")));
+        BindingReviewTableModel model = new BindingReviewTableModel(List.of());
+
+        PreparedRun rebound = (PreparedRun) helper.invoke(null, preparedRun, model);
+
+        assertThat(rebound.filterSummary()).isEqualTo(preparedRun.filterSummary());
+    }
+
+    @Test
+    void summarizeCountMeasuresBuildsPreAndPostVisualizationData() throws Exception {
+        Method helper = BdqWorkbenchGui.class.getDeclaredMethod("summarizeCountMeasures", ExecutionSummary.class);
+        helper.setAccessible(true);
+        ExecutionSummary summary = new ExecutionSummary(List.of(
+                new Response(
+                        "MULTIRECORD",
+                        "urn:test:count",
+                        TestType.MEASURE,
+                        BuiltInMeasureSpec.IMPLEMENTATION_CLASS,
+                        BuiltInMeasureSpec.IMPLEMENTATION_METHOD,
+                        Phase.PRE_AMENDMENT,
+                        Map.of(
+                                BuiltInMeasureSpec.KIND_KEY, BuiltInMeasureSpec.MeasureKind.COUNT.name(),
+                                BuiltInMeasureSpec.MEASURE_LABEL_KEY, "Count compliant basisOfRecord",
+                                BuiltInMeasureSpec.MATCHING_COUNT_KEY, "1",
+                                BuiltInMeasureSpec.TOTAL_RECORDS_KEY, "4",
+                                BuiltInMeasureSpec.PERCENTAGE_KEY, "25.0"),
+                        OutcomeStatus.PASSED,
+                        "RUN_HAS_RESULT",
+                        "1",
+                        "1",
+                        "1",
+                        Map.of(),
+                        Instant.now(),
+                        Instant.now()),
+                new Response(
+                        "MULTIRECORD",
+                        "urn:test:count",
+                        TestType.MEASURE,
+                        BuiltInMeasureSpec.IMPLEMENTATION_CLASS,
+                        BuiltInMeasureSpec.IMPLEMENTATION_METHOD,
+                        Phase.POST_AMENDMENT,
+                        Map.of(
+                                BuiltInMeasureSpec.KIND_KEY, BuiltInMeasureSpec.MeasureKind.COUNT.name(),
+                                BuiltInMeasureSpec.MEASURE_LABEL_KEY, "Count compliant basisOfRecord",
+                                BuiltInMeasureSpec.MATCHING_COUNT_KEY, "3",
+                                BuiltInMeasureSpec.TOTAL_RECORDS_KEY, "4",
+                                BuiltInMeasureSpec.PERCENTAGE_KEY, "75.0"),
+                        OutcomeStatus.PASSED,
+                        "RUN_HAS_RESULT",
+                        "3",
+                        "3",
+                        "3",
+                        Map.of(),
+                        Instant.now(),
+                        Instant.now()),
+                new Response(
+                        "MULTIRECORD",
+                        "urn:test:qa",
+                        TestType.MEASURE,
+                        BuiltInMeasureSpec.IMPLEMENTATION_CLASS,
+                        BuiltInMeasureSpec.IMPLEMENTATION_METHOD,
+                        Phase.PRE_AMENDMENT,
+                        Map.of(
+                                BuiltInMeasureSpec.KIND_KEY, BuiltInMeasureSpec.MeasureKind.QA.name(),
+                                BuiltInMeasureSpec.MEASURE_LABEL_KEY, "QA summary"),
+                        OutcomeStatus.PASSED,
+                        "RUN_HAS_RESULT",
+                        "COMPLIANT",
+                        "COMPLIANT",
+                        "COMPLIANT",
+                        Map.of(),
+                        Instant.now(),
+                        Instant.now())));
+
+        @SuppressWarnings("unchecked")
+        List<Object> measures = (List<Object>) helper.invoke(null, summary);
+
+        assertThat(measures).hasSize(1);
+        Object measure = measures.get(0);
+        Method label = measure.getClass().getDeclaredMethod("label");
+        Method prePercent = measure.getClass().getDeclaredMethod("prePercent");
+        Method preText = measure.getClass().getDeclaredMethod("preText");
+        Method postPercent = measure.getClass().getDeclaredMethod("postPercent");
+        Method postText = measure.getClass().getDeclaredMethod("postText");
+        label.setAccessible(true);
+        prePercent.setAccessible(true);
+        preText.setAccessible(true);
+        postPercent.setAccessible(true);
+        postText.setAccessible(true);
+
+        assertThat(label.invoke(measure)).isEqualTo("Count compliant basisOfRecord");
+        assertThat(prePercent.invoke(measure)).isEqualTo(25);
+        assertThat(preText.invoke(measure)).isEqualTo("1/4 (25.0%)");
+        assertThat(postPercent.invoke(measure)).isEqualTo(75);
+        assertThat(postText.invoke(measure)).isEqualTo("3/4 (75.0%)");
     }
 
     static class GuiDummy {

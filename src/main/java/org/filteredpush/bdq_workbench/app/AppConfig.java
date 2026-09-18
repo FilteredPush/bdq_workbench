@@ -21,6 +21,7 @@ package org.filteredpush.bdq_workbench.app;
 
 import java.nio.file.Path;
 import java.util.List;
+import org.filteredpush.bdq_workbench.model.RecordFilterSpec;
 
 /**
  * Immutable application configuration values.
@@ -42,6 +43,8 @@ import java.util.List;
  * @param dedupEnabled whether to invoke each test once per distinct combination of values of the
  *     Darwin Core terms it declares as input, rather than once per record, applying the result to
  *     every record sharing that combination; defaults to {@code true}
+ * @param recordFilter pre-execution record filter criteria limiting which records enter the BDQ
+ *     test pipeline; empty to run against every ingested record
  */
 public record AppConfig(
         Path useCaseXml,
@@ -50,5 +53,36 @@ public record AppConfig(
         String useCaseId,
         List<String> implementationPackages,
         int threadCount,
-        boolean dedupEnabled) {
+        boolean dedupEnabled,
+        RecordFilterSpec recordFilter) {
+
+	/**
+	 * Creates a configuration with no record filters.
+	 *
+	 * @param useCaseXml path to the use case XML definition file
+	 * @param rdfDefinitions RDF/OWL files used to resolve policy/test metadata
+	 * @param datasetPath path to the dataset input
+	 * @param useCaseId optional use case identifier
+	 * @param implementationPackages Java packages to scan for test implementations
+	 * @param threadCount number of worker threads to use
+	 * @param dedupEnabled whether distinct-value execution is enabled
+	 */
+	public AppConfig(
+			Path useCaseXml,
+			List<Path> rdfDefinitions,
+			Path datasetPath,
+			String useCaseId,
+			List<String> implementationPackages,
+			int threadCount,
+			boolean dedupEnabled) {
+		this(useCaseXml, rdfDefinitions, datasetPath, useCaseId, implementationPackages, threadCount, dedupEnabled,
+				RecordFilterSpec.empty());
+	}
+
+	/**
+	 * Canonical constructor; substitutes an empty record filter when none is supplied.
+	 */
+	public AppConfig {
+		recordFilter = recordFilter == null ? RecordFilterSpec.empty() : recordFilter;
+	}
 }

@@ -27,6 +27,7 @@ import java.util.Arrays;
 import java.util.Map;
 import java.util.List;
 import java.util.Properties;
+import org.filteredpush.bdq_workbench.model.RecordFilterSpec;
 
 /**
  * Loads configuration from classpath defaults and command line overrides.
@@ -78,7 +79,8 @@ public class ConfigLoader {
                 getValue(defaults, overrides, "bdq.usecase.id", ""),
                 implPackages,
                 parseThreadCount(getValue(defaults, overrides, "bdq.threads", "4")),
-                parseBoolean(getValue(defaults, overrides, "bdq.execution.dedup", "true"), "bdq.execution.dedup"));
+                parseBoolean(getValue(defaults, overrides, "bdq.execution.dedup", "true"), "bdq.execution.dedup"),
+                RecordFilterSpec.parse(getValue(defaults, overrides, "bdq.record.filters", "")));
     }
 
     /**

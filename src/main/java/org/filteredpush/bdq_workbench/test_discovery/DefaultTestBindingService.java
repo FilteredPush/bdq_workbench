@@ -35,6 +35,7 @@ import org.filteredpush.bdq_workbench.model.BindingReview;
 import org.filteredpush.bdq_workbench.model.BindingStatus;
 import org.filteredpush.bdq_workbench.model.BuiltInMeasureSpec;
 import org.filteredpush.bdq_workbench.model.BoundMethodParameter;
+import org.filteredpush.bdq_workbench.model.DarwinCoreTermResolver;
 import org.filteredpush.bdq_workbench.model.ImplementationBinding;
 import org.filteredpush.bdq_workbench.model.ImplementationStatus;
 import org.filteredpush.bdq_workbench.model.MethodParameter;
@@ -147,7 +148,7 @@ public class DefaultTestBindingService implements TestBindingService {
                         Function.identity(),
                         (a, b) -> a));
 
-        Map<String, String> availableTermsByAlias = indexAvailableTerms(availableTerms);
+        Map<String, List<String>> availableTermsByAlias = DarwinCoreTermResolver.indexAvailableTerms(availableTerms);
         List<ImplementationBinding> bindings = new ArrayList<>();
         List<TestDefinition> unresolved = new ArrayList<>();
         List<BindingReview> reviews = new ArrayList<>();
@@ -282,7 +283,7 @@ public class DefaultTestBindingService implements TestBindingService {
             DiscoveredImplementation chosen,
             ParameterizationCapability capability,
             String selectionReason,
-            Map<String, String> availableTermsByAlias) {
+            Map<String, List<String>> availableTermsByAlias) {
         List<BoundMethodParameter> boundParameters = new ArrayList<>();
         List<String> diagnostics = new ArrayList<>();
         BindingStatus status = BindingStatus.BOUND;
@@ -344,7 +345,7 @@ public class DefaultTestBindingService implements TestBindingService {
     private BoundMethodParameter bindParameter(
             TestDefinition test,
             MethodParameter parameter,
-            Map<String, String> availableTermsByAlias) {
+            Map<String, List<String>> availableTermsByAlias) {
         if (parameter.role() == ParameterRole.LEGACY_RECORD || parameter.role() == ParameterRole.LEGACY_PARAMETERS) {
             return new BoundMethodParameter(parameter, parameter.source(), null, true, "Legacy compatibility binding");
         }
@@ -377,7 +378,17 @@ public class DefaultTestBindingService implements TestBindingService {
             }
             return new BoundMethodParameter(parameter, parameter.source(), providedValue, true, "Parameter provided");
         }
-        String resolvedField = resolveTerm(parameter.source(), availableTermsByAlias);
+        DarwinCoreTermResolver.Resolution resolution = DarwinCoreTermResolver.resolve(parameter.source(), availableTermsByAlias);
+        if (resolution.isAmbiguous()) {
+            return new BoundMethodParameter(
+                    parameter,
+                    parameter.source(),
+                    null,
+                    false,
+                    "TERM AMBIGUOUS: Term acted_upon/consulted matches multiple input fields: "
+                    		+ parameter.source() + " -> " + String.join(", ", resolution.matches()));
+        }
+        String resolvedField = resolution.preferredMatch();
         if (resolvedField == null) {
             return new BoundMethodParameter(
                     parameter,
@@ -409,9 +420,9 @@ public class DefaultTestBindingService implements TestBindingService {
         if (parameters.containsKey(parameterName)) {
             return parameters.get(parameterName);
         }
-        String normalized = normalizeTerm(parameterName);
+        String normalized = DarwinCoreTermResolver.normalizeTerm(parameterName);
         for (Map.Entry<String, String> entry : parameters.entrySet()) {
-            if (normalizeTerm(entry.getKey()).equals(normalized)) {
+            if (DarwinCoreTermResolver.normalizeTerm(entry.getKey()).equals(normalized)) {
                 return entry.getValue();
             }
         }
@@ -655,63 +666,8 @@ public class DefaultTestBindingService implements TestBindingService {
      * @param availableTerms the Darwin Core term names present in the dataset
      * @return available terms indexed by normalized full name and by normalized local name
      */
-    private static Map<String, String> indexAvailableTerms(Collection<String> availableTerms) {
-        Map<String, String> byAlias = new LinkedHashMap<>();
-        availableTerms.stream().sorted().forEach(term -> {
-            byAlias.putIfAbsent(normalizeTerm(term), term);
-            byAlias.putIfAbsent(normalizeTerm(localName(term)), term);
-        });
-        return byAlias;
-    }
-
-    /**
-     * Resolves a requested acted-upon/consulted term name to the actual term name present in
-     * the dataset.
-     *
-     * @param requested the term name (typically a full Darwin Core IRI) the implementation
-     *     requires
-     * @param availableTermsByAlias available dataset terms indexed by normalized alias, as
-     *     built by {@link #indexAvailableTerms}
-     * @return the matching dataset term name, or {@code null} if neither the full name nor the
-     *     local name matches (or {@code requested} is null or blank)
-     */
-    private static String resolveTerm(String requested, Map<String, String> availableTermsByAlias) {
-        if (requested == null || requested.isBlank()) {
-            return null;
-        }
-        String exact = availableTermsByAlias.get(normalizeTerm(requested));
-        if (exact != null) {
-            return exact;
-        }
-        return availableTermsByAlias.get(normalizeTerm(localName(requested)));
-    }
-
-    /**
-     * Extracts the local (unqualified) name from a term identifier, taking everything after the
-     * last {@code /}, {@code #}, or {@code :}, whichever occurs latest.
-     *
-     * @param value the term identifier, typically a full IRI or CURIE
-     * @return the local name portion, or {@code value} itself (or {@code ""} if null) if it
-     *     contains no recognized separator
-     */
-    private static String localName(String value) {
-        if (value == null) {
-            return "";
-        }
-        int slash = Math.max(value.lastIndexOf('/'), value.lastIndexOf('#'));
-        int colon = value.lastIndexOf(':');
-        int index = Math.max(slash, colon);
-        return index >= 0 && index + 1 < value.length() ? value.substring(index + 1) : value;
-    }
-
-    /**
-     * Normalizes a term name for alias comparison: trims whitespace and lower-cases.
-     *
-     * @param value the raw term name, possibly null
-     * @return the normalized term name, or {@code ""} if {@code value} is null
-     */
-    private static String normalizeTerm(String value) {
-        return value == null ? "" : value.trim().toLowerCase();
+    private static Map<String, List<String>> indexAvailableTerms(Collection<String> availableTerms) {
+       return DarwinCoreTermResolver.indexAvailableTerms(availableTerms);
     }
 
     /**

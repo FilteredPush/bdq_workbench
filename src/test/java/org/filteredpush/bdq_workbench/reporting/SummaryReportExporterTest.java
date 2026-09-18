@@ -78,7 +78,11 @@ class SummaryReportExporterTest {
                         "Use Case One",
                         "/tmp/input.csv",
                         7,
+                        3,
+                        5,
                         2,
+                        Map.of("dwc:country", List.of("Canada"), "dwc:genus", List.of("Abies", "Pinus")),
+                        Map.of(),
                         Map.of(
                                 "dwc:countryCode=RU", 3L,
                                 "dwc:occurrenceStatus=present", 2L),
@@ -93,7 +97,13 @@ class SummaryReportExporterTest {
         assertThat(report).contains("Use case: urn:usecase:1 (Use Case One)\n");
         assertThat(report).contains("Input file: /tmp/input.csv\n");
         assertThat(report).contains("Darwin Core terms present in input file: 7\n");
-        assertThat(report).contains("SingleRecords in input file: 2\n");
+        assertThat(report).contains("SingleRecords in input file: 3\n");
+        assertThat(report).contains("Darwin Core terms selected for execution: 5\n");
+        assertThat(report).contains("SingleRecords selected for execution: 2\n");
+        assertThat(report).contains("SingleRecords excluded by record filters: 1\n");
+        assertThat(report).contains("Record filters:\n");
+        assertThat(report).contains(" - dwc:country = Canada\n");
+        assertThat(report).contains(" - dwc:genus = Abies | Pinus\n");
         assertThat(report).contains("Counts represent normalized BDQ response rows emitted during execution:\n");
         assertThat(report).contains("By phase:\n - PRE_AMENDMENT: 3\n - POST_AMENDMENT: 2\n");
         assertThat(report).contains("By response status:\n - RUN_HAS_RESULT: 5\n");

@@ -32,11 +32,38 @@ import org.filteredpush.bdq_workbench.test_discovery.TestBindingResult;
  * @param plan the resolved policy plan, including any unresolved tests
  * @param discovered the implementation methods discovered for the configured packages
  * @param bindingResult the result of binding the plan's tests to the discovered implementations
+ * @param filterSummary the outcome of applying any configured pre-execution record filters
  */
 public record PreparedRun(
         AppConfig config,
         RecordDataset dataset,
         ExecutionPlan plan,
         List<DiscoveredImplementation> discovered,
-        TestBindingResult bindingResult) {
+        TestBindingResult bindingResult,
+        RecordFilterSummary filterSummary) {
+
+	/**
+	 * Creates a prepared run with no active record filtering metadata.
+	 *
+	 * @param config the application configuration the run was prepared from
+	 * @param dataset the ingested records to execute tests against
+	 * @param plan the resolved policy plan
+	 * @param discovered the discovered implementation methods
+	 * @param bindingResult the result of binding tests to implementations
+	 */
+	public PreparedRun(
+			AppConfig config,
+			RecordDataset dataset,
+			ExecutionPlan plan,
+			List<DiscoveredImplementation> discovered,
+			TestBindingResult bindingResult) {
+		this(config, dataset, plan, discovered, bindingResult, RecordFilterSummary.unfiltered(dataset));
+	}
+
+	/**
+	 * Canonical constructor; substitutes an unfiltered summary when none is supplied.
+	 */
+	public PreparedRun {
+		filterSummary = filterSummary == null ? RecordFilterSummary.unfiltered(dataset) : filterSummary;
+	}
 }

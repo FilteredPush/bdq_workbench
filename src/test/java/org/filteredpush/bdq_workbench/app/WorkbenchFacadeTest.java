@@ -6,6 +6,9 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
+import org.filteredpush.bdq_workbench.filtering.DefaultRecordFilterService;
 import org.filteredpush.bdq_workbench.execution.TestExecutionService;
 import org.filteredpush.bdq_workbench.model.BindingReview;
 import org.filteredpush.bdq_workbench.model.BindingStatus;
@@ -17,15 +20,73 @@ import org.filteredpush.bdq_workbench.model.Phase;
 import org.filteredpush.bdq_workbench.model.Policy;
 import org.filteredpush.bdq_workbench.model.PreparedRun;
 import org.filteredpush.bdq_workbench.model.RecordDataset;
+import org.filteredpush.bdq_workbench.model.RecordFilterSpec;
 import org.filteredpush.bdq_workbench.model.Response;
 import org.filteredpush.bdq_workbench.model.TestDefinition;
 import org.filteredpush.bdq_workbench.model.TestType;
 import org.filteredpush.bdq_workbench.model.UseCase;
 import org.filteredpush.bdq_workbench.reporting.ReportingService;
+import org.filteredpush.bdq_workbench.test_discovery.DiscoveredImplementation;
 import org.filteredpush.bdq_workbench.test_discovery.TestBindingResult;
+import org.filteredpush.bdq_workbench.test_discovery.TestBindingService;
 import org.junit.jupiter.api.Test;
 
 class WorkbenchFacadeTest {
+
+    @Test
+    void prepareFiltersDatasetBeforeBinding() {
+        RecordDataset ingested = new RecordDataset(List.of(
+                new CanonicalRecord("r1", Map.of("dwc:country", "Canada", "dwc:genus", "Abies")),
+                new CanonicalRecord("r2", Map.of("dwc:country", "Mexico", "dwc:genus", "Abies"))));
+        TestDefinition test = new TestDefinition("urn:test:validation", "Validation", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of());
+        AtomicReference<Set<String>> availableTermsSeen = new AtomicReference<>(Set.of());
+        TestBindingService bindingService = new TestBindingService() {
+            @Override
+            public TestBindingResult bind(
+                    List<TestDefinition> tests,
+                    List<DiscoveredImplementation> discovered,
+                    Map<String, String> explicitMapping) {
+                return new TestBindingResult(List.of(), List.of(), List.of());
+            }
+
+            @Override
+            public TestBindingResult bind(
+                    List<TestDefinition> tests,
+                    List<DiscoveredImplementation> discovered,
+                    Map<String, String> explicitMapping,
+                    java.util.Collection<String> availableTerms) {
+                availableTermsSeen.set(Set.copyOf(availableTerms));
+                return new TestBindingResult(List.of(), List.of(), List.of());
+            }
+        };
+        WorkbenchFacade facade = new WorkbenchFacade(
+                inputPath -> ingested,
+                useCaseId -> new ExecutionPlan(
+                        new UseCase("uc1", "Use Case", "policy:1"),
+                        new Policy("policy:1", List.of(test.id())),
+                        List.of(test),
+                        List.of()),
+                () -> List.of(),
+                bindingService,
+                (dataset, bindings, discovered) -> List.of(),
+                new ReportingService(List.of()),
+                new DefaultRecordFilterService());
+
+        PreparedRun prepared = facade.prepare(new AppConfig(
+                Path.of("usecase.xml"),
+                List.of(),
+                Path.of("dataset.zip"),
+                "uc1",
+                List.of("org.filteredpush"),
+                1,
+                true,
+                RecordFilterSpec.parse("country=Canada")));
+
+        assertThat(prepared.dataset().records()).extracting(CanonicalRecord::id).containsExactly("r1");
+        assertThat(prepared.filterSummary().originalRecordCount()).isEqualTo(2);
+        assertThat(prepared.filterSummary().filteredRecordCount()).isEqualTo(1);
+        assertThat(availableTermsSeen.get()).containsExactlyInAnyOrder("dwc:country", "dwc:genus");
+    }
 
     @Test
     void runPreparedMarksUnresolvedTestsAsUnableToRun() {
@@ -136,8 +197,10 @@ class WorkbenchFacadeTest {
         assertThat(summary.metadata().useCaseId()).isEqualTo("uc1");
         assertThat(summary.metadata().useCaseLabel()).isEqualTo("Use Case");
         assertThat(summary.metadata().inputFile()).isEqualTo("input.zip");
-        assertThat(summary.metadata().darwinCoreTermCount()).isEqualTo(3);
-        assertThat(summary.metadata().singleRecordCount()).isEqualTo(2);
+        assertThat(summary.metadata().inputDarwinCoreTermCount()).isEqualTo(3);
+        assertThat(summary.metadata().inputSingleRecordCount()).isEqualTo(2);
+        assertThat(summary.metadata().filteredDarwinCoreTermCount()).isEqualTo(3);
+        assertThat(summary.metadata().filteredSingleRecordCount()).isEqualTo(2);
         assertThat(summary.metadata().filledInValueCounts()).containsEntry("dwc:countryCode=RU", 1L);
         assertThat(summary.metadata().amendedValuePairCounts()).containsEntry("dwc:countryCode: SU -> RU", 1L);
     }
