@@ -221,7 +221,8 @@ public final class BdqWorkbenchApplication {
         out.println("  --dedup <true|false>           Run each test once per distinct combination of");
         out.println("                                 input values instead of once per record (default true)");
         out.println("  --record-filter <field=values> Restrict input records before execution;");
-        out.println("                                 repeatable, values separated with | and fields ANDed");
+        out.println("                                 repeatable, quote values containing |; within a field");
+        out.println("                                 values are ORed and fields are ANDed");
     }
 
     /**

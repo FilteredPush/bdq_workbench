@@ -140,13 +140,13 @@ public class SummaryReportExporter implements ReportExporter {
         builder.append("Record filters:\n");
         if (metadata.recordFilters().isEmpty()) {
             builder.append(" - none\n");
-            return;
+        } else {
+            metadata.recordFilters().forEach((field, values) -> builder.append(" - ")
+                	.append(field)
+                	.append(" = ")
+                	.append(String.join(" | ", values))
+                	.append('\n'));
         }
-        metadata.recordFilters().forEach((field, values) -> builder.append(" - ")
-                .append(field)
-                .append(" = ")
-                .append(String.join(" | ", values))
-                .append('\n'));
     }
 
     /**

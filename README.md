@@ -61,7 +61,7 @@ Pre-execution record filtering can be configured from the CLI with repeatable `-
 
 ```bash
 java -jar target/bdq_workbench-0.1.0-SNAPSHOT.jar \
-  --record-filter dwc:genus=Abies|Pinus \
+  --record-filter 'dwc:genus=Abies|Pinus' \
   --record-filter dwc:country=Canada
 ```
 
