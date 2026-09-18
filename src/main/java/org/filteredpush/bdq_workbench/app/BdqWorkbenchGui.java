@@ -323,6 +323,8 @@ final class BdqWorkbenchGui {
                 advanced,
                 "Threads",
                 Integer.toString(defaultThreadCount()));
+        JCheckBox dedupEnabled = new JCheckBox("Reduce repeated test calls by distinct input values", defaults.dedupEnabled());
+        advanced.add(dedupEnabled);
 
         JCheckBox runWithAvailableOnly = new JCheckBox("Continue when some tests are unresolved", true);
         advanced.add(runWithAvailableOnly);
@@ -449,6 +451,7 @@ final class BdqWorkbenchGui {
                             ontologySource.getText().trim(),
                             discoveryPackages.getText().trim(),
                             threads.getText().trim(),
+                            dedupEnabled.isSelected(),
                             resolver,
                             defaults);
                     BdqWorkbenchApplication.validateStartupConfig(config);
@@ -1117,9 +1120,9 @@ final class BdqWorkbenchGui {
      * @param ontologySource BDQ FFDQ ontology file/URL field value
      * @param discoveryPackages comma-separated implementation discovery packages
      * @param threads thread count field value
+     * @param dedupEnabled whether distinct-value execution is enabled for this run
      * @param resolver resolves and caches remote/local resource paths
-     * @param defaults fallback values (discovery packages, and the dedup-execution setting, which
-     *     has no dedicated form field yet) used when a field is blank
+     * @param defaults fallback values used when a field is blank
      * @return the assembled configuration, ready for {@link WorkbenchFacade#prepare(AppConfig)}
      */
     private static AppConfig buildConfig(
@@ -1132,6 +1135,7 @@ final class BdqWorkbenchGui {
             String ontologySource,
             String discoveryPackages,
             String threads,
+            boolean dedupEnabled,
             CachedResourceResolver resolver,
             AppConfig defaults) {
 
@@ -1158,7 +1162,7 @@ final class BdqWorkbenchGui {
                 selectedUseCaseId,
                 List.copyOf(packages),
                 parseThreads(threads),
-                defaults.dedupEnabled(),
+                dedupEnabled,
                 RecordFilterSpec.parse(recordFilters));
     }
 

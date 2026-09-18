@@ -548,10 +548,60 @@ class BdqWorkbenchGuiTest {
 		String.class);
         suggestionHelper.setAccessible(true);
 
-        String suggestions = (String) suggestionHelper.invoke(null, profile, "", "dwc:genus");
+        String suggestions = (String) suggestionHelper.invoke(
+                null,
+                profile,
+                "",
+                "Saved filter field \"dwc:genus\" is not present in the currently selected dataset.\nChoose a dataset field or remove this row.");
 
         assertThat(suggestions).contains("dwc:genus");
         assertThat(suggestions).contains("Choose a dataset field or remove this row.");
+    }
+
+    @Test
+    void buildConfigUsesGuiDedupSelection() throws Exception {
+        Method helper = BdqWorkbenchGui.class.getDeclaredMethod(
+                "buildConfig",
+                String.class,
+                String.class,
+                String.class,
+                String.class,
+                String.class,
+                String.class,
+                String.class,
+                String.class,
+                String.class,
+                boolean.class,
+                CachedResourceResolver.class,
+                AppConfig.class);
+        helper.setAccessible(true);
+        Path base = Path.of("src", "test", "resources", "integration");
+        AppConfig defaults = new AppConfig(
+                base.resolve("bdquc.xml"),
+                List.of(base.resolve("bdqtest.ttl")),
+                base.resolve("dataset.zip"),
+                "uc1",
+                List.of("org.filteredpush"),
+                4,
+                true);
+        CachedResourceResolver resolver = new CachedResourceResolver();
+
+        AppConfig config = (AppConfig) helper.invoke(
+                null,
+                base.resolve("dataset.zip").toString(),
+                "uc1",
+                "",
+                base.resolve("bdquc.xml").toString(),
+                base.resolve("bdqtest.ttl").toString(),
+                "",
+                base.resolve("bdqtest.ttl").toString(),
+                "org.filteredpush",
+                "2",
+                false,
+                resolver,
+                defaults);
+
+        assertThat(config.dedupEnabled()).isFalse();
     }
 
     @Test

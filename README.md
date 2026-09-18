@@ -116,7 +116,7 @@ Current flow-control options are intentionally modest:
 - **Continue with unresolved tests**: GUI preflight can proceed with runnable tests even when some policy or implementation bindings remain unresolved.
 - **Parameter overrides**: GUI preflight supports per-test parameter editing plus saving/loading parameter settings.
 - **Isolated test execution**: GUI preflight/debug tools can run one bound test independently against the prepared dataset.
-- **Distinct-value reduction**: CLI/config `bdq.execution.dedup` toggles whether eligible bindings run once per distinct input-value group instead of once per record.
+- **Distinct-value reduction**: CLI/config `bdq.execution.dedup` and the GUI's `Reduce repeated test calls by distinct input values` checkbox toggle whether eligible bindings run once per distinct input-value group instead of once per record.
 - **Not currently supported**: there is still no user-facing phase skip/select control, and the main run UI still does not expose cancellation.
 
 ## Architecture overview
@@ -274,7 +274,7 @@ The desktop GUI supports:
 9. monitoring a simple stage list plus live per-phase progress and response/result counters
 10. reviewing a post-run summary and saved output locations
 
-The execution phases are fixed (`PRE_AMENDMENT`, `AMENDMENT`, `POST_AMENDMENT`) and are not currently user-skippable from either the CLI or the GUI. The GUI also does not yet expose a dedicated control for toggling `bdq.execution.dedup`, even though the setting exists in CLI/configuration.
+The execution phases are fixed (`PRE_AMENDMENT`, `AMENDMENT`, `POST_AMENDMENT`) and are not currently user-skippable from either the CLI or the GUI.
 
 When policy resolution or implementation binding cannot produce a runnable test, the workbench still emits synthesized `UNABLE_TO_RUN` responses so those tests appear in the final summary and unresolved workbook outputs.
 
