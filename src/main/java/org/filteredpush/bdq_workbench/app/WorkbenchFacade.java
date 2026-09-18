@@ -23,6 +23,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import org.filteredpush.bdq_workbench.filtering.DefaultRecordFilterService;
+import org.filteredpush.bdq_workbench.filtering.RecordFilterService;
 import org.filteredpush.bdq_workbench.execution.TestExecutionService;
 import org.filteredpush.bdq_workbench.ingest.IngestService;
 import org.filteredpush.bdq_workbench.model.ExecutionPlan;
@@ -30,6 +32,7 @@ import org.filteredpush.bdq_workbench.model.ExecutionSummary;
 import org.filteredpush.bdq_workbench.model.ExecutionSummaryMetadata;
 import org.filteredpush.bdq_workbench.model.OutcomeStatus;
 import org.filteredpush.bdq_workbench.model.PreparedRun;
+import org.filteredpush.bdq_workbench.model.RecordFilterSummary;
 import org.filteredpush.bdq_workbench.model.Response;
 import org.filteredpush.bdq_workbench.rdf_policy.PolicyResolverService;
 import org.filteredpush.bdq_workbench.reporting.ReportingService;
@@ -70,6 +73,7 @@ public class WorkbenchFacade {
     private final TestBindingService testBindingService;
     private final TestExecutionService executionService;
     private final ReportingService reportingService;
+    private final RecordFilterService recordFilterService;
 
     /**
      * Creates a facade wired to the given pipeline services.
@@ -90,12 +94,44 @@ public class WorkbenchFacade {
             TestBindingService testBindingService,
             TestExecutionService executionService,
             ReportingService reportingService) {
+        this(
+                ingestService,
+                policyResolverService,
+                testDiscoveryService,
+                testBindingService,
+                executionService,
+                reportingService,
+                new DefaultRecordFilterService());
+    }
+
+    /**
+     * Creates a facade wired to the given pipeline and record-filtering services.
+     *
+     * @param ingestService service that ingests Darwin Core input into canonical records
+     * @param policyResolverService service that resolves a use case identifier into an
+     *     {@link ExecutionPlan} of executable tests
+     * @param testDiscoveryService service that discovers available test implementations
+     * @param testBindingService service that binds resolved tests to discovered implementations
+     * @param executionService service that executes bound tests against canonical records
+     * @param reportingService service that exports an {@link ExecutionSummary} to the
+     *     configured report formats
+     * @param recordFilterService service that applies pre-execution record filtering
+     */
+    public WorkbenchFacade(
+            IngestService ingestService,
+            PolicyResolverService policyResolverService,
+            TestDiscoveryService testDiscoveryService,
+            TestBindingService testBindingService,
+            TestExecutionService executionService,
+            ReportingService reportingService,
+            RecordFilterService recordFilterService) {
         this.ingestService = ingestService;
         this.policyResolverService = policyResolverService;
         this.testDiscoveryService = testDiscoveryService;
         this.testBindingService = testBindingService;
         this.executionService = executionService;
         this.reportingService = reportingService;
+        this.recordFilterService = recordFilterService;
     }
 
     /**
@@ -112,7 +148,9 @@ public class WorkbenchFacade {
      * @return the prepared run, ready for execution
      */
     public PreparedRun prepare(AppConfig config) {
-        var dataset = ingestService.ingest(config.datasetPath());
+        var ingestedDataset = ingestService.ingest(config.datasetPath());
+        RecordFilterSummary filterSummary = recordFilterService.apply(ingestedDataset, config.recordFilter());
+        var dataset = filterSummary.filteredDataset();
         ExecutionPlan plan = policyResolverService.resolve(config.useCaseId());
         List<DiscoveredImplementation> discovered = testDiscoveryService.discover();
         TestBindingResult bindingResult = testBindingService.bind(
@@ -120,7 +158,7 @@ public class WorkbenchFacade {
                 discovered,
                 java.util.Map.of(),
                 collectAvailableTerms(dataset));
-        return new PreparedRun(config, dataset, plan, List.copyOf(discovered), bindingResult);
+        return new PreparedRun(config, dataset, plan, List.copyOf(discovered), bindingResult, filterSummary);
     }
 
     /**
@@ -250,8 +288,11 @@ public class WorkbenchFacade {
                 preparedRun.config() == null || preparedRun.config().datasetPath() == null
                         ? ""
                         : preparedRun.config().datasetPath().toString(),
-                collectAvailableTerms(dataset).size(),
-                dataset.records().size(),
+                preparedRun.filterSummary().originalDarwinCoreTermCount(),
+                preparedRun.filterSummary().originalRecordCount(),
+                preparedRun.filterSummary().filteredDarwinCoreTermCount(),
+                preparedRun.filterSummary().filteredRecordCount(),
+                preparedRun.filterSummary().resolvedCriteria(),
                 summarizeFilledInValues(responses),
                 summarizeAmendedValuePairs(responses, sourceTermsByRecordId));
     }

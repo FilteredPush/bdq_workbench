@@ -16,8 +16,22 @@ class BdqWorkbenchApplicationTest {
         int exitCode = BdqWorkbenchApplication.run(new String[] {"--help"}, printStream(out), printStream(err));
 
         assertThat(exitCode).isZero();
-        assertThat(out.toString()).contains("Usage: java -jar").contains("--dataset <path>");
+        assertThat(out.toString()).contains("Usage: java -jar").contains("--dataset <path>").contains("--record-filter <field=values>");
         assertThat(err.toString()).isEmpty();
+    }
+
+    @Test
+    void rejectsInvalidRecordFilterSyntaxWithFriendlyStartupError() {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        ByteArrayOutputStream err = new ByteArrayOutputStream();
+
+        int exitCode = BdqWorkbenchApplication.run(
+                new String[] {"--dataset", "dataset.zip", "--record-filter", "country="},
+                printStream(out),
+                printStream(err));
+
+        assertThat(exitCode).isEqualTo(1);
+        assertThat(err.toString()).contains("Invalid record filter");
     }
 
     @Test

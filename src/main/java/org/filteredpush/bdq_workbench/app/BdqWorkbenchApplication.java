@@ -181,6 +181,7 @@ public final class BdqWorkbenchApplication {
                 case "--discovery-packages" -> "bdq.discovery.packages";
                 case "--threads" -> "bdq.threads";
                 case "--dedup" -> "bdq.execution.dedup";
+                case "--record-filter" -> "bdq.record.filters";
                 default -> null;
             };
             if (key == null) {
@@ -189,7 +190,12 @@ public final class BdqWorkbenchApplication {
             if (i + 1 >= args.length) {
                 return new ParseResult(Map.of(), "Missing value for argument: " + arg);
             }
-            overrides.put(key, args[++i]);
+            String value = args[++i];
+            if ("bdq.record.filters".equals(key) && overrides.containsKey(key) && !overrides.get(key).isBlank()) {
+                overrides.put(key, overrides.get(key) + ";" + value);
+            } else {
+                overrides.put(key, value);
+            }
         }
         return new ParseResult(Map.copyOf(overrides), null);
     }
@@ -214,6 +220,8 @@ public final class BdqWorkbenchApplication {
         out.println("  --threads <n>                  Worker thread count (>= 1)");
         out.println("  --dedup <true|false>           Run each test once per distinct combination of");
         out.println("                                 input values instead of once per record (default true)");
+        out.println("  --record-filter <field=values> Restrict input records before execution;");
+        out.println("                                 repeatable, values separated with | and fields ANDed");
     }
 
     /**

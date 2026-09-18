@@ -66,12 +66,17 @@ import org.filteredpush.bdq_workbench.execution.ExecutionProgressListener;
 import org.filteredpush.bdq_workbench.execution.ParallelPhaseExecutionService;
 import org.filteredpush.bdq_workbench.execution.ReflectionExecutionAdapter;
 import org.filteredpush.bdq_workbench.ingest.DefaultIngestService;
+import org.filteredpush.bdq_workbench.model.RecordFilterSummary;
 import org.filteredpush.bdq_workbench.model.BindingReview;
 import org.filteredpush.bdq_workbench.model.BuiltInMeasureSpec;
+import org.filteredpush.bdq_workbench.model.ExecutionPlan;
 import org.filteredpush.bdq_workbench.model.ExecutionSummary;
 import org.filteredpush.bdq_workbench.model.ImplementationBinding;
 import org.filteredpush.bdq_workbench.model.Phase;
+import org.filteredpush.bdq_workbench.model.Policy;
 import org.filteredpush.bdq_workbench.model.PreparedRun;
+import org.filteredpush.bdq_workbench.model.RecordDataset;
+import org.filteredpush.bdq_workbench.model.RecordFilterSpec;
 import org.filteredpush.bdq_workbench.model.Response;
 import org.filteredpush.bdq_workbench.model.TestDefinition;
 import org.filteredpush.bdq_workbench.model.TestType;
@@ -244,6 +249,15 @@ final class BdqWorkbenchGui {
         form.add(setupHeaderRow);
 
         PickerField dataset = addPickerField(form, frame, "Dataset", defaults.datasetPath().toString());
+        JTextField recordFilters = addField(form, "Record filters", defaults.recordFilter().toPropertyString());
+        JTextArea recordFilterHelp = new JTextArea(
+                "Format: field=value or field=value1|value2; multiple fields are ANDed.");
+        recordFilterHelp.setEditable(false);
+        recordFilterHelp.setLineWrap(true);
+        recordFilterHelp.setWrapStyleWord(true);
+        recordFilterHelp.setBorder(BorderFactory.createEtchedBorder());
+        installTextAreaClipboardSupport(recordFilterHelp);
+        form.add(recordFilterHelp);
 
         JComboBox<UseCaseChoice> useCaseChoice = new JComboBox<>();
         addComboRow(form, "Use case", useCaseChoice);
@@ -404,6 +418,7 @@ final class BdqWorkbenchGui {
                     AppConfig config = buildConfig(
                             dataset.field().getText().trim(),
                             selectedUseCaseId(useCaseChoice),
+                            recordFilters.getText().trim(),
                             useCaseSource.getText().trim(),
                             testDefinitionsSource.getText().trim(),
                             additionalTestDefinitions.getText().trim(),
@@ -435,6 +450,7 @@ final class BdqWorkbenchGui {
                         Throwable cause = ex.getCause() == null ? ex : ex.getCause();
                         LOG.error("Preflight mapping failed", cause);
                         setStatus(statusArea, "Failed to prepare run: " + cause.getMessage() + "\n");
+                        resultSummaryArea.setText("Run setup failed.\n");
                         startRun.setEnabled(false);
                         saveParameters.setEnabled(false);
                         loadParameters.setEnabled(false);
@@ -478,7 +494,9 @@ final class BdqWorkbenchGui {
                                 snapshot.queued(),
                                 snapshot.completed(),
                                 snapshot.total()));
-                        resultSummaryArea.setText(renderProgressSnapshot(snapshot));
+                        resultSummaryArea.setText(renderStageOverview(editedRun, snapshot.phase(), false, false)
+                                + "\n"
+                                + renderProgressSnapshot(snapshot));
                     }));
                 }
 
@@ -489,7 +507,9 @@ final class BdqWorkbenchGui {
                         LOG.info("BDQ Workbench execution complete: {} outcomes", summary.responses().size());
                         monitorHeader.setText(monitorHeaderText("Test Results", state[0].preparedRun()));
                         appendStatus(statusArea, "Completed: " + summary.responses().size() + " outcomes\n");
-                        resultSummaryArea.setText(renderResultSummary(summary));
+                        resultSummaryArea.setText(renderStageOverview(state[0].preparedRun(), null, true, false)
+                                + "\n"
+                                + renderResultSummary(summary));
                         updateBindingGridExecutionOutputs(bindingGrid, summary);
                         Iterator <Response> i = summary.responses().iterator();
                         while (i.hasNext()) {
@@ -1065,6 +1085,8 @@ final class BdqWorkbenchGui {
      *
      * @param dataset dataset file path field value
      * @param selectedUseCaseId ID of the use case chosen in the combo box
+     * @param recordFilters record-filter field value in {@code field=value1|value2; field2=value}
+     *     form
      * @param useCaseSource use case RDF file/URL field value
      * @param testDefinitionsSource primary test definitions file/URL field value
      * @param additionalTestDefinitions comma-separated extra test definition files/URLs
@@ -1079,6 +1101,7 @@ final class BdqWorkbenchGui {
     private static AppConfig buildConfig(
             String dataset,
             String selectedUseCaseId,
+            String recordFilters,
             String useCaseSource,
             String testDefinitionsSource,
             String additionalTestDefinitions,
@@ -1111,7 +1134,8 @@ final class BdqWorkbenchGui {
                 selectedUseCaseId,
                 List.copyOf(packages),
                 parseThreads(threads),
-                defaults.dedupEnabled());
+                defaults.dedupEnabled(),
+                RecordFilterSpec.parse(recordFilters));
     }
 
     /**
@@ -1147,9 +1171,11 @@ final class BdqWorkbenchGui {
         int bindingUnresolved = state.preparedRun().bindingResult().unresolved().size();
         int runnable = state.preparedRun().bindingResult().bindings().size();
         int policyTotal = policyResolved + policyUnresolved;
+        RecordFilterSummary filterSummary = state.preparedRun().filterSummary();
 
         StringBuilder sb = new StringBuilder();
         sb.append("Use case preflight mapping\n");
+        appendRecordFilterSummary(sb, filterSummary);
         sb.append("Selected use case: ").append(state.preparedRun().plan().useCase().id()).append(" (")
                 .append(state.preparedRun().plan().useCase().label()).append(")\n");
         sb.append("Selected use case reference: ").append(state.preparedRun().plan().useCase().policyId()).append('\n');
@@ -1620,7 +1646,108 @@ final class BdqWorkbenchGui {
      */
     private static String renderResultSummary(ExecutionSummary summary) {
         return SummaryReportExporter.renderSummaryText("Results summary", summary)
-                + "Saved files: reports/bdq-report-summary.txt, reports/bdq-report-responses.txt, reports/bdq-report-xls.xlsx, reports/bdq-report-rdf.ttl\n";
+                + "Saved files: reports/bdq-report-summary.txt, reports/bdq-report-responses.txt, reports/bdq-report-xls.xlsx, reports/bdq-report-xls-unresolved.xlsx, reports/bdq-report-rdf.ttl\n";
+    }
+
+    /**
+     * Renders the monitor page's simple stage-status view.
+     *
+     * @param preparedRun the prepared run being reviewed or executed
+     * @param activePhase the phase currently running, or {@code null} when no execution phase is active
+     * @param runCompleted whether the run has finished successfully
+     * @param runFailed whether the run has failed
+     * @return a multi-line stage overview
+     */
+    private static String renderStageOverview(
+            PreparedRun preparedRun,
+            Phase activePhase,
+            boolean runCompleted,
+            boolean runFailed) {
+        RecordFilterSummary filterSummary = preparedRun == null ? RecordFilterSummary.unfiltered(new RecordDataset(List.of()))
+                : preparedRun.filterSummary();
+        ExecutionPlan plan = preparedRun == null
+                ? new ExecutionPlan(new UseCase("", "", ""), new Policy("", List.of()), List.of(), List.of())
+                : preparedRun.plan();
+        int runnable = preparedRun == null ? 0 : preparedRun.bindingResult().bindings().size();
+        int unresolved = preparedRun == null
+                ? 0
+                : preparedRun.plan().unresolvedTests().size() + preparedRun.bindingResult().unresolved().size();
+        StringBuilder builder = new StringBuilder("Process stages\n");
+        builder.append(stageLine("Load dataset", "completed", filterSummary.originalRecordCount() + " records loaded")).append('\n');
+        builder.append(stageLine(
+                "Apply record filters",
+                filterSummary.hasActiveFilters() ? "completed" : "skipped",
+                filterSummary.filteredRecordCount() + " kept, " + filterSummary.excludedRecordCount() + " excluded")).append('\n');
+        builder.append(stageLine(
+                "Resolve use case/policy",
+                preparedRun == null ? "pending" : "completed",
+                plan.tests().size() + plan.unresolvedTests().size() + " policy tests")).append('\n');
+        builder.append(stageLine(
+                "Discover implementations",
+                preparedRun == null ? "pending" : "completed",
+                preparedRun == null ? "0 discovered" : preparedRun.discovered().size() + " discovered")).append('\n');
+        builder.append(stageLine(
+                "Bind tests / validate parameters",
+                preparedRun == null ? "pending" : "completed",
+                runnable + " runnable, " + unresolved + " unresolved")).append('\n');
+        builder.append(stagePhaseLine(Phase.PRE_AMENDMENT, activePhase, runCompleted, runFailed)).append('\n');
+        builder.append(stagePhaseLine(Phase.AMENDMENT, activePhase, runCompleted, runFailed)).append('\n');
+        builder.append(stagePhaseLine(Phase.POST_AMENDMENT, activePhase, runCompleted, runFailed)).append('\n');
+        builder.append(stageLine("Export reports", runCompleted ? "completed" : runFailed ? "failed" : "pending",
+                runCompleted ? "reports written" : "reports not written yet")).append('\n');
+        return builder.toString();
+    }
+
+    /**
+     * Appends record-filter details to the preflight summary.
+     *
+     * @param builder the summary under construction
+     * @param filterSummary the filter outcome to describe
+     */
+    private static void appendRecordFilterSummary(StringBuilder builder, RecordFilterSummary filterSummary) {
+        builder.append("Input records loaded: ").append(filterSummary.originalRecordCount()).append('\n');
+        builder.append("Records selected for execution: ").append(filterSummary.filteredRecordCount()).append('\n');
+        builder.append("Records excluded by filters: ").append(filterSummary.excludedRecordCount()).append('\n');
+        builder.append("Active record filters:\n");
+        if (filterSummary.resolvedCriteria().isEmpty()) {
+            builder.append(" - none\n");
+        } else {
+            filterSummary.resolvedCriteria().forEach((field, values) ->
+                    builder.append(" - ").append(field).append(" = ").append(String.join(" | ", values)).append('\n'));
+        }
+        filterSummary.diagnostics().forEach(diagnostic -> builder.append(" - ").append(diagnostic).append('\n'));
+        builder.append('\n');
+    }
+
+    /**
+     * Renders one stage line with a state and detail string.
+     *
+     * @param stageName the stage name
+     * @param state the stage state
+     * @param detail the detail string
+     * @return the formatted stage line
+     */
+    private static String stageLine(String stageName, String state, String detail) {
+        return String.format("[%s] %s - %s", state, stageName, detail);
+    }
+
+    /**
+     * Renders one execution-phase stage line.
+     *
+     * @param phase the phase to render
+     * @param activePhase the currently active phase, if any
+     * @param runCompleted whether execution has completed
+     * @param runFailed whether execution has failed
+     * @return the formatted phase line
+     */
+    private static String stagePhaseLine(Phase phase, Phase activePhase, boolean runCompleted, boolean runFailed) {
+        String state = runCompleted ? "completed"
+                : runFailed ? "failed"
+                : phase == activePhase ? "running" : "pending";
+        String detail = runCompleted ? "phase complete"
+                : runFailed ? "phase incomplete"
+                : phase == activePhase ? "phase in progress" : "phase not started";
+        return stageLine(phase.name(), state, detail);
     }
 
     /**
@@ -1819,7 +1946,8 @@ final class BdqWorkbenchGui {
         setStatus(statusArea, renderPreflightMessage(state[0]));
         bindingGrid.setModel(new BindingReviewTableModel(state[0].preparedRun().bindingResult().reviews()));
         configureBindingGrid(bindingGrid);
-        resultSummaryArea.setText("Parameter review ready. Edit parameter values, use the row popup, or save/load settings before starting the run.");
+        resultSummaryArea.setText(renderStageOverview(preparedRun, null, false, false)
+                + "\nParameter review ready. Edit parameter values, use the row popup, or save/load settings before starting the run.\n");
         boolean complete = state[0].isFullyResolved();
         if (!complete && !runWithAvailableOnly.isSelected()) {
             appendStatus(statusArea, "\nRun is blocked until unresolved tests are handled.\n");

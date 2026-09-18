@@ -25,6 +25,7 @@ import org.filteredpush.bdq_workbench.model.ParameterizationCapability;
 import org.filteredpush.bdq_workbench.model.Phase;
 import org.filteredpush.bdq_workbench.model.Policy;
 import org.filteredpush.bdq_workbench.model.RecordDataset;
+import org.filteredpush.bdq_workbench.model.RecordFilterSummary;
 import org.filteredpush.bdq_workbench.model.Response;
 import org.filteredpush.bdq_workbench.model.TestDefinition;
 import org.filteredpush.bdq_workbench.model.TestType;
@@ -306,6 +307,9 @@ class BdqWorkbenchGuiTest {
                         "/tmp/input.csv",
                         2,
                         1,
+                        2,
+                        1,
+                        Map.of(),
                         Map.of("dwc:countryCode=RU", 1L),
                         Map.of("dwc:countryCode: SU -> RU", 1L)));
 
@@ -316,6 +320,9 @@ class BdqWorkbenchGuiTest {
         assertThat(text).contains("Input file: /tmp/input.csv\n");
         assertThat(text).contains("Darwin Core terms present in input file: 2\n");
         assertThat(text).contains("SingleRecords in input file: 1\n");
+        assertThat(text).contains("Darwin Core terms selected for execution: 2\n");
+        assertThat(text).contains("SingleRecords selected for execution: 1\n");
+        assertThat(text).contains("Record filters:\n - none\n");
         assertThat(text).contains("By phase:\n - PRE_AMENDMENT: 2\n");
         assertThat(text).contains("By response status:\n - RUN_HAS_RESULT: 2\n");
         assertThat(text).contains("By response result:");
@@ -453,6 +460,39 @@ class BdqWorkbenchGuiTest {
                 .isEqualTo("1 (50.0%)");
         assertThat(model.getValueAt(0, 9))
                 .isEqualTo("2 (100.0%)");
+    }
+
+    @Test
+    void stageOverviewIncludesFilterStageCounts() throws Exception {
+        Method helper = BdqWorkbenchGui.class.getDeclaredMethod(
+                "renderStageOverview",
+                PreparedRun.class,
+                Phase.class,
+                boolean.class,
+                boolean.class);
+        helper.setAccessible(true);
+        PreparedRun preparedRun = new PreparedRun(
+                null,
+                new RecordDataset(List.of(new CanonicalRecord("r1", Map.of("dwc:country", "Canada")))),
+                new ExecutionPlan(new UseCase("urn:usecase", "Use case", "urn:policy"), new Policy("urn:policy", List.of()), List.of(), List.of()),
+                List.of(),
+                new TestBindingResult(List.of(), List.of(), List.of()),
+                new RecordFilterSummary(
+                        new RecordDataset(List.of(new CanonicalRecord("r1", Map.of("dwc:country", "Canada")))),
+                        3,
+                        1,
+                        2,
+                        2,
+                        1,
+                        Map.of("dwc:country", List.of("Canada")),
+                        List.of("Record filter field country resolved to input field dwc:country")));
+
+        String overview = (String) helper.invoke(null, preparedRun, null, false, false);
+
+        assertThat(overview).contains("[completed] Load dataset - 3 records loaded");
+        assertThat(overview).contains("[completed] Apply record filters - 1 kept, 2 excluded");
+        assertThat(overview).contains("[pending] PRE_AMENDMENT - phase not started");
+        assertThat(overview).contains("[pending] Export reports - reports not written yet");
     }
 
     static class GuiDummy {

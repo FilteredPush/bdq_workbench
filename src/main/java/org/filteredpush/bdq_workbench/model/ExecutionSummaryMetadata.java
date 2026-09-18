@@ -19,6 +19,8 @@
  */
 package org.filteredpush.bdq_workbench.model;
 
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -27,8 +29,13 @@ import java.util.Map;
  * @param useCaseId the identifier of the use case the run was executed for
  * @param useCaseLabel the human-readable label of the use case the run was executed for
  * @param inputFile the path of the ingested dataset file, or {@code ""} if unknown
- * @param darwinCoreTermCount the number of distinct Darwin Core terms present across the dataset
- * @param singleRecordCount the number of individual records in the dataset
+ * @param inputDarwinCoreTermCount the number of distinct Darwin Core terms present in the ingested
+ *     dataset before filtering
+ * @param inputSingleRecordCount the number of records in the ingested dataset before filtering
+ * @param filteredDarwinCoreTermCount the number of distinct Darwin Core terms remaining in the
+ *     execution subset after filtering
+ * @param filteredSingleRecordCount the number of records selected for execution after filtering
+ * @param recordFilters active record filters keyed by resolved dataset field name
  * @param filledInValueCounts tallies of {@code term=value} pairs produced by amendments that
  *     filled in a previously empty term, keyed as described in
  *     {@link org.filteredpush.bdq_workbench.app.WorkbenchFacade}
@@ -39,10 +46,48 @@ public record ExecutionSummaryMetadata(
         String useCaseId,
         String useCaseLabel,
         String inputFile,
-        int darwinCoreTermCount,
-        int singleRecordCount,
+        int inputDarwinCoreTermCount,
+        int inputSingleRecordCount,
+        int filteredDarwinCoreTermCount,
+        int filteredSingleRecordCount,
+        Map<String, List<String>> recordFilters,
         Map<String, Long> filledInValueCounts,
         Map<String, Long> amendedValuePairCounts) {
+
+	/**
+	 * Creates metadata with matching input and filtered counts and no record filters.
+	 *
+	 * @param useCaseId the identifier of the use case the run was executed for
+	 * @param useCaseLabel the use case label
+	 * @param inputFile the path of the ingested dataset file
+	 * @param darwinCoreTermCount the number of distinct Darwin Core terms in the dataset
+	 * @param singleRecordCount the number of records in the dataset
+	 * @param filledInValueCounts amendment tallies for filled-in values
+	 * @param amendedValuePairCounts amendment tallies for changed values
+	 */
+	public ExecutionSummaryMetadata(
+			String useCaseId,
+			String useCaseLabel,
+			String inputFile,
+			int darwinCoreTermCount,
+			int singleRecordCount,
+			Map<String, Long> filledInValueCounts,
+			Map<String, Long> amendedValuePairCounts) {
+		this(useCaseId, useCaseLabel, inputFile, darwinCoreTermCount, singleRecordCount, darwinCoreTermCount,
+				singleRecordCount, Map.of(), filledInValueCounts, amendedValuePairCounts);
+	}
+
+	/**
+	 * Canonical constructor; copies maps defensively and substitutes empty defaults.
+	 */
+	public ExecutionSummaryMetadata {
+		Map<String, List<String>> copiedFilters = new LinkedHashMap<>();
+		(recordFilters == null ? Map.<String, List<String>>of() : recordFilters)
+				.forEach((field, values) -> copiedFilters.put(field, List.copyOf(values == null ? List.of() : values)));
+		recordFilters = Map.copyOf(copiedFilters);
+		filledInValueCounts = Map.copyOf(filledInValueCounts == null ? Map.of() : filledInValueCounts);
+		amendedValuePairCounts = Map.copyOf(amendedValuePairCounts == null ? Map.of() : amendedValuePairCounts);
+	}
 
     /**
      * Returns an empty metadata instance, used as the default when no metadata is available.
@@ -50,6 +95,20 @@ public record ExecutionSummaryMetadata(
      * @return metadata with blank identity fields, zero counts, and empty tally maps
      */
     public static ExecutionSummaryMetadata empty() {
-        return new ExecutionSummaryMetadata("", "", "", 0, 0, Map.of(), Map.of());
+        return new ExecutionSummaryMetadata("", "", "", 0, 0, 0, 0, Map.of(), Map.of(), Map.of());
     }
+
+	/**
+	 * @return the number of records excluded by active record filters
+	 */
+	public int excludedSingleRecordCount() {
+		return Math.max(0, inputSingleRecordCount - filteredSingleRecordCount);
+	}
+
+	/**
+	 * @return {@code true} if record filters were active for this run
+	 */
+	public boolean hasRecordFilters() {
+		return !recordFilters.isEmpty();
+	}
 }
