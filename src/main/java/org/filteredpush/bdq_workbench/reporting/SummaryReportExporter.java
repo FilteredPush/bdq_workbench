@@ -146,8 +146,7 @@ public class SummaryReportExporter implements ReportExporter {
                 .append(field)
                 .append(" = ")
                 .append(String.join(" | ", values))
-                .append('\n');
-        });
+                .append('\n'));
     }
 
     /**

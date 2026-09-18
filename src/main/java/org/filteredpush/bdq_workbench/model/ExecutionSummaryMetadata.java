@@ -22,6 +22,7 @@ package org.filteredpush.bdq_workbench.model;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Collections;
 
 /**
  * Additional execution context used by summary renderers and exports.
@@ -84,7 +85,7 @@ public record ExecutionSummaryMetadata(
 		Map<String, List<String>> copiedFilters = new LinkedHashMap<>();
 		(recordFilters == null ? Map.<String, List<String>>of() : recordFilters)
 				.forEach((field, values) -> copiedFilters.put(field, List.copyOf(values == null ? List.of() : values)));
-		recordFilters = Map.copyOf(copiedFilters);
+		recordFilters = Collections.unmodifiableMap(copiedFilters);
 		filledInValueCounts = Map.copyOf(filledInValueCounts == null ? Map.of() : filledInValueCounts);
 		amendedValuePairCounts = Map.copyOf(amendedValuePairCounts == null ? Map.of() : amendedValuePairCounts);
 	}

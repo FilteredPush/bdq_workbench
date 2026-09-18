@@ -29,7 +29,6 @@ import org.filteredpush.bdq_workbench.reporting.ReportingService;
 import org.filteredpush.bdq_workbench.test_discovery.DiscoveredImplementation;
 import org.filteredpush.bdq_workbench.test_discovery.TestBindingResult;
 import org.filteredpush.bdq_workbench.test_discovery.TestBindingService;
-import org.filteredpush.bdq_workbench.test_discovery.TestDiscoveryService;
 import org.junit.jupiter.api.Test;
 
 class WorkbenchFacadeTest {
@@ -67,7 +66,7 @@ class WorkbenchFacadeTest {
                         new Policy("policy:1", List.of(test.id())),
                         List.of(test),
                         List.of()),
-                List::of,
+                () -> List.of(),
                 bindingService,
                 (dataset, bindings, discovered) -> List.of(),
                 new ReportingService(List.of()),

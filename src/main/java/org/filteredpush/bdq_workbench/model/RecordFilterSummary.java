@@ -20,6 +20,7 @@
 package org.filteredpush.bdq_workbench.model;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -54,7 +55,7 @@ public record RecordFilterSummary(
 		Map<String, List<String>> copiedCriteria = new LinkedHashMap<>();
 		(resolvedCriteria == null ? Map.<String, List<String>>of() : resolvedCriteria)
 				.forEach((field, values) -> copiedCriteria.put(field, List.copyOf(values == null ? List.of() : values)));
-		resolvedCriteria = Map.copyOf(copiedCriteria);
+		resolvedCriteria = Collections.unmodifiableMap(copiedCriteria);
 		diagnostics = List.copyOf(diagnostics == null ? List.of() : new ArrayList<>(diagnostics));
 	}
 

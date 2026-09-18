@@ -20,6 +20,7 @@
 package org.filteredpush.bdq_workbench.model;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -45,7 +46,7 @@ public record RecordFilterSpec(Map<String, List<String>> criteria) {
 			LinkedHashSet<String> dedupedValues = new LinkedHashSet<>(values == null ? List.of() : values);
 			copied.put(field, List.copyOf(dedupedValues));
 		});
-		criteria = Map.copyOf(copied);
+		criteria = Collections.unmodifiableMap(copied);
 	}
 
 	/**

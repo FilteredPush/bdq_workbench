@@ -3,7 +3,6 @@ package org.filteredpush.bdq_workbench.app;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.lang.reflect.Method;
-import java.io.BufferedWriter;
 import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 import java.util.List;

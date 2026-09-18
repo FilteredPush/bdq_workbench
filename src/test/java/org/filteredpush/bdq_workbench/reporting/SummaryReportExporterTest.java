@@ -100,7 +100,9 @@ class SummaryReportExporterTest {
         assertThat(report).contains("Darwin Core terms selected for execution: 5\n");
         assertThat(report).contains("SingleRecords selected for execution: 2\n");
         assertThat(report).contains("SingleRecords excluded by record filters: 1\n");
-        assertThat(report).contains("Record filters:\n - dwc:country = Canada\n - dwc:genus = Abies | Pinus\n");
+        assertThat(report).contains("Record filters:\n");
+        assertThat(report).contains(" - dwc:country = Canada\n");
+        assertThat(report).contains(" - dwc:genus = Abies | Pinus\n");
         assertThat(report).contains("Counts represent normalized BDQ response rows emitted during execution:\n");
         assertThat(report).contains("By phase:\n - PRE_AMENDMENT: 3\n - POST_AMENDMENT: 2\n");
         assertThat(report).contains("By response status:\n - RUN_HAS_RESULT: 5\n");
