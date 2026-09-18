@@ -75,6 +75,7 @@ import org.filteredpush.bdq_workbench.model.ImplementationBinding;
 import org.filteredpush.bdq_workbench.model.Phase;
 import org.filteredpush.bdq_workbench.model.Policy;
 import org.filteredpush.bdq_workbench.model.PreparedRun;
+import org.filteredpush.bdq_workbench.model.DarwinCoreTermResolver;
 import org.filteredpush.bdq_workbench.model.RecordDataset;
 import org.filteredpush.bdq_workbench.model.RecordFilterSpec;
 import org.filteredpush.bdq_workbench.model.Response;
@@ -249,15 +250,26 @@ final class BdqWorkbenchGui {
         form.add(setupHeaderRow);
 
         PickerField dataset = addPickerField(form, frame, "Dataset", defaults.datasetPath().toString());
-        JTextField recordFilters = addField(form, "Record filters", defaults.recordFilter().toPropertyString());
-        JTextArea recordFilterHelp = new JTextArea(
-                "Format: field=value or field=value1|value2; multiple fields are ANDed.");
-        recordFilterHelp.setEditable(false);
-        recordFilterHelp.setLineWrap(true);
-        recordFilterHelp.setWrapStyleWord(true);
-        recordFilterHelp.setBorder(BorderFactory.createEtchedBorder());
-        installTextAreaClipboardSupport(recordFilterHelp);
-        form.add(recordFilterHelp);
+        String[] configuredRecordFilters = new String[] {defaults.recordFilter().toPropertyString()};
+        JTextArea recordFilterSummary = new JTextArea(4, 40);
+        recordFilterSummary.setEditable(false);
+        recordFilterSummary.setLineWrap(true);
+        recordFilterSummary.setWrapStyleWord(true);
+        recordFilterSummary.setBorder(BorderFactory.createEtchedBorder());
+        installTextAreaClipboardSupport(recordFilterSummary);
+        updateRecordFilterSummary(recordFilterSummary, configuredRecordFilters[0]);
+        JPanel recordFilterRow = new JPanel(new BorderLayout(8, 8));
+        recordFilterRow.add(new JLabel("Record filters"), BorderLayout.WEST);
+        JPanel recordFilterButtons = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        JButton buildRecordFilters = new JButton("Build Record Filters...");
+        JButton clearRecordFilters = new JButton("Clear Filters");
+        clearRecordFilters.setEnabled(!configuredRecordFilters[0].isBlank());
+        recordFilterButtons.add(buildRecordFilters);
+        recordFilterButtons.add(clearRecordFilters);
+        recordFilterRow.add(recordFilterButtons, BorderLayout.CENTER);
+        recordFilterRow.setBorder(BorderFactory.createEmptyBorder(2, 0, 2, 0));
+        form.add(recordFilterRow);
+        form.add(recordFilterSummary);
 
         JComboBox<UseCaseChoice> useCaseChoice = new JComboBox<>();
         addComboRow(form, "Use case", useCaseChoice);
@@ -398,6 +410,18 @@ final class BdqWorkbenchGui {
                 saveParameters,
                 loadParameters,
                 monitorHeader));
+        buildRecordFilters.addActionListener(e -> loadRecordFilterDialog(
+                frame,
+                dataset.field().getText().trim(),
+                configuredRecordFilters,
+                recordFilterSummary,
+                clearRecordFilters,
+                buildRecordFilters));
+        clearRecordFilters.addActionListener(e -> {
+            configuredRecordFilters[0] = "";
+            updateRecordFilterSummary(recordFilterSummary, configuredRecordFilters[0]);
+            clearRecordFilters.setEnabled(false);
+        });
 
         backToSetup.addActionListener(e -> {
             if (!progress.isVisible()) {
@@ -418,7 +442,7 @@ final class BdqWorkbenchGui {
                     AppConfig config = buildConfig(
                             dataset.field().getText().trim(),
                             selectedUseCaseId(useCaseChoice),
-                            recordFilters.getText().trim(),
+                            configuredRecordFilters[0],
                             useCaseSource.getText().trim(),
                             testDefinitionsSource.getText().trim(),
                             additionalTestDefinitions.getText().trim(),
@@ -1348,6 +1372,368 @@ final class BdqWorkbenchGui {
                 .toList();
     }
 
+    /**
+     * Loads the selected dataset in a background worker, profiles its available record-filter terms,
+     * and opens the interactive filter builder dialog.
+     *
+     * @param frame owner frame for dialogs
+     * @param datasetPath selected dataset path
+     * @param configuredRecordFilters single-element holder for the serialized filter string
+     * @param recordFilterSummary read-only setup summary updated after Apply
+     * @param clearRecordFilters clear button enabled state to refresh after Apply
+     * @param buildRecordFilters build button temporarily disabled while profiling
+     */
+    private static void loadRecordFilterDialog(
+	JFrame frame,
+	String datasetPath,
+	String[] configuredRecordFilters,
+	JTextArea recordFilterSummary,
+	JButton clearRecordFilters,
+	JButton buildRecordFilters) {
+        if (datasetPath == null || datasetPath.isBlank()) {
+	JOptionPane.showMessageDialog(
+	frame,
+	"Select a dataset before building record filters.",
+	"Dataset required",
+	JOptionPane.WARNING_MESSAGE);
+	return;
+        }
+        buildRecordFilters.setEnabled(false);
+        SwingWorker<RecordFilterDatasetProfile, Void> worker = new SwingWorker<>() {
+	@Override
+	protected RecordFilterDatasetProfile doInBackground() {
+                Path path = Path.of(datasetPath);
+                if (!Files.exists(path)) {
+	throw new AppException("Dataset input not found: " + datasetPath);
+                }
+                return profileRecordFilters(new DefaultIngestService().ingest(path));
+	}
+
+	@Override
+	protected void done() {
+                try {
+	openRecordFilterDialog(
+			frame,
+			get(),
+			configuredRecordFilters,
+			recordFilterSummary,
+			clearRecordFilters);
+                } catch (Exception ex) {
+	Throwable cause = ex.getCause() == null ? ex : ex.getCause();
+	LOG.error("Unable to build record filters", cause);
+	JOptionPane.showMessageDialog(
+			frame,
+			"Unable to inspect dataset for record filters: " + cause.getMessage(),
+			"Record filter setup failed",
+			JOptionPane.ERROR_MESSAGE);
+                } finally {
+	buildRecordFilters.setEnabled(true);
+                }
+	}
+        };
+        worker.execute();
+    }
+
+    /**
+     * Opens the interactive record-filter dialog for one already-profiled dataset.
+     *
+     * @param frame owner frame for the dialog
+     * @param profile profiled dataset terms and value suggestions
+     * @param configuredRecordFilters single-element holder for the serialized filter string
+     * @param recordFilterSummary read-only setup summary updated after Apply
+     * @param clearRecordFilters clear button enabled state to refresh after Apply
+     */
+    private static void openRecordFilterDialog(
+	JFrame frame,
+	RecordFilterDatasetProfile profile,
+	String[] configuredRecordFilters,
+	JTextArea recordFilterSummary,
+	JButton clearRecordFilters) {
+        JDialog dialog = new JDialog(frame, "Record Filters", true);
+        dialog.setLayout(new BorderLayout(8, 8));
+
+        JPanel rowsPanel = new JPanel();
+        rowsPanel.setLayout(new BoxLayout(rowsPanel, BoxLayout.Y_AXIS));
+        List<RecordFilterRowWidgets> rows = new ArrayList<>();
+
+        RecordFilterSpec existing = RecordFilterSpec.parse(configuredRecordFilters[0]);
+        if (existing.criteria().isEmpty()) {
+	rows.add(addRecordFilterRow(rowsPanel, profile, null, ""));
+        } else {
+	existing.criteria().forEach((field, values) ->
+	rows.add(addRecordFilterRow(rowsPanel, profile, field, String.join(" | ", values))));
+        }
+
+        JButton addRow = new JButton("Add Filter");
+        addRow.addActionListener(e -> {
+	rows.add(addRecordFilterRow(rowsPanel, profile, null, ""));
+	rowsPanel.revalidate();
+	rowsPanel.repaint();
+	dialog.pack();
+        });
+
+        JButton apply = new JButton("Apply");
+        JButton cancel = new JButton("Cancel");
+        JPanel controls = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        controls.add(addRow);
+        controls.add(apply);
+        controls.add(cancel);
+
+        JTextArea help = new JTextArea(renderRecordFilterProfileHelp(profile));
+        help.setEditable(false);
+        help.setLineWrap(true);
+        help.setWrapStyleWord(true);
+        help.setBorder(BorderFactory.createEtchedBorder());
+        installTextAreaClipboardSupport(help);
+
+        apply.addActionListener(e -> {
+	try {
+                String serialized = serializeRecordFilterRows(rows);
+                RecordFilterSpec normalized = RecordFilterSpec.parse(serialized);
+                configuredRecordFilters[0] = normalized.toPropertyString();
+                updateRecordFilterSummary(recordFilterSummary, configuredRecordFilters[0]);
+                clearRecordFilters.setEnabled(!configuredRecordFilters[0].isBlank());
+                dialog.dispose();
+	} catch (AppException ex) {
+                JOptionPane.showMessageDialog(
+		dialog,
+		ex.getMessage(),
+		"Invalid record filter",
+		JOptionPane.ERROR_MESSAGE);
+	}
+        });
+        cancel.addActionListener(e -> dialog.dispose());
+
+        JPanel content = new JPanel(new BorderLayout(8, 8));
+        content.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+        content.add(help, BorderLayout.NORTH);
+        content.add(new JScrollPane(rowsPanel), BorderLayout.CENTER);
+
+        dialog.add(content, BorderLayout.CENTER);
+        dialog.add(controls, BorderLayout.SOUTH);
+        dialog.setSize(760, 420);
+        dialog.setLocationRelativeTo(frame);
+        dialog.setVisible(true);
+    }
+
+    /**
+     * Adds one editable filter row to the record-filter dialog.
+     *
+     * @param rowsPanel parent panel the row is appended to
+     * @param profile available terms and value suggestions
+     * @param initialField initially selected field, or {@code null}
+     * @param initialValues initial value text
+     * @return the row widgets for later serialization
+     */
+    private static RecordFilterRowWidgets addRecordFilterRow(
+	JPanel rowsPanel,
+	RecordFilterDatasetProfile profile,
+	String initialField,
+	String initialValues) {
+        JPanel row = new JPanel(new BorderLayout(8, 8));
+        List<String> selectableTerms = new ArrayList<>();
+        selectableTerms.add("");
+        selectableTerms.addAll(profile.availableTerms());
+        JComboBox<String> fieldChoice = new JComboBox<>(selectableTerms.toArray(String[]::new));
+        String unresolvedMessage = null;
+        String unresolvedField = null;
+        if (initialField != null) {
+	DarwinCoreTermResolver.Resolution resolution = DarwinCoreTermResolver.resolve(
+			initialField,
+			DarwinCoreTermResolver.indexAvailableTerms(profile.availableTerms()));
+	if (!resolution.isAmbiguous() && resolution.preferredMatch() != null) {
+		fieldChoice.setSelectedItem(resolution.preferredMatch());
+	} else {
+		unresolvedField = initialField;
+		unresolvedMessage = resolution.isAmbiguous()
+				? "Saved filter field \"" + initialField
+						+ "\" matches multiple fields in the currently selected dataset.\nChoose an exact dataset field or remove this row."
+				: "Saved filter field \"" + initialField
+						+ "\" is not present in the currently selected dataset.\nChoose a dataset field or remove this row.";
+	}
+        }
+        JTextField values = new JTextField(initialValues == null ? "" : initialValues);
+        JTextArea suggestionArea = new JTextArea(3, 30);
+        suggestionArea.setEditable(false);
+        suggestionArea.setLineWrap(true);
+        suggestionArea.setWrapStyleWord(true);
+        suggestionArea.setBorder(BorderFactory.createEtchedBorder());
+        installTextAreaClipboardSupport(suggestionArea);
+        JButton remove = new JButton("Remove");
+        remove.addActionListener(e -> {
+	rowsPanel.remove(row);
+	rowsPanel.revalidate();
+	rowsPanel.repaint();
+        });
+
+        String unresolvedSelection = unresolvedMessage;
+        fieldChoice.addActionListener(e -> suggestionArea.setText(
+                renderRecordFilterValueSuggestions(profile, (String) fieldChoice.getSelectedItem(), unresolvedSelection)));
+        suggestionArea.setText(renderRecordFilterValueSuggestions(
+                profile,
+                (String) fieldChoice.getSelectedItem(),
+                unresolvedSelection));
+
+        JPanel inputRow = new JPanel(new BorderLayout(8, 8));
+        inputRow.add(new JLabel("Field"), BorderLayout.WEST);
+        inputRow.add(fieldChoice, BorderLayout.CENTER);
+        inputRow.add(remove, BorderLayout.EAST);
+        JPanel valuesRow = new JPanel(new BorderLayout(8, 8));
+        valuesRow.add(new JLabel("Values"), BorderLayout.WEST);
+        valuesRow.add(values, BorderLayout.CENTER);
+
+        JPanel stacked = new JPanel();
+        stacked.setLayout(new BoxLayout(stacked, BoxLayout.Y_AXIS));
+        stacked.add(inputRow);
+        stacked.add(valuesRow);
+        stacked.add(suggestionArea);
+
+        row.add(stacked, BorderLayout.CENTER);
+        row.setBorder(BorderFactory.createEmptyBorder(4, 0, 4, 0));
+        rowsPanel.add(row);
+        return new RecordFilterRowWidgets(row, fieldChoice, values, unresolvedField, unresolvedMessage);
+    }
+
+    /**
+     * Profiles a dataset for record-filter construction by collecting available terms and the most
+     * common values seen for each term.
+     *
+     * @param dataset the dataset to inspect
+     * @return the dataset profile used by the filter dialog
+     */
+    private static RecordFilterDatasetProfile profileRecordFilters(RecordDataset dataset) {
+        Map<String, Map<String, Long>> countsByTerm = new LinkedHashMap<>();
+        dataset.records().forEach(record -> record.terms().forEach((term, value) -> {
+	countsByTerm.computeIfAbsent(term, ignored -> new LinkedHashMap<>());
+	if (value != null && !value.isBlank()) {
+                countsByTerm.get(term).merge(value, 1L, Long::sum);
+	}
+        }));
+        List<String> availableTerms = new ArrayList<>(countsByTerm.keySet());
+        Map<String, List<RecordFilterValueOption>> topValuesByTerm = new LinkedHashMap<>();
+        Map<String, Integer> distinctValueCounts = new LinkedHashMap<>();
+        countsByTerm.forEach((term, counts) -> {
+	List<Map.Entry<String, Long>> entries = new ArrayList<>(counts.entrySet());
+	entries.sort(java.util.Comparator.<Map.Entry<String, Long>>comparingLong(Map.Entry::getValue)
+	.reversed()
+	.thenComparing(Map.Entry::getKey, String.CASE_INSENSITIVE_ORDER));
+	distinctValueCounts.put(term, entries.size());
+	topValuesByTerm.put(term, entries.stream()
+	.limit(8)
+	.map(entry -> new RecordFilterValueOption(entry.getKey(), entry.getValue()))
+	.toList());
+        });
+        return new RecordFilterDatasetProfile(dataset.records().size(), List.copyOf(availableTerms), topValuesByTerm, distinctValueCounts);
+    }
+
+    /**
+     * Renders the read-only setup summary for the current serialized record filters.
+     *
+     * @param summaryArea setup-screen summary area
+     * @param serializedRecordFilters current serialized filter string
+     */
+    private static void updateRecordFilterSummary(JTextArea summaryArea, String serializedRecordFilters) {
+        summaryArea.setText(renderRecordFilterSelectionSummary(serializedRecordFilters));
+    }
+
+    /**
+     * Renders the current record-filter selection for the setup screen.
+     *
+     * @param serializedRecordFilters current serialized filter string
+     * @return the rendered setup summary
+     */
+    private static String renderRecordFilterSelectionSummary(String serializedRecordFilters) {
+        RecordFilterSpec spec = RecordFilterSpec.parse(serializedRecordFilters);
+        if (spec.criteria().isEmpty()) {
+	return "No record filters configured.\nUse \"Build Record Filters...\" to choose terms present in the selected dataset.";
+        }
+        StringBuilder builder = new StringBuilder("Configured record filters\n");
+        spec.criteria().forEach((field, values) -> builder.append(" - ")
+                .append(field)
+                .append(" = ")
+                .append(String.join(" | ", values))
+                .append('\n'));
+        builder.append("Within a field, values are ORed; across fields, filters are ANDed.");
+        return builder.toString();
+    }
+
+    /**
+     * Renders the record-filter dialog's dataset overview help text.
+     *
+     * @param profile dataset profile informing the dialog
+     * @return the rendered help text
+     */
+    private static String renderRecordFilterProfileHelp(RecordFilterDatasetProfile profile) {
+        return "Select terms present in the dataset and enter exact values to match.\n"
+                + "Loaded " + profile.recordCount() + " records and " + profile.availableTerms().size() + " distinct terms.\n"
+                + "Within a field, separate multiple values with |. Across fields, filters are ANDed.";
+    }
+
+    /**
+     * Renders common value suggestions for one dataset term in the record-filter dialog.
+     *
+     * @param profile dataset profile informing the dialog
+     * @param term selected term name
+     * @return the rendered suggestions
+     */
+    private static String renderRecordFilterValueSuggestions(
+	RecordFilterDatasetProfile profile,
+	String term,
+	String unresolvedMessage) {
+        if (term == null || term.isBlank()) {
+	if (unresolvedMessage != null && !unresolvedMessage.isBlank()) {
+		return unresolvedMessage;
+	}
+	return "Choose a field to see common values present in the dataset.";
+        }
+        StringBuilder builder = new StringBuilder("Common values for ").append(term).append('\n');
+        List<RecordFilterValueOption> values = profile.topValuesByTerm().getOrDefault(term, List.of());
+        if (values.isEmpty()) {
+	builder.append(" - no values observed");
+	return builder.toString();
+        }
+        values.forEach(option -> builder.append(" - ").append(option.value()).append(" (").append(option.count()).append(")\n"));
+        int distinctValueCount = profile.distinctValueCounts().getOrDefault(term, values.size());
+        if (distinctValueCount > values.size()) {
+	builder.append(" ... and ").append(distinctValueCount - values.size()).append(" more distinct value(s)");
+        } else if (builder.charAt(builder.length() - 1) == '\n') {
+	builder.setLength(builder.length() - 1);
+        }
+        return builder.toString();
+    }
+
+    /**
+     * Serializes the visible rows from the record-filter dialog into property form.
+     *
+     * @param rows the row widgets to serialize
+     * @return the serialized record-filter string
+     */
+    private static String serializeRecordFilterRows(List<RecordFilterRowWidgets> rows) {
+        List<String> clauses = new ArrayList<>();
+        for (RecordFilterRowWidgets row : rows) {
+	if (row.container().getParent() == null) {
+                continue;
+	}
+	String field = ((String) row.fieldChoice().getSelectedItem());
+	String values = row.valuesField().getText().trim();
+	if ((field == null || field.isBlank()) && values.isBlank()) {
+                continue;
+	}
+	if (row.unresolvedField() != null && (field == null || field.isBlank())) {
+                throw new AppException("Invalid record filter: select a replacement for " + row.unresolvedField()
+		+ " or remove that filter row");
+	}
+	if (field == null || field.isBlank()) {
+                throw new AppException("Invalid record filter: field name must not be blank");
+	}
+	if (values.isBlank()) {
+                throw new AppException("Invalid record filter for " + field + ": values must not be blank");
+	}
+	clauses.add(field + "=" + values.replace(" | ", "|"));
+        }
+        return String.join("; ", clauses);
+    }
+
     private static String selectedUseCaseId(JComboBox<UseCaseChoice> combo) {
         Object selected = combo.getSelectedItem();
         return selected instanceof UseCaseChoice choice ? choice.id() : "";
@@ -1576,7 +1962,8 @@ final class BdqWorkbenchGui {
                 preparedRun.dataset().copy(),
                 preparedRun.plan(),
                 preparedRun.discovered(),
-                rebound);
+                rebound,
+                preparedRun.filterSummary());
     }
 
     private static Map<String, String> parameterValuesFor(
@@ -2244,6 +2631,27 @@ final class BdqWorkbenchGui {
 
     /** A text field paired with its associated "Browse..." button, as built by {@link #addPickerField}. */
     private record PickerField(JTextField field, JButton button) {
+    }
+
+    /** One profiled value suggestion for a dataset term in the record-filter dialog. */
+    private record RecordFilterValueOption(String value, long count) {
+    }
+
+    /** Dataset-derived terms and value counts used to build record filters interactively. */
+    private record RecordFilterDatasetProfile(
+		int recordCount,
+		List<String> availableTerms,
+		Map<String, List<RecordFilterValueOption>> topValuesByTerm,
+		Map<String, Integer> distinctValueCounts) {
+    }
+
+    /** Swing widgets for one editable row in the record-filter dialog. */
+    private record RecordFilterRowWidgets(
+		JPanel container,
+		JComboBox<String> fieldChoice,
+		JTextField valuesField,
+		String unresolvedField,
+		String unresolvedMessage) {
     }
 
     /** The current preflight result being reviewed in the monitor UI. */

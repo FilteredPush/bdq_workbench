@@ -496,6 +496,116 @@ class BdqWorkbenchGuiTest {
         assertThat(overview).contains("[pending] Export reports - reports not written yet");
     }
 
+    @Test
+    void setupFilterSummaryEncouragesDatasetInformedDialog() throws Exception {
+        Method helper = BdqWorkbenchGui.class.getDeclaredMethod(
+		"renderRecordFilterSelectionSummary",
+		String.class);
+        helper.setAccessible(true);
+
+        String empty = (String) helper.invoke(null, "");
+        String populated = (String) helper.invoke(null, "dwc:country=Canada; genus=Abies|Pinus");
+
+        assertThat(empty).contains("No record filters configured.");
+        assertThat(empty).contains("Build Record Filters...");
+        assertThat(populated).contains("Configured record filters");
+        assertThat(populated).contains(" - dwc:country = Canada");
+        assertThat(populated).contains(" - genus = Abies | Pinus");
+    }
+
+    @Test
+    void recordFilterProfileSuggestionsSummarizeCommonDatasetValues() throws Exception {
+        Method profileHelper = BdqWorkbenchGui.class.getDeclaredMethod("profileRecordFilters", RecordDataset.class);
+        profileHelper.setAccessible(true);
+        Object profile = profileHelper.invoke(null, new RecordDataset(List.of(
+		new CanonicalRecord("r1", Map.of("dwc:country", "Canada", "dwc:genus", "Abies")),
+		new CanonicalRecord("r2", Map.of("dwc:country", "Canada", "dwc:genus", "Pinus")),
+		new CanonicalRecord("r3", Map.of("dwc:country", "Mexico", "dwc:genus", "Abies")))));
+        Method suggestionHelper = BdqWorkbenchGui.class.getDeclaredMethod(
+		"renderRecordFilterValueSuggestions",
+		profile.getClass(),
+		String.class,
+		String.class);
+        suggestionHelper.setAccessible(true);
+
+        String suggestions = (String) suggestionHelper.invoke(null, profile, "dwc:country", null);
+
+        assertThat(suggestions).contains("Common values for dwc:country");
+        assertThat(suggestions).contains(" - Canada (2)");
+        assertThat(suggestions).contains(" - Mexico (1)");
+    }
+
+    @Test
+    void recordFilterSuggestionsWarnWhenSavedFieldIsMissingFromCurrentDataset() throws Exception {
+        Method profileHelper = BdqWorkbenchGui.class.getDeclaredMethod("profileRecordFilters", RecordDataset.class);
+        profileHelper.setAccessible(true);
+        Object profile = profileHelper.invoke(null, new RecordDataset(List.of(
+		new CanonicalRecord("r1", Map.of("dwc:country", "Canada")))));
+        Method suggestionHelper = BdqWorkbenchGui.class.getDeclaredMethod(
+		"renderRecordFilterValueSuggestions",
+		profile.getClass(),
+		String.class,
+		String.class);
+        suggestionHelper.setAccessible(true);
+
+        String suggestions = (String) suggestionHelper.invoke(null, profile, "", "dwc:genus");
+
+        assertThat(suggestions).contains("dwc:genus");
+        assertThat(suggestions).contains("Choose a dataset field or remove this row.");
+    }
+
+    @Test
+    void recordFilterSuggestionsWarnWhenSavedAliasIsAmbiguous() throws Exception {
+        Method profileHelper = BdqWorkbenchGui.class.getDeclaredMethod("profileRecordFilters", RecordDataset.class);
+        profileHelper.setAccessible(true);
+        Object profile = profileHelper.invoke(null, new RecordDataset(List.of(
+		new CanonicalRecord("r1", Map.of("country", "Canada", "dwc:country", "Canada")))));
+        Method suggestionHelper = BdqWorkbenchGui.class.getDeclaredMethod(
+		"renderRecordFilterValueSuggestions",
+		profile.getClass(),
+		String.class,
+		String.class);
+        suggestionHelper.setAccessible(true);
+
+        String suggestions = (String) suggestionHelper.invoke(
+		null,
+		profile,
+		"",
+		"Saved filter field \"country\" matches multiple fields in the currently selected dataset.\nChoose an exact dataset field or remove this row.");
+
+        assertThat(suggestions).contains("matches multiple fields");
+        assertThat(suggestions).contains("Choose an exact dataset field");
+    }
+
+    @Test
+    void applyParameterEditsPreservesFilterSummary() throws Exception {
+        Method helper = BdqWorkbenchGui.class.getDeclaredMethod(
+		"applyParameterEdits",
+		PreparedRun.class,
+		BindingReviewTableModel.class);
+        helper.setAccessible(true);
+        PreparedRun preparedRun = new PreparedRun(
+		null,
+		new RecordDataset(List.of(new CanonicalRecord("r1", Map.of("dwc:country", "Canada")))),
+		new ExecutionPlan(new UseCase("urn:usecase", "Use case", "urn:policy"), new Policy("urn:policy", List.of()), List.of(), List.of()),
+		List.of(),
+		new TestBindingResult(List.of(), List.of(), List.of()),
+		new RecordFilterSummary(
+				new RecordDataset(List.of(new CanonicalRecord("r1", Map.of("dwc:country", "Canada")))),
+				3,
+				1,
+				2,
+				2,
+				1,
+				Map.of("dwc:country", List.of("Canada")),
+				List.of("Record filter field country resolved to input field dwc:country")));
+        BindingReviewTableModel model = new BindingReviewTableModel(List.of());
+
+        PreparedRun rebound = (PreparedRun) helper.invoke(null, preparedRun, model);
+
+        assertThat(rebound.filterSummary()).isEqualTo(preparedRun.filterSummary());
+    }
+
     static class GuiDummy {
         public boolean validate(String eventDate) {
             return eventDate != null;
