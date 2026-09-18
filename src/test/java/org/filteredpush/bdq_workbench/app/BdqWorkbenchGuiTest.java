@@ -633,6 +633,43 @@ class BdqWorkbenchGuiTest {
     }
 
     @Test
+    void preferredDefaultUseCaseIdFallsBackToSpatialTemporalPatterns() throws Exception {
+        Method helper = BdqWorkbenchGui.class.getDeclaredMethod(
+                "preferredDefaultUseCaseId",
+                List.class,
+                String.class);
+        helper.setAccessible(true);
+
+        String selected = (String) helper.invoke(
+                null,
+                List.of(
+                        new UseCase("urn:usecase:1", "Taxonomic Completeness", "urn:policy:1"),
+                        new UseCase("urn:usecase:2", "Spatial-Temporal Patterns", "urn:policy:2"),
+                        new UseCase("urn:usecase:3", "Georeference Completeness", "urn:policy:3")),
+                "");
+
+        assertThat(selected).isEqualTo("urn:usecase:2");
+    }
+
+    @Test
+    void preferredDefaultUseCaseIdKeepsExplicitConfiguredDefault() throws Exception {
+        Method helper = BdqWorkbenchGui.class.getDeclaredMethod(
+                "preferredDefaultUseCaseId",
+                List.class,
+                String.class);
+        helper.setAccessible(true);
+
+        String selected = (String) helper.invoke(
+                null,
+                List.of(
+                        new UseCase("urn:usecase:1", "Taxonomic Completeness", "urn:policy:1"),
+                        new UseCase("urn:usecase:2", "Spatial-Temporal Patterns", "urn:policy:2")),
+                "urn:usecase:1");
+
+        assertThat(selected).isEqualTo("urn:usecase:1");
+    }
+
+    @Test
     void recordFilterSuggestionsWarnWhenSavedAliasIsAmbiguous() throws Exception {
         Method profileHelper = BdqWorkbenchGui.class.getDeclaredMethod("profileRecordFilters", RecordDataset.class);
         profileHelper.setAccessible(true);
@@ -682,6 +719,95 @@ class BdqWorkbenchGuiTest {
         PreparedRun rebound = (PreparedRun) helper.invoke(null, preparedRun, model);
 
         assertThat(rebound.filterSummary()).isEqualTo(preparedRun.filterSummary());
+    }
+
+    @Test
+    void summarizeCountMeasuresBuildsPreAndPostVisualizationData() throws Exception {
+        Method helper = BdqWorkbenchGui.class.getDeclaredMethod("summarizeCountMeasures", ExecutionSummary.class);
+        helper.setAccessible(true);
+        ExecutionSummary summary = new ExecutionSummary(List.of(
+                new Response(
+                        "MULTIRECORD",
+                        "urn:test:count",
+                        TestType.MEASURE,
+                        BuiltInMeasureSpec.IMPLEMENTATION_CLASS,
+                        BuiltInMeasureSpec.IMPLEMENTATION_METHOD,
+                        Phase.PRE_AMENDMENT,
+                        Map.of(
+                                BuiltInMeasureSpec.KIND_KEY, BuiltInMeasureSpec.MeasureKind.COUNT.name(),
+                                BuiltInMeasureSpec.MEASURE_LABEL_KEY, "Count compliant basisOfRecord",
+                                BuiltInMeasureSpec.MATCHING_COUNT_KEY, "1",
+                                BuiltInMeasureSpec.TOTAL_RECORDS_KEY, "4",
+                                BuiltInMeasureSpec.PERCENTAGE_KEY, "25.0"),
+                        OutcomeStatus.PASSED,
+                        "RUN_HAS_RESULT",
+                        "1",
+                        "1",
+                        "1",
+                        Map.of(),
+                        Instant.now(),
+                        Instant.now()),
+                new Response(
+                        "MULTIRECORD",
+                        "urn:test:count",
+                        TestType.MEASURE,
+                        BuiltInMeasureSpec.IMPLEMENTATION_CLASS,
+                        BuiltInMeasureSpec.IMPLEMENTATION_METHOD,
+                        Phase.POST_AMENDMENT,
+                        Map.of(
+                                BuiltInMeasureSpec.KIND_KEY, BuiltInMeasureSpec.MeasureKind.COUNT.name(),
+                                BuiltInMeasureSpec.MEASURE_LABEL_KEY, "Count compliant basisOfRecord",
+                                BuiltInMeasureSpec.MATCHING_COUNT_KEY, "3",
+                                BuiltInMeasureSpec.TOTAL_RECORDS_KEY, "4",
+                                BuiltInMeasureSpec.PERCENTAGE_KEY, "75.0"),
+                        OutcomeStatus.PASSED,
+                        "RUN_HAS_RESULT",
+                        "3",
+                        "3",
+                        "3",
+                        Map.of(),
+                        Instant.now(),
+                        Instant.now()),
+                new Response(
+                        "MULTIRECORD",
+                        "urn:test:qa",
+                        TestType.MEASURE,
+                        BuiltInMeasureSpec.IMPLEMENTATION_CLASS,
+                        BuiltInMeasureSpec.IMPLEMENTATION_METHOD,
+                        Phase.PRE_AMENDMENT,
+                        Map.of(
+                                BuiltInMeasureSpec.KIND_KEY, BuiltInMeasureSpec.MeasureKind.QA.name(),
+                                BuiltInMeasureSpec.MEASURE_LABEL_KEY, "QA summary"),
+                        OutcomeStatus.PASSED,
+                        "RUN_HAS_RESULT",
+                        "COMPLIANT",
+                        "COMPLIANT",
+                        "COMPLIANT",
+                        Map.of(),
+                        Instant.now(),
+                        Instant.now())));
+
+        @SuppressWarnings("unchecked")
+        List<Object> measures = (List<Object>) helper.invoke(null, summary);
+
+        assertThat(measures).hasSize(1);
+        Object measure = measures.get(0);
+        Method label = measure.getClass().getDeclaredMethod("label");
+        Method prePercent = measure.getClass().getDeclaredMethod("prePercent");
+        Method preText = measure.getClass().getDeclaredMethod("preText");
+        Method postPercent = measure.getClass().getDeclaredMethod("postPercent");
+        Method postText = measure.getClass().getDeclaredMethod("postText");
+        label.setAccessible(true);
+        prePercent.setAccessible(true);
+        preText.setAccessible(true);
+        postPercent.setAccessible(true);
+        postText.setAccessible(true);
+
+        assertThat(label.invoke(measure)).isEqualTo("Count compliant basisOfRecord");
+        assertThat(prePercent.invoke(measure)).isEqualTo(25);
+        assertThat(preText.invoke(measure)).isEqualTo("1/4 (25.0%)");
+        assertThat(postPercent.invoke(measure)).isEqualTo(75);
+        assertThat(postText.invoke(measure)).isEqualTo("3/4 (75.0%)");
     }
 
     static class GuiDummy {

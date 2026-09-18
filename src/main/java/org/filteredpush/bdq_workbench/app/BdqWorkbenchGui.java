@@ -25,6 +25,8 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.awt.BorderLayout;
 import java.awt.CardLayout;
+import java.awt.Color;
+import java.awt.Dimension;
 import java.awt.FileDialog;
 import java.awt.FlowLayout;
 import java.awt.Frame;
@@ -54,6 +56,7 @@ import javax.swing.JPopupMenu;
 import javax.swing.JProgressBar;
 import javax.swing.JScrollPane;
 import javax.swing.JSplitPane;
+import javax.swing.SwingConstants;
 import javax.swing.JTable;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
@@ -196,11 +199,19 @@ final class BdqWorkbenchGui {
         resultSummaryArea.setLineWrap(true);
         resultSummaryArea.setWrapStyleWord(true);
         installTextAreaClipboardSupport(resultSummaryArea);
+        JPanel workflowVisualizationPanel = new JPanel();
+        workflowVisualizationPanel.setLayout(new BoxLayout(workflowVisualizationPanel, BoxLayout.Y_AXIS));
+        workflowVisualizationPanel.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
+        resetWorkflowVisualizationPanel(workflowVisualizationPanel);
+        CardLayout summaryCards = new CardLayout();
+        JPanel summaryCardPanel = new JPanel(summaryCards);
+        summaryCardPanel.add(new JScrollPane(resultSummaryArea), "text");
+        summaryCardPanel.add(new JScrollPane(workflowVisualizationPanel), "workflow");
 
         JPanel monitorPanel = new JPanel(new BorderLayout(8, 8));
         JSplitPane bindingGridSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT,
                 new JScrollPane(bindingGrid),
-                new JScrollPane(resultSummaryArea));
+                summaryCardPanel);
         bindingGridSplit.setResizeWeight(0.7d);
         JSplitPane monitorSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT,
                 new JScrollPane(statusArea),
@@ -228,12 +239,15 @@ final class BdqWorkbenchGui {
         loadParameters.setEnabled(false);
         JButton saveParameters = new JButton("Save Parameters...");
         saveParameters.setEnabled(false);
+        JButton toggleWorkflowView = new JButton("Show Workflow View");
+        toggleWorkflowView.setEnabled(false);
         JButton backToSetup = new JButton("Back to Select Inputs");
         JButton startRun = new JButton("Start Run");
         startRun.setEnabled(false);
         JButton closeButton = new JButton("Quit");
         monitorControls.add(loadParameters);
         monitorControls.add(saveParameters);
+        monitorControls.add(toggleWorkflowView);
         monitorControls.add(backToSetup);
         monitorControls.add(startRun);
         monitorControls.add(closeButton);
@@ -271,7 +285,11 @@ final class BdqWorkbenchGui {
         form.add(recordFilterRow);
         form.add(recordFilterSummary);
         JCheckBox dedupEnabled = new JCheckBox("Reduce repeated test calls by distinct input values", defaults.dedupEnabled());
-        form.add(dedupEnabled);
+        dedupEnabled.setHorizontalTextPosition(SwingConstants.LEFT);
+        JPanel dedupRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        dedupRow.add(dedupEnabled);
+        dedupRow.setBorder(BorderFactory.createEmptyBorder(2, 0, 2, 0));
+        form.add(dedupRow);
 
         JComboBox<UseCaseChoice> useCaseChoice = new JComboBox<>();
         addComboRow(form, "Use case", useCaseChoice);
@@ -425,8 +443,33 @@ final class BdqWorkbenchGui {
             clearRecordFilters.setEnabled(false);
         });
 
+        final boolean[] showingWorkflowView = new boolean[] {false};
+        Runnable showTextSummary = () -> {
+            summaryCards.show(summaryCardPanel, "text");
+            showingWorkflowView[0] = false;
+            toggleWorkflowView.setText("Show Workflow View");
+        };
+        Runnable showWorkflowSummary = () -> {
+            summaryCards.show(summaryCardPanel, "workflow");
+            showingWorkflowView[0] = true;
+            toggleWorkflowView.setText("Show Results Summary");
+        };
+        toggleWorkflowView.addActionListener(e -> {
+            if (!toggleWorkflowView.isEnabled()) {
+                return;
+            }
+            if (showingWorkflowView[0]) {
+                showTextSummary.run();
+            } else {
+                showWorkflowSummary.run();
+            }
+        });
+
         backToSetup.addActionListener(e -> {
             if (!progress.isVisible()) {
+                showTextSummary.run();
+                toggleWorkflowView.setEnabled(false);
+                resetWorkflowVisualizationPanel(workflowVisualizationPanel);
                 cards.show(cardPanel, "setup");
             }
         });
@@ -434,6 +477,9 @@ final class BdqWorkbenchGui {
         run.addActionListener(e -> {
             run.setEnabled(false);
             cards.show(cardPanel, "monitor");
+            showTextSummary.run();
+            toggleWorkflowView.setEnabled(false);
+            resetWorkflowVisualizationPanel(workflowVisualizationPanel);
             setStatus(statusArea, "Preparing run configuration...\n");
             progress.setVisible(true);
             startRun.setEnabled(false);
@@ -473,11 +519,17 @@ final class BdqWorkbenchGui {
                                 saveParameters,
                                 loadParameters,
                                 monitorHeader);
+                        showTextSummary.run();
+                        toggleWorkflowView.setEnabled(false);
+                        resetWorkflowVisualizationPanel(workflowVisualizationPanel);
                     } catch (Exception ex) {
                         Throwable cause = ex.getCause() == null ? ex : ex.getCause();
                         LOG.error("Preflight mapping failed", cause);
                         setStatus(statusArea, "Failed to prepare run: " + cause.getMessage() + "\n");
                         resultSummaryArea.setText("Run setup failed.\n");
+                        showTextSummary.run();
+                        toggleWorkflowView.setEnabled(false);
+                        resetWorkflowVisualizationPanel(workflowVisualizationPanel);
                         startRun.setEnabled(false);
                         saveParameters.setEnabled(false);
                         loadParameters.setEnabled(false);
@@ -501,6 +553,9 @@ final class BdqWorkbenchGui {
             progress.setMinimum(0);
             progress.setValue(0);
             appendStatus(statusArea, "\nStarting execution...\n");
+            showTextSummary.run();
+            toggleWorkflowView.setEnabled(false);
+            final PreparedRun[] executedRun = new PreparedRun[1];
 
             SwingWorker<ExecutionSummary, Void> worker = new SwingWorker<>() {
                 @Override
@@ -508,6 +563,7 @@ final class BdqWorkbenchGui {
                     LOG.info("Starting BDQ Workbench execution");
                     BindingReviewTableModel reviewModel = (BindingReviewTableModel) bindingGrid.getModel();
                     PreparedRun editedRun = applyParameterEdits(state[0].preparedRun(), reviewModel);
+                    executedRun[0] = editedRun;
                     ExecutionProgressTracker tracker = new ExecutionProgressTracker();
                     return runWorkbench(editedRun, tracker, snapshot -> SwingUtilities.invokeLater(() -> {
                         int max = Math.max(1, snapshot.total());
@@ -534,12 +590,16 @@ final class BdqWorkbenchGui {
                 protected void done() {
                     try {
                         ExecutionSummary summary = get();
+                        PreparedRun completedRun = executedRun[0] == null ? state[0].preparedRun() : executedRun[0];
                         LOG.info("BDQ Workbench execution complete: {} outcomes", summary.responses().size());
-                        monitorHeader.setText(monitorHeaderText("Test Results", state[0].preparedRun()));
+                        monitorHeader.setText(monitorHeaderText("Test Results", completedRun));
                         appendStatus(statusArea, "Completed: " + summary.responses().size() + " outcomes\n");
-                        resultSummaryArea.setText(renderStageOverview(state[0].preparedRun(), null, true, false)
+                        resultSummaryArea.setText(renderStageOverview(completedRun, null, true, false)
                                 + "\n"
                                 + renderResultSummary(summary));
+                        updateWorkflowVisualizationPanel(workflowVisualizationPanel, completedRun, summary);
+                        toggleWorkflowView.setEnabled(true);
+                        showTextSummary.run();
                         updateBindingGridExecutionOutputs(bindingGrid, summary);
                         Iterator <Response> i = summary.responses().iterator();
                         while (i.hasNext()) {
@@ -563,6 +623,9 @@ final class BdqWorkbenchGui {
                                 "BDQ Workbench failed: " + cause.getMessage(),
                                 "Execution failed",
                                 JOptionPane.ERROR_MESSAGE);
+                        toggleWorkflowView.setEnabled(false);
+                        showTextSummary.run();
+                        resetWorkflowVisualizationPanel(workflowVisualizationPanel);
                     } finally {
                         progress.setVisible(false);
                         backToSetup.setEnabled(true);
@@ -1267,8 +1330,9 @@ final class BdqWorkbenchGui {
     /**
      * Handles "Load use cases" (and the initial load at startup): resolves {@code source} to a
      * local file (caching remote resources via {@code resolver}), parses its use cases, repopulates
-     * {@code combo} with one entry per use case, selects {@code defaultUseCaseId} if present
-     * (otherwise the first entry), and reports the outcome in {@code loadStatus}.
+     * {@code combo} with one entry per use case, selects {@code defaultUseCaseId} if present,
+     * otherwise prefers the "Spatial-Temporal Patterns" use case when available (falling back to
+     * the first entry), and reports the outcome in {@code loadStatus}.
      *
      * @param source use case RDF file path or URL
      * @param resolver resolves and caches remote/local resource paths
@@ -1290,11 +1354,12 @@ final class BdqWorkbenchGui {
             if (useCases.isEmpty()) {
                 throw new AppException("No use cases found in " + useCaseXml);
             }
+            String preferredUseCaseId = preferredDefaultUseCaseId(useCases, defaultUseCaseId);
             UseCaseChoice defaultChoice = null;
             for (UseCase useCase : useCases) {
                 UseCaseChoice option = new UseCaseChoice(useCase.id(), useCase.label());
                 combo.addItem(option);
-                if (defaultChoice == null || useCase.id().equals(defaultUseCaseId)) {
+                if (defaultChoice == null || useCase.id().equals(preferredUseCaseId)) {
                     defaultChoice = option;
                 }
             }
@@ -1307,6 +1372,33 @@ final class BdqWorkbenchGui {
             LOG.error("Unable to load use cases from {}", source, e);
             loadStatus.setText("Unable to load use cases: " + e.getMessage());
         }
+    }
+
+    /**
+     * Chooses which use case should be preselected in the setup combo box.
+     *
+     * <p>An explicit configured default wins when present. Otherwise, if the well-known
+     * "Spatial-Temporal Patterns" use case is available, it becomes the default selection.
+     *
+     * @param useCases the loaded use cases
+     * @param configuredDefaultUseCaseId explicitly configured default use case ID, if any
+     * @return the preferred default use case ID, or {@code ""} if no use cases are available
+     */
+    private static String preferredDefaultUseCaseId(List<UseCase> useCases, String configuredDefaultUseCaseId) {
+        if (configuredDefaultUseCaseId != null && !configuredDefaultUseCaseId.isBlank()) {
+            for (UseCase useCase : useCases) {
+                if (configuredDefaultUseCaseId.equals(useCase.id())) {
+                    return useCase.id();
+                }
+            }
+        }
+        for (UseCase useCase : useCases) {
+            String label = useCase.label();
+            if (label != null && "Spatial-Temporal Patterns".equalsIgnoreCase(label.trim())) {
+                return useCase.id();
+            }
+        }
+        return useCases.isEmpty() ? "" : useCases.get(0).id();
     }
 
     /**
@@ -1482,9 +1574,10 @@ final class BdqWorkbenchGui {
         JButton apply = new JButton("Apply");
         JButton cancel = new JButton("Cancel");
         JPanel controls = new JPanel(new FlowLayout(FlowLayout.RIGHT));
-        controls.add(addRow);
         controls.add(apply);
         controls.add(cancel);
+        JPanel addRowPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        addRowPanel.add(addRow);
 
         JTextArea help = new JTextArea(renderRecordFilterProfileHelp(profile));
         help.setEditable(false);
@@ -1514,7 +1607,10 @@ final class BdqWorkbenchGui {
         JPanel content = new JPanel(new BorderLayout(8, 8));
         content.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
         content.add(help, BorderLayout.NORTH);
-        content.add(new JScrollPane(rowsPanel), BorderLayout.CENTER);
+        JPanel rowsContent = new JPanel(new BorderLayout(8, 8));
+        rowsContent.add(addRowPanel, BorderLayout.NORTH);
+        rowsContent.add(new JScrollPane(rowsPanel), BorderLayout.CENTER);
+        content.add(rowsContent, BorderLayout.CENTER);
 
         dialog.add(content, BorderLayout.CENTER);
         dialog.add(controls, BorderLayout.SOUTH);
@@ -1542,6 +1638,7 @@ final class BdqWorkbenchGui {
         selectableTerms.add("");
         selectableTerms.addAll(profile.availableTerms());
         JComboBox<String> fieldChoice = new JComboBox<>(selectableTerms.toArray(String[]::new));
+        fieldChoice.setMaximumRowCount(20);
         String unresolvedMessage = null;
         String unresolvedField = null;
         if (initialField != null) {
@@ -1560,6 +1657,7 @@ final class BdqWorkbenchGui {
 	}
         }
         JTextField values = new JTextField(initialValues == null ? "" : initialValues);
+        forceSingleLineControlHeight(fieldChoice, values.getPreferredSize().height);
         JTextArea suggestionArea = new JTextArea(3, 30);
         suggestionArea.setEditable(false);
         suggestionArea.setLineWrap(true);
@@ -1883,6 +1981,22 @@ final class BdqWorkbenchGui {
     }
 
     /**
+     * Forces a combo box to keep a single-line control height instead of expanding vertically with
+     * layout changes or long item lists.
+     *
+     * @param combo the combo box to normalize
+     * @param targetHeight the desired control height in pixels
+     */
+    private static void forceSingleLineControlHeight(JComboBox<?> combo, int targetHeight) {
+        Dimension preferred = combo.getPreferredSize();
+        int width = Math.max(preferred.width, 220);
+        Dimension normalized = new Dimension(width, targetHeight);
+        combo.setPreferredSize(normalized);
+        combo.setMinimumSize(new Dimension(120, targetHeight));
+        combo.setMaximumSize(new Dimension(Integer.MAX_VALUE, targetHeight));
+    }
+
+    /**
      * Derives a stable, filesystem-safe cache file name for a resource source (URL or local
      * path): extracts the base file name (from the URI path if {@code source} parses as a URI,
      * otherwise from the local path), strips its extension, sanitizes it to lowercase
@@ -2057,16 +2171,8 @@ final class BdqWorkbenchGui {
             Phase activePhase,
             boolean runCompleted,
             boolean runFailed) {
-        RecordFilterSummary filterSummary = preparedRun == null ? RecordFilterSummary.unfiltered(new RecordDataset(List.of()))
-                : preparedRun.filterSummary();
-        ExecutionPlan plan = preparedRun == null
-                ? new ExecutionPlan(new UseCase("", "", ""), new Policy("", List.of()), List.of(), List.of())
-                : preparedRun.plan();
-        int runnable = preparedRun == null ? 0 : preparedRun.bindingResult().bindings().size();
-        int unresolved = preparedRun == null
-                ? 0
-                : preparedRun.plan().unresolvedTests().size() + preparedRun.bindingResult().unresolved().size();
         int completedStages = completedWorkflowStageCount(preparedRun, activePhase, runCompleted);
+        List<WorkflowStageStatus> stages = workflowStageStatuses(preparedRun, activePhase, runCompleted, runFailed);
         StringBuilder builder = new StringBuilder("Process stages\n");
         builder.append("Workflow progress: ")
                 .append(completedStages)
@@ -2082,28 +2188,7 @@ final class BdqWorkbenchGui {
                     .append(totalWorkflowStageCount())
                     .append(")\n");
         }
-        builder.append(stageLine("Load dataset", "completed", filterSummary.originalRecordCount() + " records loaded")).append('\n');
-        builder.append(stageLine(
-                "Apply record filters",
-                filterSummary.hasActiveFilters() ? "completed" : "skipped",
-                filterSummary.filteredRecordCount() + " kept, " + filterSummary.excludedRecordCount() + " excluded")).append('\n');
-        builder.append(stageLine(
-                "Resolve use case/policy",
-                preparedRun == null ? "pending" : "completed",
-                plan.tests().size() + plan.unresolvedTests().size() + " policy tests")).append('\n');
-        builder.append(stageLine(
-                "Discover implementations",
-                preparedRun == null ? "pending" : "completed",
-                preparedRun == null ? "0 discovered" : preparedRun.discovered().size() + " discovered")).append('\n');
-        builder.append(stageLine(
-                "Bind tests / validate parameters",
-                preparedRun == null ? "pending" : "completed",
-                runnable + " runnable, " + unresolved + " unresolved")).append('\n');
-        builder.append(stagePhaseLine(Phase.PRE_AMENDMENT, activePhase, runCompleted, runFailed)).append('\n');
-        builder.append(stagePhaseLine(Phase.AMENDMENT, activePhase, runCompleted, runFailed)).append('\n');
-        builder.append(stagePhaseLine(Phase.POST_AMENDMENT, activePhase, runCompleted, runFailed)).append('\n');
-        builder.append(stageLine("Export reports", runCompleted ? "completed" : runFailed ? "failed" : "pending",
-                runCompleted ? "reports written" : "reports not written yet")).append('\n');
+        stages.forEach(stage -> builder.append(stageLine(stage.name(), stage.state(), stage.detail())).append('\n'));
         return builder.toString();
     }
 
@@ -2141,34 +2226,104 @@ final class BdqWorkbenchGui {
     }
 
     /**
-     * Renders one execution-phase stage line.
+     * Builds the set of coarse workflow stages shown in the monitor UI.
+     *
+     * @param preparedRun the run being reviewed or executed
+     * @param activePhase the currently active phase, if any
+     * @param runCompleted whether execution has completed
+     * @param runFailed whether execution has failed
+     * @return ordered stage statuses for the overall workflow
+     */
+    private static List<WorkflowStageStatus> workflowStageStatuses(
+            PreparedRun preparedRun,
+            Phase activePhase,
+            boolean runCompleted,
+            boolean runFailed) {
+        RecordFilterSummary filterSummary = preparedRun == null ? RecordFilterSummary.unfiltered(new RecordDataset(List.of()))
+                : preparedRun.filterSummary();
+        ExecutionPlan plan = preparedRun == null
+                ? new ExecutionPlan(new UseCase("", "", ""), new Policy("", List.of()), List.of(), List.of())
+                : preparedRun.plan();
+        int runnable = preparedRun == null ? 0 : preparedRun.bindingResult().bindings().size();
+        int unresolved = preparedRun == null
+                ? 0
+                : preparedRun.plan().unresolvedTests().size() + preparedRun.bindingResult().unresolved().size();
+        List<WorkflowStageStatus> stages = new ArrayList<>();
+        stages.add(new WorkflowStageStatus(
+                "Load dataset",
+                "completed",
+                filterSummary.originalRecordCount() + " records loaded",
+                100));
+        stages.add(new WorkflowStageStatus(
+                "Apply record filters",
+                filterSummary.hasActiveFilters() ? "completed" : "skipped",
+                filterSummary.filteredRecordCount() + " kept, " + filterSummary.excludedRecordCount() + " excluded",
+                100));
+        stages.add(new WorkflowStageStatus(
+                "Resolve use case/policy",
+                preparedRun == null ? "pending" : "completed",
+                plan.tests().size() + plan.unresolvedTests().size() + " policy tests",
+                preparedRun == null ? 0 : 100));
+        stages.add(new WorkflowStageStatus(
+                "Discover implementations",
+                preparedRun == null ? "pending" : "completed",
+                preparedRun == null ? "0 discovered" : preparedRun.discovered().size() + " discovered",
+                preparedRun == null ? 0 : 100));
+        stages.add(new WorkflowStageStatus(
+                "Bind tests / validate parameters",
+                preparedRun == null ? "pending" : "completed",
+                runnable + " runnable, " + unresolved + " unresolved",
+                preparedRun == null ? 0 : 100));
+        stages.add(workflowStageStatusForPhase(Phase.PRE_AMENDMENT, activePhase, runCompleted, runFailed));
+        stages.add(workflowStageStatusForPhase(Phase.AMENDMENT, activePhase, runCompleted, runFailed));
+        stages.add(workflowStageStatusForPhase(Phase.POST_AMENDMENT, activePhase, runCompleted, runFailed));
+        stages.add(new WorkflowStageStatus(
+                "Export reports",
+                runCompleted ? "completed" : runFailed ? "failed" : "pending",
+                runCompleted ? "reports written" : "reports not written yet",
+                runCompleted ? 100 : runFailed ? 25 : 0));
+        return List.copyOf(stages);
+    }
+
+    /**
+     * Builds one execution-phase workflow stage status.
      *
      * @param phase the phase to render
      * @param activePhase the currently active phase, if any
      * @param runCompleted whether execution has completed
      * @param runFailed whether execution has failed
-     * @return the formatted phase line
+     * @return the formatted phase state for the workflow UI
      */
-    private static String stagePhaseLine(Phase phase, Phase activePhase, boolean runCompleted, boolean runFailed) {
+    private static WorkflowStageStatus workflowStageStatusForPhase(
+            Phase phase,
+            Phase activePhase,
+            boolean runCompleted,
+            boolean runFailed) {
         String state;
         String detail;
+        int progressPercent;
         if (runCompleted) {
             state = "completed";
             detail = "phase complete";
+            progressPercent = 100;
         } else if (runFailed && phase == activePhase) {
             state = "failed";
             detail = "phase incomplete";
+            progressPercent = 25;
         } else if (activePhase != null && phase.ordinal() < activePhase.ordinal()) {
             state = "completed";
             detail = "phase complete";
+            progressPercent = 100;
         } else if (phase == activePhase) {
             state = "running";
             detail = "phase in progress";
+            progressPercent = 50;
         } else {
             state = "pending";
             detail = "phase not started";
+            progressPercent = 0;
         }
-        return stageLine(phase.name(), state, detail);
+        return new WorkflowStageStatus(phase.name(), state, detail, progressPercent);
     }
 
     /**
@@ -2216,6 +2371,231 @@ final class BdqWorkbenchGui {
             return completed;
         }
         return Math.min(totalWorkflowStageCount(), completed + 1);
+    }
+
+    /**
+     * Resets the workflow-visualization pane to its pre-run placeholder.
+     *
+     * @param panel the visualization panel to reset
+     */
+    private static void resetWorkflowVisualizationPanel(JPanel panel) {
+        panel.removeAll();
+        JLabel placeholder = new JLabel("Workflow visualization becomes available after the run completes.");
+        placeholder.setBorder(BorderFactory.createEmptyBorder(8, 0, 0, 0));
+        panel.add(placeholder);
+        panel.revalidate();
+        panel.repaint();
+    }
+
+    /**
+     * Populates the workflow-visualization pane with graphical summaries of workflow stages and
+     * multi-record COUNT measures.
+     *
+     * @param panel the visualization panel to populate
+     * @param preparedRun the completed run whose setup/filter/binding counts are summarized
+     * @param summary the completed execution summary
+     */
+    private static void updateWorkflowVisualizationPanel(JPanel panel, PreparedRun preparedRun, ExecutionSummary summary) {
+        panel.removeAll();
+        JLabel title = new JLabel("Workflow Visualization");
+        title.setFont(title.getFont().deriveFont(java.awt.Font.BOLD, title.getFont().getSize() + 3f));
+        title.setBorder(BorderFactory.createEmptyBorder(0, 0, 8, 0));
+        panel.add(title);
+        panel.add(createVisualizationProgressRow(
+                "Overall workflow progress",
+                totalWorkflowStageCount(),
+                totalWorkflowStageCount(),
+                totalWorkflowStageCount() + "/" + totalWorkflowStageCount() + " stages completed",
+                Color.decode("#2e7d32")));
+
+        RecordFilterSummary filterSummary = preparedRun.filterSummary();
+        int originalCount = Math.max(1, filterSummary.originalRecordCount());
+        panel.add(createVisualizationProgressRow(
+                "Records selected for execution",
+                filterSummary.filteredRecordCount(),
+                originalCount,
+                filterSummary.filteredRecordCount() + " kept, " + filterSummary.excludedRecordCount() + " excluded",
+                Color.decode("#1565c0")));
+
+        int runnable = preparedRun.bindingResult().bindings().size();
+        int unresolved = preparedRun.plan().unresolvedTests().size() + preparedRun.bindingResult().unresolved().size();
+        panel.add(createVisualizationProgressRow(
+                "Runnable test bindings",
+                runnable,
+                Math.max(1, runnable + unresolved),
+                runnable + " runnable, " + unresolved + " unresolved",
+                unresolved == 0 ? Color.decode("#2e7d32") : Color.decode("#ef6c00")));
+
+        JLabel stagesLabel = new JLabel("Process stages");
+        stagesLabel.setBorder(BorderFactory.createEmptyBorder(8, 0, 4, 0));
+        panel.add(stagesLabel);
+        workflowStageStatuses(preparedRun, null, true, false).forEach(stage ->
+                panel.add(createVisualizationProgressRow(
+                        stage.name(),
+                        stage.progressPercent(),
+                        100,
+                        stage.state() + " - " + stage.detail(),
+                        colorForStageState(stage.state()))));
+
+        JLabel measureLabel = new JLabel("Multi-record COUNT measures");
+        measureLabel.setBorder(BorderFactory.createEmptyBorder(8, 0, 4, 0));
+        panel.add(measureLabel);
+        List<CountMeasureSummary> countMeasures = summarizeCountMeasures(summary);
+        if (countMeasures.isEmpty()) {
+            panel.add(new JLabel("No multi-record COUNT measures were produced."));
+        } else {
+            countMeasures.forEach(measure -> {
+                JLabel label = new JLabel(measure.label());
+                label.setBorder(BorderFactory.createEmptyBorder(6, 0, 2, 0));
+                panel.add(label);
+                panel.add(createVisualizationProgressRow(
+                        "Pre-amendment",
+                        measure.prePercent(),
+                        100,
+                        measure.preText(),
+                        Color.decode("#6a1b9a")));
+                panel.add(createVisualizationProgressRow(
+                        "Post-amendment",
+                        measure.postPercent(),
+                        100,
+                        measure.postText(),
+                        Color.decode("#00897b")));
+            });
+        }
+        panel.revalidate();
+        panel.repaint();
+    }
+
+    /**
+     * Builds one visualization row consisting of a label and a progress bar whose string carries
+     * the detail summary.
+     *
+     * @param labelText left-side row label
+     * @param value current value represented by the progress bar
+     * @param max maximum value represented by the progress bar
+     * @param detail detail text shown on the progress bar
+     * @param color progress-bar foreground color
+     * @return a reusable panel for the workflow-visualization pane
+     */
+    private static JPanel createVisualizationProgressRow(
+            String labelText,
+            int value,
+            int max,
+            String detail,
+            Color color) {
+        JPanel row = new JPanel(new BorderLayout(8, 4));
+        row.setBorder(BorderFactory.createEmptyBorder(2, 0, 6, 0));
+        row.add(new JLabel(labelText), BorderLayout.NORTH);
+        JProgressBar bar = new JProgressBar(0, Math.max(1, max));
+        bar.setValue(Math.max(0, Math.min(value, Math.max(1, max))));
+        bar.setStringPainted(true);
+        bar.setString(detail);
+        bar.setForeground(color);
+        row.add(bar, BorderLayout.CENTER);
+        return row;
+    }
+
+    /**
+     * Chooses a visualization color for a stage state.
+     *
+     * @param state the stage state string
+     * @return the color associated with that state
+     */
+    private static Color colorForStageState(String state) {
+        return switch (state) {
+            case "completed" -> Color.decode("#2e7d32");
+            case "running" -> Color.decode("#1565c0");
+            case "failed" -> Color.decode("#c62828");
+            case "skipped" -> Color.decode("#616161");
+            default -> Color.decode("#9e9e9e");
+        };
+    }
+
+    /**
+     * Summarizes built-in multi-record COUNT measures for the workflow-visualization pane.
+     *
+     * @param summary the completed execution summary
+     * @return one summary per COUNT measure, ordered by label
+     */
+    private static List<CountMeasureSummary> summarizeCountMeasures(ExecutionSummary summary) {
+        Map<String, Map<Phase, Response>> byTest = new LinkedHashMap<>();
+        summary.multiRecordMeasureResponses().stream()
+                .filter(response -> BuiltInMeasureSpec.MeasureKind.COUNT.name().equals(
+                        response.parameters().get(BuiltInMeasureSpec.KIND_KEY)))
+                .forEach(response -> byTest
+                        .computeIfAbsent(response.testId(), ignored -> new LinkedHashMap<>())
+                        .put(response.phase(), response));
+        List<CountMeasureSummary> summaries = new ArrayList<>();
+        byTest.values().forEach(byPhase -> {
+            Response example = byPhase.values().stream().findFirst().orElse(null);
+            if (example == null) {
+                return;
+            }
+            String label = example.parameters().getOrDefault(BuiltInMeasureSpec.MEASURE_LABEL_KEY, example.testId());
+            Response pre = byPhase.get(Phase.PRE_AMENDMENT);
+            Response post = byPhase.get(Phase.POST_AMENDMENT);
+            summaries.add(new CountMeasureSummary(
+                    label,
+                    extractMeasurePercentage(pre),
+                    renderCountMeasurePhaseText(pre),
+                    extractMeasurePercentage(post),
+                    renderCountMeasurePhaseText(post)));
+        });
+        summaries.sort(java.util.Comparator.comparing(CountMeasureSummary::label, String.CASE_INSENSITIVE_ORDER));
+        return List.copyOf(summaries);
+    }
+
+    /**
+     * Renders a COUNT measure's value as {@code "<count>/<total> (<percentage>%)"} for the
+     * workflow visualization.
+     *
+     * @param response the measure response to render
+     * @return the display text for that measure phase
+     */
+    private static String renderCountMeasurePhaseText(Response response) {
+        if (response == null) {
+            return "not run";
+        }
+        String count = response.parameters().getOrDefault(BuiltInMeasureSpec.MATCHING_COUNT_KEY, response.responseResult());
+        String total = response.parameters().getOrDefault(BuiltInMeasureSpec.TOTAL_RECORDS_KEY, "?");
+        String percentage = response.parameters().get(BuiltInMeasureSpec.PERCENTAGE_KEY);
+        return percentage == null || percentage.isBlank()
+                ? count + "/" + total
+                : count + "/" + total + " (" + percentage + "%)";
+    }
+
+    /**
+     * Extracts a COUNT measure's percentage for progress-bar display.
+     *
+     * @param response the measure response to inspect
+     * @return the percentage, clamped to the range {@code 0..100}
+     */
+    private static int extractMeasurePercentage(Response response) {
+        if (response == null) {
+            return 0;
+        }
+        String percentage = response.parameters().get(BuiltInMeasureSpec.PERCENTAGE_KEY);
+        if (percentage != null && !percentage.isBlank()) {
+            try {
+                return Math.max(0, Math.min(100, (int) Math.round(Double.parseDouble(percentage))));
+            } catch (NumberFormatException ignored) {
+                // fall through to derived percentage
+            }
+        }
+        String count = response.parameters().get(BuiltInMeasureSpec.MATCHING_COUNT_KEY);
+        String total = response.parameters().get(BuiltInMeasureSpec.TOTAL_RECORDS_KEY);
+        if (count != null && total != null) {
+            try {
+                int countValue = Integer.parseInt(count);
+                int totalValue = Integer.parseInt(total);
+                if (totalValue > 0) {
+                    return Math.max(0, Math.min(100, (int) Math.round((countValue * 100.0d) / totalValue)));
+                }
+            } catch (NumberFormatException ignored) {
+                // keep fallback
+            }
+        }
+        return 0;
     }
 
     /**
@@ -2724,6 +3104,14 @@ final class BdqWorkbenchGui {
 		List<String> availableTerms,
 		Map<String, List<RecordFilterValueOption>> topValuesByTerm,
 		Map<String, Integer> distinctValueCounts) {
+    }
+
+    /** One coarse workflow stage's state, detail text, and visualization percentage. */
+    private record WorkflowStageStatus(String name, String state, String detail, int progressPercent) {
+    }
+
+    /** One summarized multi-record COUNT measure for the workflow-visualization pane. */
+    private record CountMeasureSummary(String label, int prePercent, String preText, int postPercent, String postText) {
     }
 
     /** Swing widgets for one editable row in the record-filter dialog. */
