@@ -86,8 +86,10 @@ public record ExecutionSummaryMetadata(
 		(recordFilters == null ? Map.<String, List<String>>of() : recordFilters)
 				.forEach((field, values) -> copiedFilters.put(field, List.copyOf(values == null ? List.of() : values)));
 		recordFilters = Collections.unmodifiableMap(copiedFilters);
-		filledInValueCounts = Map.copyOf(filledInValueCounts == null ? Map.of() : filledInValueCounts);
-		amendedValuePairCounts = Map.copyOf(amendedValuePairCounts == null ? Map.of() : amendedValuePairCounts);
+		filledInValueCounts = Collections.unmodifiableMap(new LinkedHashMap<>(
+				filledInValueCounts == null ? Map.of() : filledInValueCounts));
+		amendedValuePairCounts = Collections.unmodifiableMap(new LinkedHashMap<>(
+				amendedValuePairCounts == null ? Map.of() : amendedValuePairCounts));
 	}
 
     /**

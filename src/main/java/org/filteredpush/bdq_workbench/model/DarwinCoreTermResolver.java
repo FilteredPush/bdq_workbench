@@ -21,6 +21,7 @@ package org.filteredpush.bdq_workbench.model;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -56,7 +57,7 @@ public final class DarwinCoreTermResolver {
 		});
 		Map<String, List<String>> indexed = new LinkedHashMap<>();
 		byAlias.forEach((alias, terms) -> indexed.put(alias, List.copyOf(terms)));
-		return Map.copyOf(indexed);
+		return Collections.unmodifiableMap(indexed);
 	}
 
 	/**
