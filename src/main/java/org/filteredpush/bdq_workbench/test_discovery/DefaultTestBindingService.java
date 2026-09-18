@@ -379,6 +379,15 @@ public class DefaultTestBindingService implements TestBindingService {
             return new BoundMethodParameter(parameter, parameter.source(), providedValue, true, "Parameter provided");
         }
         DarwinCoreTermResolver.Resolution resolution = DarwinCoreTermResolver.resolve(parameter.source(), availableTermsByAlias);
+        if (resolution.isAmbiguous()) {
+            return new BoundMethodParameter(
+                    parameter,
+                    parameter.source(),
+                    null,
+                    false,
+                    "TERM AMBIGUOUS: Term acted_upon/consulted matches multiple input fields: "
+                    		+ parameter.source() + " -> " + String.join(", ", resolution.matches()));
+        }
         String resolvedField = resolution.preferredMatch();
         if (resolvedField == null) {
             return new BoundMethodParameter(

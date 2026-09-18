@@ -192,7 +192,7 @@ public final class BdqWorkbenchApplication {
             }
             String value = args[++i];
             if ("bdq.record.filters".equals(key) && overrides.containsKey(key) && !overrides.get(key).isBlank()) {
-                overrides.put(key, overrides.get(key) + ";" + value);
+                overrides.put(key, overrides.get(key) + "; " + value);
             } else {
                 overrides.put(key, value);
             }
