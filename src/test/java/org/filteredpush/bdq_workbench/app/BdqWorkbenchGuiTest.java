@@ -2,11 +2,14 @@ package org.filteredpush.bdq_workbench.app;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.awt.CardLayout;
 import java.lang.reflect.Method;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import javax.swing.JButton;
+import javax.swing.JPanel;
 import org.filteredpush.bdq_workbench.model.BuiltInMeasureSpec;
 import org.filteredpush.bdq_workbench.model.ExecutionPlan;
 import org.filteredpush.bdq_workbench.model.ExecutionSummary;
@@ -678,6 +681,32 @@ class BdqWorkbenchGuiTest {
         String selected = (String) helper.invoke(null, List.of("", "dwc:genus", "dwc:collectionCode", "dwc:country"));
 
         assertThat(selected).isEqualTo("dwc:collectionCode");
+    }
+
+    @Test
+    void showWorkflowVisualizationTogglesWholeMonitorContentCardAndButtonLabel() throws Exception {
+        Method helper = BdqWorkbenchGui.class.getDeclaredMethod(
+                "showWorkflowVisualization",
+                CardLayout.class,
+                JPanel.class,
+                JButton.class,
+                boolean[].class,
+                boolean.class);
+        helper.setAccessible(true);
+        CardLayout cards = new CardLayout();
+        JPanel contentPanel = new JPanel(cards);
+        contentPanel.add(new JPanel(), "results");
+        contentPanel.add(new JPanel(), "workflow");
+        JButton toggleButton = new JButton();
+        boolean[] showingWorkflow = new boolean[] {false};
+
+        helper.invoke(null, cards, contentPanel, toggleButton, showingWorkflow, true);
+        assertThat(showingWorkflow[0]).isTrue();
+        assertThat(toggleButton.getText()).isEqualTo("Hide Workflow Visualization");
+
+        helper.invoke(null, cards, contentPanel, toggleButton, showingWorkflow, false);
+        assertThat(showingWorkflow[0]).isFalse();
+        assertThat(toggleButton.getText()).isEqualTo("Show Workflow Visualization");
     }
 
     @Test
