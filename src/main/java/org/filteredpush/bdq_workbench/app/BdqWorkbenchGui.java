@@ -203,23 +203,23 @@ final class BdqWorkbenchGui {
         workflowVisualizationPanel.setLayout(new BoxLayout(workflowVisualizationPanel, BoxLayout.Y_AXIS));
         workflowVisualizationPanel.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
         resetWorkflowVisualizationPanel(workflowVisualizationPanel);
-        CardLayout summaryCards = new CardLayout();
-        JPanel summaryCardPanel = new JPanel(summaryCards);
         JScrollPane resultSummaryScrollPane = new JScrollPane(resultSummaryArea);
         JScrollPane workflowVisualizationScrollPane = new JScrollPane(workflowVisualizationPanel);
-        summaryCardPanel.add(resultSummaryScrollPane, "text");
-        summaryCardPanel.add(workflowVisualizationScrollPane, "workflow");
 
         JPanel monitorPanel = new JPanel(new BorderLayout(8, 8));
         JSplitPane bindingGridSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT,
                 new JScrollPane(bindingGrid),
-                summaryCardPanel);
+                resultSummaryScrollPane);
         bindingGridSplit.setResizeWeight(0.7d);
         JSplitPane monitorSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT,
                 new JScrollPane(statusArea),
                 bindingGridSplit);
         monitorSplit.setResizeWeight(0.25d);
-        monitorPanel.add(monitorSplit, BorderLayout.CENTER);
+        CardLayout monitorContentCards = new CardLayout();
+        JPanel monitorContentPanel = new JPanel(monitorContentCards);
+        monitorContentPanel.add(monitorSplit, "results");
+        monitorContentPanel.add(workflowVisualizationScrollPane, "workflow");
+        monitorPanel.add(monitorContentPanel, BorderLayout.CENTER);
         // JSplitPane's initial (pre-realization) divider placement is unreliable when driven
         // purely by preferred sizes, so set it explicitly once the frame is actually showing.
         SwingUtilities.invokeLater(() -> {
@@ -447,14 +447,10 @@ final class BdqWorkbenchGui {
 
         final boolean[] showingWorkflowView = new boolean[] {false};
         Runnable showTextSummary = () -> {
-            summaryCards.show(summaryCardPanel, "text");
-            showingWorkflowView[0] = false;
-            toggleWorkflowView.setText("Show Workflow Visualization");
+            showWorkflowVisualization(monitorContentCards, monitorContentPanel, toggleWorkflowView, showingWorkflowView, false);
         };
         Runnable showWorkflowSummary = () -> {
-            summaryCards.show(summaryCardPanel, "workflow");
-            showingWorkflowView[0] = true;
-            toggleWorkflowView.setText("Hide Workflow Visualization");
+            showWorkflowVisualization(monitorContentCards, monitorContentPanel, toggleWorkflowView, showingWorkflowView, true);
         };
         toggleWorkflowView.addActionListener(e -> {
             if (!toggleWorkflowView.isEnabled()) {
@@ -2025,6 +2021,27 @@ final class BdqWorkbenchGui {
                 .max(java.util.Comparator.comparingInt(String::length))
                 .filter(value -> !value.isBlank())
                 .orElse("Select field");
+    }
+
+    /**
+     * Switches the monitor page's content area between the standard three-pane results view and
+     * the workflow-visualization view, while keeping the header and bottom button row in place.
+     *
+     * @param cards the card layout controlling the monitor content region
+     * @param contentPanel the monitor content panel managed by {@code cards}
+     * @param toggleButton the button whose label reflects the current state
+     * @param showingWorkflow single-element state holder updated in place
+     * @param showWorkflow whether the workflow visualization should be shown
+     */
+    private static void showWorkflowVisualization(
+            CardLayout cards,
+            JPanel contentPanel,
+            JButton toggleButton,
+            boolean[] showingWorkflow,
+            boolean showWorkflow) {
+        cards.show(contentPanel, showWorkflow ? "workflow" : "results");
+        showingWorkflow[0] = showWorkflow;
+        toggleButton.setText(showWorkflow ? "Hide Workflow Visualization" : "Show Workflow Visualization");
     }
 
     /**
