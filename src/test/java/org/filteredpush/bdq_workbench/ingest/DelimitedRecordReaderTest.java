@@ -28,9 +28,9 @@ class DelimitedRecordReaderTest {
 		RecordDataset dataset = new DwcArchiveIngestor().ingest(archive);
 
 		assertThat(dataset.records()).hasSize(3);
-		assertThat(dataset.records().get(0).recordId()).isEqualTo("occ-0");
+		assertThat(dataset.records().get(0).id()).isEqualTo("occ-0");
 		assertThat(dataset.records().get(0).terms()).containsEntry("scientificName", "Abies\tbalsamea");
-		assertThat(dataset.records().get(1).recordId()).isEqualTo("occ-1");
+		assertThat(dataset.records().get(1).id()).isEqualTo("occ-1");
 		assertThat(dataset.records().get(2).terms()).containsEntry("scientificName", "Pinus oocarpa");
 	}
 
@@ -59,9 +59,9 @@ class DelimitedRecordReaderTest {
 		RecordDataset dataset = new DataPackageIngestor().ingest(manifest);
 
 		assertThat(dataset.records()).hasSize(3);
-		assertThat(dataset.records().get(0).recordId()).isEqualTo("occ-0");
+		assertThat(dataset.records().get(0).id()).isEqualTo("occ-0");
 		assertThat(dataset.records().get(0).terms()).containsEntry("scientificName", "Abies, balsamea");
-		assertThat(dataset.records().get(1).recordId()).isEqualTo("occ-1");
+		assertThat(dataset.records().get(1).id()).isEqualTo("occ-1");
 		assertThat(dataset.records().get(2).terms()).containsEntry("scientificName", "Pinus oocarpa");
 	}
 }
