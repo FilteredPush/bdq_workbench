@@ -16,6 +16,7 @@ import org.filteredpush.bdq_workbench.model.PreparedRun;
 import org.filteredpush.bdq_workbench.model.BindingReview;
 import org.filteredpush.bdq_workbench.model.BindingStatus;
 import org.filteredpush.bdq_workbench.model.BoundMethodParameter;
+import org.filteredpush.bdq_workbench.model.CanonicalRecord;
 import org.filteredpush.bdq_workbench.model.ImplementationBinding;
 import org.filteredpush.bdq_workbench.model.ImplementationStatus;
 import org.filteredpush.bdq_workbench.model.MethodParameter;

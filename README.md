@@ -65,7 +65,7 @@ java -jar target/bdq_workbench-0.1.0-SNAPSHOT.jar \
   --record-filter dwc:country=Canada
 ```
 
-Within a field, values are ORed; across fields, filters are ANDed. Field names match case-insensitively by full name or local name (for example `dwc:country` and `country`), while field values are matched exactly and case-sensitively against the canonicalized input values.
+Within a record-filter, search terms are related by OR; across record-filters, terms are related by AND.  This the example above is interpreted as dwc:genus=(Abies OR Pinus) AND dwc:country=Canada.  Field names match case-insensitively by full name or local name (for example `dwc:country` and `country`), while search term values are matched exactly and case-sensitively against the canonicalized input values.
 
 ## Architecture overview
 
