@@ -22,16 +22,12 @@ package org.filteredpush.bdq_workbench.ingest;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
+import java.io.BufferedReader;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import org.apache.commons.csv.CSVFormat;
-import org.apache.commons.csv.CSVParser;
 import org.filteredpush.bdq_workbench.app.AppException;
-import org.filteredpush.bdq_workbench.model.CanonicalRecord;
 import org.filteredpush.bdq_workbench.model.RecordDataset;
 
 /**
@@ -75,15 +71,16 @@ public class DataPackageIngestor {
      * @throws IOException if the file cannot be read
      */
     private RecordDataset parseCsv(Path csvPath) throws IOException {
-        try (CSVParser parser = CSVFormat.DEFAULT.builder().setHeader().setSkipHeaderRecord(true).build().parse(Files.newBufferedReader(csvPath))) {
-            List<CanonicalRecord> records = new ArrayList<>();
-            parser.forEach(row -> {
-                Map<String, String> values = new HashMap<>();
-                row.toMap().forEach((k, v) -> values.put(k == null ? "" : k.trim(), v == null ? "" : v.trim()));
-                String id = values.getOrDefault("id", values.getOrDefault("occurrenceID", "row-" + row.getRecordNumber()));
-                records.add(new CanonicalRecord(id, values));
-            });
-            return new RecordDataset(records);
-        }
+        return DelimitedRecordReader.read(
+                () -> {
+	BufferedReader reader = Files.newBufferedReader(csvPath);
+	return reader;
+                },
+                CSVFormat.DEFAULT.builder()
+		.setHeader()
+		.setSkipHeaderRecord(true)
+		.setTrailingData(true)
+		.setLenientEof(true)
+		.build());
     }
 }

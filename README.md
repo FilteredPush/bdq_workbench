@@ -57,7 +57,7 @@ Configuration precedence is:
 2. `src/main/resources/application.properties`
 3. built-in fallback defaults in `ConfigLoader`
 
-Pre-execution record filtering can be configured from the CLI with repeatable `--record-filter` flags, or in the GUI with the `Record filters` field. Filter syntax is:
+Pre-execution record filtering can be configured from the CLI with repeatable `--record-filter` flags, or in the GUI with the `Build Record Filters...` dialog after selecting a dataset. Filter syntax is:
 
 ```bash
 java -jar target/bdq_workbench-0.1.0-SNAPSHOT.jar \
@@ -65,7 +65,59 @@ java -jar target/bdq_workbench-0.1.0-SNAPSHOT.jar \
   --record-filter dwc:country=Canada
 ```
 
-Within a record-filter, search terms are related by OR; across record-filters, terms are related by AND.  This the example above is interpreted as dwc:genus=(Abies OR Pinus) AND dwc:country=Canada.  Field names match case-insensitively by full name or local name (for example `dwc:country` and `country`), while search term values are matched exactly and case-sensitively against the canonicalized input values.
+Within a record-filter, search terms are related by OR; across record-filters, terms are related by AND.  The example above is interpreted as dwc:genus=(Abies OR Pinus) AND dwc:country=Canada.  Field names match case-insensitively by full name or local name (for example `dwc:country` and `country`), while search term values are matched exactly and case-sensitively against the canonicalized input values.
+
+### Processing pipeline and flow-control options
+
+The current desktop/CLI flow can be summarized as:
+
+```text
+Dataset input
+   |
+   +--> Load DwC-A zip / Data Package CSV
+   |
+   +--> [optional] Build record filters from dataset terms/values (GUI)
+   |
+   +--> [optional] Apply record filters
+   |
+   +--> Resolve use case / policy tests
+   |
+   +--> Discover implementations on classpath
+   |
+   +--> Bind tests + validate parameter mappings
+   |       |
+   |       +--> unresolved tests may still be shown in preflight
+   |       +--> GUI can continue with runnable tests only ("Start Available Tests")
+   |       +--> GUI can edit/load/save parameter values before execution
+   |
+   +--> [optional] Distinct-value aggregation (`bdq.execution.dedup=true`)
+   |
+   +--> PRE_AMENDMENT tests
+   |
+   +--> AMENDMENT tests
+   |
+   +--> POST_AMENDMENT tests
+   |
+   +--> Post-process responses
+   |       |
+   |       +--> built-in COUNT multi-record measures
+   |       +--> synthesized `UNABLE_TO_RUN` responses for unresolved/unbound tests
+   |
+   +--> Export text, RDF/Turtle, XLSX, and unresolved-response XLSX reports
+```
+
+Current flow-control options are intentionally modest:
+
+- **Dataset choice**: choose a DwC-A zip or Darwin Core Data Package.
+- **Record filtering**: optional exact-match filtering before binding or execution; in the GUI the filter builder inspects the selected dataset and lets the user choose only from terms present in the data.
+- **Use case/test-definition/ontology sources**: GUI advanced options and CLI/config can override the default RDF sources.
+- **Implementation packages**: CLI/config/GUI advanced options control the discovery package roots.
+- **Thread count**: CLI/config/GUI advanced options control the worker pool size.
+- **Continue with unresolved tests**: GUI preflight can proceed with runnable tests even when some policy or implementation bindings remain unresolved.
+- **Parameter overrides**: GUI preflight supports per-test parameter editing plus saving/loading parameter settings.
+- **Isolated test execution**: GUI preflight/debug tools can run one bound test independently against the prepared dataset.
+- **Distinct-value reduction**: CLI/config `bdq.execution.dedup` toggles whether eligible bindings run once per distinct input-value group instead of once per record.
+- **Not currently supported**: there is still no user-facing phase skip/select control, and the main run UI still does not expose cancellation.
 
 ## Architecture overview
 
@@ -212,7 +264,7 @@ This is the initial plumbing layer for multi-record calculations. Full multi-rec
 The desktop GUI supports:
 
 1. selecting a dataset and use case
-2. entering optional pre-execution record filters
+2. optionally opening `Build Record Filters...` to inspect dataset terms and common values, then assembling exact-match filters
 3. running a preflight review that loads the dataset, applies filters, discovers implementations, and populates a test grid
 4. reviewing binding status, method selection, parameterization capability, and normalized filter counts before execution
 5. editing parameter values or keeping defaults before execution
