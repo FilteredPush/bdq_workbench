@@ -124,6 +124,21 @@ final class BdqWorkbenchGui {
     private static final Logger LOG = LoggerFactory.getLogger(BdqWorkbenchGui.class);
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
+    /** Frame width that fits the monitor card's full button row on one line. */
+    private static final int PREFERRED_FRAME_WIDTH = 1220;
+
+    /** Frame height that leaves the binding review grid usable below the header. */
+    private static final int PREFERRED_FRAME_HEIGHT = 760;
+
+    /** Smallest frame the layout stays usable at; button rows wrap rather than clip below this. */
+    private static final int MINIMUM_FRAME_WIDTH = 720;
+
+    /** Smallest frame height the layout stays usable at. */
+    private static final int MINIMUM_FRAME_HEIGHT = 560;
+
+    /** Fraction of the screen the window may occupy when the screen is smaller than preferred. */
+    private static final double MAXIMUM_SCREEN_FRACTION = 0.9;
+
     private static final String DEFAULT_USECASE_SOURCE = WorkbenchDefaults.USE_CASE_SOURCE;
     private static final String DEFAULT_TEST_DEFINITIONS_SOURCE = WorkbenchDefaults.TEST_DEFINITIONS_SOURCE;
     private static final String DEFAULT_ONTOLOGY_SOURCE = WorkbenchDefaults.ONTOLOGY_SOURCE;
@@ -165,6 +180,20 @@ final class BdqWorkbenchGui {
     }
 
     /**
+     * Chooses the window's opening size: large enough for the monitor card's button row to fit
+     * on one line, but never larger than the screen it has to open on.
+     *
+     * @return the size to open the main window at
+     */
+    private static java.awt.Dimension defaultFrameSize() {
+        java.awt.Dimension screen = java.awt.Toolkit.getDefaultToolkit().getScreenSize();
+        int width = Math.min(PREFERRED_FRAME_WIDTH, (int) (screen.width * MAXIMUM_SCREEN_FRACTION));
+        int height = Math.min(PREFERRED_FRAME_HEIGHT, (int) (screen.height * MAXIMUM_SCREEN_FRACTION));
+        return new java.awt.Dimension(
+                Math.max(width, MINIMUM_FRAME_WIDTH), Math.max(height, MINIMUM_FRAME_HEIGHT));
+    }
+
+    /**
      * Builds the main application window: the "setup" card (dataset/use case/advanced options
      * form) and "monitor" card (status log, binding review grid, result summary, and progress
      * bar), swapped via a {@link CardLayout}, plus all button/menu action wiring that connects
@@ -179,7 +208,8 @@ final class BdqWorkbenchGui {
     private static JFrame createFrame(AppConfig defaults, Map<String, String> overrides) {
         JFrame frame = new JFrame("BDQ Workbench");
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        frame.setSize(980, 640);
+        frame.setMinimumSize(new java.awt.Dimension(MINIMUM_FRAME_WIDTH, MINIMUM_FRAME_HEIGHT));
+        frame.setSize(defaultFrameSize());
 
         CachedResourceResolver resolver = new CachedResourceResolver();
 
@@ -244,7 +274,7 @@ final class BdqWorkbenchGui {
         monitorHeaderPanel.add(progress, BorderLayout.SOUTH);
         monitorPanel.add(monitorHeaderPanel, BorderLayout.NORTH);
 
-        JPanel monitorControls = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        JPanel monitorControls = new JPanel(new WrapLayout(FlowLayout.RIGHT));
         JButton loadParameters = new JButton("Load Parameters...");
         loadParameters.setEnabled(false);
         JButton saveParameters = new JButton("Save Parameters...");
@@ -375,7 +405,7 @@ final class BdqWorkbenchGui {
         installTextAreaClipboardSupport(setupInfo);
         setupPanel.add(new JScrollPane(setupInfo), BorderLayout.CENTER);
 
-        JPanel setupControls = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        JPanel setupControls = new JPanel(new WrapLayout(FlowLayout.RIGHT));
         JButton run = new JButton("Setup Tests");
         JButton exit = new JButton("Quit");
         setupControls.add(run);
@@ -882,7 +912,7 @@ final class BdqWorkbenchGui {
 
         JButton saveButton = new JButton("Apply");
         JButton cancelButton = new JButton("Cancel");
-        JPanel controls = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        JPanel controls = new JPanel(new WrapLayout(FlowLayout.RIGHT));
         controls.add(saveButton);
         controls.add(cancelButton);
 
@@ -986,7 +1016,7 @@ final class BdqWorkbenchGui {
                 : runnableInDialog
                         ? "0/" + editedRun.dataset().records().size()
                         : "Built-in aggregate measure");
-        JPanel controls = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        JPanel controls = new JPanel(new WrapLayout(FlowLayout.RIGHT));
         JButton runButton = new JButton("Run Test");
         runButton.setEnabled(runnableInDialog);
         JButton closeButton = new JButton("Close");
@@ -1061,7 +1091,7 @@ final class BdqWorkbenchGui {
 
         JButton closeButton = new JButton("Close");
         closeButton.addActionListener(e -> dialog.dispose());
-        JPanel controls = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        JPanel controls = new JPanel(new WrapLayout(FlowLayout.RIGHT));
         controls.add(closeButton);
 
         dialog.add(new JScrollPane(summaryArea), BorderLayout.CENTER);
@@ -1603,7 +1633,7 @@ final class BdqWorkbenchGui {
 
         JButton apply = new JButton("Apply");
         JButton cancel = new JButton("Cancel");
-        JPanel controls = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        JPanel controls = new JPanel(new WrapLayout(FlowLayout.RIGHT));
         controls.add(apply);
         controls.add(cancel);
         JPanel addRowPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));

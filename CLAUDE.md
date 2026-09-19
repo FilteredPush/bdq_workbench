@@ -232,6 +232,13 @@ seeds the form; the source fields show source *strings* (URL or path) while `App
 resolved local paths, which is why those fields are seeded from the overrides rather than from
 `AppConfig`.
 
+Button rows use `WrapLayout` rather than `FlowLayout`: a plain `FlowLayout` always reports a
+one-row preferred height, so in a `BorderLayout.SOUTH` slot it silently clips the buttons that
+do not fit the window's width — which is how "Start Available Tests" became invisible at the old
+980px default. `WrapLayout` reports the wrapped height instead, so the row grows to two rows and
+stays fully reachable; the window also opens at `PREFERRED_FRAME_WIDTH`/`PREFERRED_FRAME_HEIGHT`
+(capped to 90% of the screen) with a minimum size below which the rows wrap.
+
 `BindingReviewTableModel` backs the preflight review grid. `ExecutionProgressTracker`/
 `ExecutionProgressSnapshot` back live per-phase progress and response/result counters during a
 run.
