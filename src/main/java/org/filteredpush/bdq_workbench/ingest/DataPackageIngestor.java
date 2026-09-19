@@ -38,8 +38,8 @@ import org.slf4j.LoggerFactory;
 /**
  * Ingests Darwin Core Data Packages into canonical records.
  *
- * <p>Reads the {@code datapackage.json} manifest at the given path and parses its first declared
- * resource exactly as that resource declares itself: data file path (single or multipart),
+ * <p>Reads the {@code datapackage.json} manifest at the given path and parses one of its
+ * resources exactly as that resource declares itself: data file path (single or multipart),
  * character encoding, table dialect (delimiter, quote character, escape character, comment
  * marker, null sequence, header layout) and table schema field names — see
  * {@link DataPackageDialectParser}. This is the Data Package counterpart of honoring a Darwin
@@ -50,6 +50,12 @@ import org.slf4j.LoggerFactory;
  * <p>Anything a resource leaves unstated falls back to the Frictionless table dialect defaults,
  * which are the comma-delimited, quoted, header-row conventions the workbench assumed before
  * dialects were honored.
+ *
+ * <p>Resource order in a manifest carries no meaning, so which resource to read is a choice:
+ * {@link CoreTableSelector} makes it from the resources' names, table schema references, file
+ * names and schema field names, preferring occurrence over taxon over event tables, and a
+ * caller may name a resource instead. The chosen resource is read on its own; resources it
+ * references through foreign keys are not joined to it.
  *
  * <p>Each row's record ID is taken from an {@code id} or {@code occurrenceID} column, falling
  * back to a synthesized {@code row-<n>} identifier; for a multipart resource those synthesized
@@ -68,6 +74,21 @@ public class DataPackageIngestor {
 	 * @throws AppException if the manifest has no resources, or the resource cannot be read
 	 */
 	public RecordDataset ingest(Path dataPackagePath) {
+		return ingest(dataPackagePath, "");
+	}
+
+	/**
+	 * Ingests a Darwin Core Data Package into canonical records, optionally naming which of the
+	 * package's resources to read.
+	 *
+	 * @param dataPackagePath path to the {@code datapackage.json} manifest file
+	 * @param requestedTable the name, file name or row type of the resource to read; blank to
+	 *     select one automatically
+	 * @return the dataset parsed from the selected resource
+	 * @throws AppException if the manifest has no readable resources, or the resource cannot be
+	 *     read
+	 */
+	public RecordDataset ingest(Path dataPackagePath, String requestedTable) {
 		try {
 			JsonNode root = mapper.readTree(Files.newBufferedReader(dataPackagePath));
 			JsonNode resources = root.path("resources");
@@ -75,9 +96,15 @@ public class DataPackageIngestor {
 				throw new AppException("Data package does not include resources");
 			}
 			Path packageDir = dataPackagePath.toAbsolutePath().getParent();
-			DataPackageResourceMeta resourceMeta =
-					DataPackageDialectParser.parseResource(mapper, resources.get(0), packageDir);
-			return ingestResource(dataPackagePath, resourceMeta);
+			List<CoreTableCandidate<DataPackageResourceMeta>> tables =
+					DataPackageDialectParser.parseResources(mapper, root, packageDir);
+			if (tables.isEmpty()) {
+				throw new AppException("Data package declares no resource with a readable data file path"
+						+ " (inline data and remote resource URLs are not supported): " + dataPackagePath);
+			}
+			CoreTableCandidate<DataPackageResourceMeta> selected =
+					CoreTableSelector.select(tables, requestedTable).selected();
+			return ingestResource(dataPackagePath, selected);
 		} catch (IOException e) {
 			throw new AppException("Failed to ingest Darwin Core Data Package from " + dataPackagePath, e);
 		}
@@ -87,17 +114,22 @@ public class DataPackageIngestor {
 	 * Parses every data file of a resource into canonical records.
 	 *
 	 * @param dataPackagePath path of the manifest, for error messages
-	 * @param resourceMeta the parsed resource descriptor
+	 * @param table the selected resource
 	 * @return the dataset parsed from the resource's data files, in declaration order
 	 */
-	private RecordDataset ingestResource(Path dataPackagePath, DataPackageResourceMeta resourceMeta) {
+	private RecordDataset ingestResource(Path dataPackagePath, CoreTableCandidate<DataPackageResourceMeta> table) {
+		DataPackageResourceMeta resourceMeta = table.descriptor();
 		CSVFormat csvFormat = buildResourceFormat(resourceMeta);
+		String idColumn = resourceMeta.idColumn().isBlank()
+				? table.rowType().identifierTerm()
+				: resourceMeta.idColumn();
 		int linesToSkip = resourceMeta.namesColumnsFromHeaderLine()
 				? resourceMeta.headerLines() - 1
 				: resourceMeta.headerLines();
 		List<CanonicalRecord> records = new ArrayList<>();
 		for (Path dataPath : resourceMeta.paths()) {
-			records.addAll(readDataFile(dataPackagePath, dataPath, resourceMeta, csvFormat, linesToSkip).records());
+			records.addAll(
+					readDataFile(dataPackagePath, dataPath, resourceMeta, csvFormat, linesToSkip, idColumn).records());
 		}
 		return new RecordDataset(records);
 	}
@@ -110,14 +142,16 @@ public class DataPackageIngestor {
 	 * @param resourceMeta the parsed resource descriptor
 	 * @param csvFormat the format to parse the data file with
 	 * @param linesToSkip the number of leading lines to consume before parsing
+	 * @param idColumn the column to take record identifiers from, blank for the conventional ones
 	 * @return the dataset parsed from the data file
 	 * @throws AppException if the data file cannot be read or parsed, naming the file so a
 	 *     malformed data file can be told apart from a malformed manifest
 	 */
 	private RecordDataset readDataFile(Path dataPackagePath, Path dataPath, DataPackageResourceMeta resourceMeta,
-			CSVFormat csvFormat, int linesToSkip) {
+			CSVFormat csvFormat, int linesToSkip, String idColumn) {
 		try {
-			return DelimitedRecordReader.read(() -> openDataReader(dataPath, resourceMeta, linesToSkip), csvFormat);
+			return DelimitedRecordReader.read(() -> openDataReader(dataPath, resourceMeta, linesToSkip), csvFormat,
+					idColumn);
 		} catch (IOException e) {
 			throw new AppException("Failed to parse data file '" + dataPath + "' of data package "
 					+ dataPackagePath + ": " + e.getMessage(), e);

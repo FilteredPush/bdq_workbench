@@ -76,30 +76,102 @@ final class DwcArchiveMetaParser {
 	}
 
 	/**
-	 * Parses the core file descriptor from an archive's {@code meta.xml}, if it has a usable one.
+	 * Parses every table an archive's {@code meta.xml} declares: its {@code <core>} and each of
+	 * its {@code <extension>}s.
+	 *
+	 * <p>The extensions are offered alongside the core because the declared core is not always
+	 * the table a BDQ use case is about — a sample-based archive declares {@code Event} as its
+	 * core and carries its occurrence data in an extension. {@link CoreTableSelector} decides
+	 * which of them a run uses.
 	 *
 	 * @param zipFile the open Darwin Core Archive
-	 * @return the core data file descriptor, or empty if the archive has no usable {@code meta.xml}
+	 * @return the declared tables in declaration order, core first; empty if the archive has no
+	 *     usable {@code meta.xml}
 	 */
-	static Optional<DwcArchiveCoreMeta> parseCoreMeta(ZipFile zipFile) {
+	static List<CoreTableCandidate<DwcArchiveCoreMeta>> parseTables(ZipFile zipFile) {
 		ZipEntry metaEntry = zipFile.getEntry(META_ENTRY_NAME);
 		if (metaEntry == null) {
 			LOG.debug("Archive has no {}; falling back to default core file conventions", META_ENTRY_NAME);
-			return Optional.empty();
+			return List.of();
 		}
 		try (InputStream metaStream = zipFile.getInputStream(metaEntry)) {
-			Element core = findCoreElement(newDocumentBuilder().parse(metaStream));
-			if (core == null) {
-				LOG.warn("Archive {} declares no <core> element; falling back to default core file conventions",
-						META_ENTRY_NAME);
-				return Optional.empty();
+			Element archive = newDocumentBuilder().parse(metaStream).getDocumentElement();
+			List<CoreTableCandidate<DwcArchiveCoreMeta>> tables = new ArrayList<>();
+			addTable(tables, firstChildElement(archive, "core"), true);
+			for (Element extension : childElements(archive, "extension")) {
+				addTable(tables, extension, false);
 			}
-			return buildCoreMeta(core);
+			if (tables.isEmpty()) {
+				LOG.warn("Archive {} declares no readable <core> or <extension>; falling back to default core file"
+						+ " conventions", META_ENTRY_NAME);
+			}
+			return tables;
 		} catch (Exception e) {
 			LOG.warn("Could not parse archive {} ({}); falling back to default core file conventions",
 					META_ENTRY_NAME, e.toString());
-			return Optional.empty();
+			return List.of();
 		}
+	}
+
+	/**
+	 * Builds a candidate from one {@code <core>} or {@code <extension>} element and adds it to
+	 * the offered tables, skipping elements that declare no usable data file.
+	 *
+	 * @param tables collects the candidate when the element is usable
+	 * @param table the {@code <core>} or {@code <extension>} element, possibly null
+	 * @param declaredCore whether this element is the archive's declared core
+	 */
+	private static void addTable(List<CoreTableCandidate<DwcArchiveCoreMeta>> tables, Element table,
+			boolean declaredCore) {
+		if (table == null) {
+			return;
+		}
+		buildCoreMeta(table).ifPresent(meta -> tables.add(new CoreTableCandidate<>(
+				meta,
+				meta.locations().get(0),
+				identifyRowType(meta),
+				rowTypeEvidence(meta),
+				declaredCore,
+				tables.size(),
+				List.copyOf(meta.locations()))));
+	}
+
+	/**
+	 * Identifies a table's row type, preferring its declared {@code rowType} and falling back to
+	 * its file name and then to the terms its columns carry.
+	 *
+	 * @param meta the parsed table descriptor
+	 * @return the identified row type
+	 */
+	private static DatasetRowType identifyRowType(DwcArchiveCoreMeta meta) {
+		DatasetRowType declared = DatasetRowType.fromIdentifier(meta.rowType());
+		if (declared != DatasetRowType.OTHER) {
+			return declared;
+		}
+		DatasetRowType byLocation = DatasetRowType.fromIdentifier(meta.locations().get(0));
+		if (byLocation != DatasetRowType.OTHER) {
+			return byLocation;
+		}
+		return DatasetRowType.fromColumnNames(meta.columnNames());
+	}
+
+	/**
+	 * Describes which signal identified a table's row type.
+	 *
+	 * @param meta the parsed table descriptor
+	 * @return a short description of the deciding signal
+	 */
+	private static String rowTypeEvidence(DwcArchiveCoreMeta meta) {
+		if (DatasetRowType.fromIdentifier(meta.rowType()) != DatasetRowType.OTHER) {
+			return "declared rowType " + meta.rowType();
+		}
+		if (DatasetRowType.fromIdentifier(meta.locations().get(0)) != DatasetRowType.OTHER) {
+			return "file name";
+		}
+		if (DatasetRowType.fromColumnNames(meta.columnNames()) != DatasetRowType.OTHER) {
+			return "declared terms";
+		}
+		return "unidentified";
 	}
 
 	/**
@@ -139,25 +211,15 @@ final class DwcArchiveMetaParser {
 	}
 
 	/**
-	 * Locates the archive's {@code <core>} element, ignoring XML namespace prefixes.
+	 * Builds a table descriptor from a {@code <core>} or {@code <extension>} element.
 	 *
-	 * @param document the parsed {@code meta.xml} document
-	 * @return the core element, or {@code null} if the document declares none
-	 */
-	private static Element findCoreElement(Document document) {
-		return firstChildElement(document.getDocumentElement(), "core");
-	}
-
-	/**
-	 * Builds a core file descriptor from a {@code <core>} element.
-	 *
-	 * @param core the {@code <core>} element from {@code meta.xml}
-	 * @return the descriptor, or empty if the element declares no core data file location
+	 * @param core the {@code <core>} or {@code <extension>} element from {@code meta.xml}
+	 * @return the descriptor, or empty if the element declares no data file location
 	 */
 	private static Optional<DwcArchiveCoreMeta> buildCoreMeta(Element core) {
 		List<String> locations = readLocations(core);
 		if (locations.isEmpty()) {
-			LOG.warn("Archive meta.xml <core> declares no <location>; falling back to default core file conventions");
+			LOG.warn("Archive meta.xml <{}> declares no <location> and was ignored", stripPrefix(core.getNodeName()));
 			return Optional.empty();
 		}
 		Map<Integer, String> namesByIndex = new TreeMap<>();
@@ -168,16 +230,18 @@ final class DwcArchiveMetaParser {
 			namesByIndex.putIfAbsent(idIndex, "id");
 		}
 		DwcArchiveCoreMeta meta = new DwcArchiveCoreMeta(
+				attributeOrDefault(core, "rowType", ""),
 				locations,
 				resolveEncoding(attribute(core, "encoding")),
 				decodeEscapes(attributeOrDefault(core, "fieldsTerminatedBy", DEFAULT_FIELDS_TERMINATED_BY)),
 				resolveEnclosedBy(decodeEscapes(attributeOrDefault(core, "fieldsEnclosedBy", DEFAULT_FIELDS_ENCLOSED_BY))),
 				Math.max(0, parseInt(attribute(core, "ignoreHeaderLines"), 0)),
 				toColumnNames(namesByIndex),
+				idIndex >= 0 ? namesByIndex.getOrDefault(idIndex, "") : "",
 				constantTerms);
-		LOG.debug("Parsed meta.xml core: locations={}, encoding={}, delimiter={}, enclosedBy={}, "
+		LOG.debug("Parsed meta.xml table: rowType={}, locations={}, encoding={}, delimiter={}, enclosedBy={}, "
 						+ "ignoreHeaderLines={}, columns={}, constantTerms={}",
-				meta.locations(), meta.encoding(), describe(meta.fieldsTerminatedBy()),
+				meta.rowType(), meta.locations(), meta.encoding(), describe(meta.fieldsTerminatedBy()),
 				meta.fieldsEnclosedBy() == null ? "none" : describe(String.valueOf(meta.fieldsEnclosedBy())),
 				meta.ignoreHeaderLines(), meta.columnNames().size(), meta.constantTerms().size());
 		return Optional.of(meta);

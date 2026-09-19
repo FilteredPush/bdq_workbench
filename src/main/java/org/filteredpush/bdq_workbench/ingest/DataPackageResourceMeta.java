@@ -34,6 +34,8 @@ import java.util.List;
  * semicolon delimiter parses to garbage, or fails partway through the file, if it is read as
  * default comma-separated, double-quote-encapsulated CSV.
  *
+ * @param name the resource's declared name, or {@code ""} when it declares none
+ * @param schemaReference the resource's declared table schema reference, or {@code ""}
  * @param paths the resource's data files, in the order they should be read
  * @param encoding character encoding of the data files
  * @param delimiter the field delimiter
@@ -44,8 +46,12 @@ import java.util.List;
  * @param skipInitialSpace whether spaces adjacent to the delimiter should be ignored
  * @param headerLines the number of leading header lines, zero when the resource has no header
  * @param columnNames column names from the resource's table schema, empty when it declares none
+ * @param idColumn the single-column primary key the resource's table schema declares, or
+ *     {@code ""} when it declares none or declares a composite one
  */
 public record DataPackageResourceMeta(
+		String name,
+		String schemaReference,
 		List<Path> paths,
 		Charset encoding,
 		String delimiter,
@@ -55,14 +61,27 @@ public record DataPackageResourceMeta(
 		String nullSequence,
 		boolean skipInitialSpace,
 		int headerLines,
-		List<String> columnNames) {
+		List<String> columnNames,
+		String idColumn) {
 
 	/**
 	 * Canonical constructor; copies the collection components defensively.
 	 */
 	public DataPackageResourceMeta {
+		name = name == null ? "" : name;
+		schemaReference = schemaReference == null ? "" : schemaReference;
 		paths = List.copyOf(paths);
 		columnNames = List.copyOf(columnNames);
+		idColumn = idColumn == null ? "" : idColumn;
+	}
+
+	/**
+	 * Returns a short human-readable name for this resource.
+	 *
+	 * @return the declared resource name, or the first data file's name when it declares none
+	 */
+	public String label() {
+		return name.isBlank() ? paths.get(0).getFileName().toString() : name;
 	}
 
 	/**

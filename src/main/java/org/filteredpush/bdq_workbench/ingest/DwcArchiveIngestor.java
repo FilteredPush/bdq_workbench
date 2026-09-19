@@ -28,7 +28,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import org.apache.commons.csv.CSVFormat;
@@ -42,14 +41,21 @@ import org.slf4j.LoggerFactory;
 /**
  * Ingests Darwin Core Archives into canonical records.
  *
- * <p>Opens the zip archive and, when it carries a {@code meta.xml} descriptor, parses the core
- * data file exactly as that descriptor declares it: the declared core file location(s), character
+ * <p>Opens the zip archive and, when it carries a {@code meta.xml} descriptor, parses the data
+ * file exactly as that descriptor declares it: the declared file location(s), character
  * encoding, field delimiter, field encapsulation character, header line count and per-column
  * Darwin Core terms (see {@link DwcArchiveMetaParser}). Honoring the descriptor rather than
  * assuming a fixed tab-separated, double-quote-encapsulated layout is what lets archives that
  * declare {@code fieldsEnclosedBy=""} — the common case for published archives, GBIF downloads
  * included — carry bare {@code "} characters in their data without the parse failing partway
  * through the file or silently merging records from the first offending row onward.
+ *
+ * <p>An archive offers more than one table — its {@code <core>} and each {@code <extension>} —
+ * and the declared core is not always the one a use case is about, since a sample-based archive
+ * declares {@code Event} as its core and carries its occurrence data in an extension.
+ * {@link CoreTableSelector} picks between them, preferring occurrence over taxon over event
+ * rows, and a caller may name a table instead. A selected extension is read on its own, not
+ * joined back to its core rows.
  *
  * <p>Archives without a usable {@code meta.xml} fall back to the previous convention: the
  * {@code occurrence.txt} entry, else the first {@code .txt} entry found, read as UTF-8
@@ -71,16 +77,59 @@ public class DwcArchiveIngestor {
 	 * @throws AppException if the archive cannot be read or has no core data file
 	 */
 	public RecordDataset ingest(Path archivePath) {
+		return ingest(archivePath, "");
+	}
+
+	/**
+	 * Ingests a Darwin Core Archive into canonical records, optionally naming which of the
+	 * archive's tables to read.
+	 *
+	 * @param archivePath path to the zipped Darwin Core Archive
+	 * @param requestedTable the location, row type or extension name of the table to read; blank
+	 *     to select one automatically
+	 * @return the dataset parsed from the selected table's data file(s)
+	 * @throws AppException if the archive cannot be read or has no core data file
+	 */
+	public RecordDataset ingest(Path archivePath, String requestedTable) {
 		try (ZipFile zipFile = new ZipFile(archivePath.toFile())) {
-			Optional<DwcArchiveCoreMeta> coreMeta = DwcArchiveMetaParser.parseCoreMeta(zipFile)
-					.filter(meta -> hasResolvableLocation(zipFile, meta));
-			if (coreMeta.isPresent()) {
-				return ingestDescribedCore(zipFile, archivePath, coreMeta.get());
+			List<CoreTableCandidate<DwcArchiveCoreMeta>> tables = DwcArchiveMetaParser.parseTables(zipFile).stream()
+					.filter(candidate -> hasResolvableLocation(zipFile, candidate.descriptor()))
+					.toList();
+			if (tables.isEmpty()) {
+				return ingestConventionalCore(zipFile, archivePath);
 			}
-			return ingestConventionalCore(zipFile, archivePath);
+			CoreTableCandidate<DwcArchiveCoreMeta> selected =
+					CoreTableSelector.select(tables, requestedTable).selected();
+			warnIfExtensionSelected(selected, tables);
+			return ingestDescribedCore(zipFile, archivePath, selected);
 		} catch (IOException e) {
 			throw new AppException("Failed to ingest DwC-A from " + archivePath, e);
 		}
+	}
+
+	/**
+	 * Warns when a run will read an extension rather than the archive's declared core.
+	 *
+	 * <p>An extension read this way is read on its own: its rows carry whatever terms the
+	 * extension declares, and are not joined back to the core rows they belong to. That is still
+	 * more useful than running an occurrence-level use case against, say, event rows, but it is
+	 * worth saying out loud.
+	 *
+	 * @param selected the table selection made
+	 * @param tables every table the archive offers
+	 */
+	private void warnIfExtensionSelected(CoreTableCandidate<DwcArchiveCoreMeta> selected,
+			List<CoreTableCandidate<DwcArchiveCoreMeta>> tables) {
+		if (selected.declaredCore()) {
+			return;
+		}
+		String declaredCore = tables.stream()
+				.filter(CoreTableCandidate::declaredCore)
+				.map(CoreTableCandidate::label)
+				.findFirst()
+				.orElse("none");
+		LOG.warn("Reading extension {} rather than the archive's declared core {}; extension rows are read on their"
+				+ " own and are not joined to their core rows", selected.label(), declaredCore);
 	}
 
 	/**
@@ -88,11 +137,14 @@ public class DwcArchiveIngestor {
 	 *
 	 * @param zipFile the open archive
 	 * @param archivePath path of the archive, for error messages
-	 * @param coreMeta the parsed core file descriptor
+	 * @param table the selected table
 	 * @return the dataset parsed from every declared core data file, in declaration order
 	 */
-	private RecordDataset ingestDescribedCore(ZipFile zipFile, Path archivePath, DwcArchiveCoreMeta coreMeta) {
+	private RecordDataset ingestDescribedCore(ZipFile zipFile, Path archivePath,
+			CoreTableCandidate<DwcArchiveCoreMeta> table) {
+		DwcArchiveCoreMeta coreMeta = table.descriptor();
 		CSVFormat csvFormat = buildDescribedFormat(coreMeta);
+		String idColumn = resolveIdColumn(coreMeta.idColumn(), table.rowType());
 		List<CanonicalRecord> records = new ArrayList<>();
 		for (String location : coreMeta.locations()) {
 			ZipEntry entry = zipFile.getEntry(location);
@@ -101,7 +153,7 @@ public class DwcArchiveIngestor {
 						location, archivePath);
 				continue;
 			}
-			records.addAll(readEntry(zipFile, archivePath, entry, csvFormat, coreMeta).records());
+			records.addAll(readEntry(zipFile, archivePath, entry, csvFormat, coreMeta, idColumn).records());
 		}
 		applyConstantTerms(records, coreMeta);
 		return new RecordDataset(records);
@@ -123,7 +175,7 @@ public class DwcArchiveIngestor {
 				.setTrailingData(true)
 				.setLenientEof(true)
 				.build();
-		return readEntry(zipFile, archivePath, core, csvFormat, null);
+		return readEntry(zipFile, archivePath, core, csvFormat, null, "");
 	}
 
 	/**
@@ -134,22 +186,39 @@ public class DwcArchiveIngestor {
 	 * @param entry the core data entry to read
 	 * @param csvFormat the format to parse the entry with
 	 * @param coreMeta the core file descriptor, or {@code null} when reading by convention
+	 * @param idColumn the column to take record identifiers from, blank for the conventional ones
 	 * @return the dataset parsed from the entry
 	 * @throws AppException if the entry cannot be read or parsed, naming the entry so a malformed
 	 *     core data file can be told apart from a malformed archive
 	 */
 	private RecordDataset readEntry(ZipFile zipFile, Path archivePath, ZipEntry entry, CSVFormat csvFormat,
-			DwcArchiveCoreMeta coreMeta) {
+			DwcArchiveCoreMeta coreMeta, String idColumn) {
 		Charset encoding = coreMeta == null ? StandardCharsets.UTF_8 : coreMeta.encoding();
 		int linesToSkip = linesToSkipBeforeParsing(csvFormat, coreMeta);
 		try {
 			return DelimitedRecordReader.read(
 					() -> openEntryReader(zipFile, entry, encoding, linesToSkip),
-					csvFormat);
+					csvFormat,
+					idColumn);
 		} catch (IOException e) {
 			throw new AppException("Failed to parse core data file '" + entry.getName() + "' in " + archivePath
 					+ ": " + e.getMessage(), e);
 		}
+	}
+
+	/**
+	 * Chooses which column supplies a table's record identifiers.
+	 *
+	 * <p>A column the descriptor declares as the table's key wins. Failing that, the term that
+	 * conventionally identifies a row of the table's kind is used, so that selecting a taxon or
+	 * event table yields its rows' own identifiers rather than synthesized positional ones.
+	 *
+	 * @param declaredIdColumn the column the descriptor declares as the table's key, possibly blank
+	 * @param rowType the table's identified row type
+	 * @return the column to take record identifiers from, or {@code ""} for the conventional ones
+	 */
+	private String resolveIdColumn(String declaredIdColumn, DatasetRowType rowType) {
+		return declaredIdColumn.isBlank() ? rowType.identifierTerm() : declaredIdColumn;
 	}
 
 	/**

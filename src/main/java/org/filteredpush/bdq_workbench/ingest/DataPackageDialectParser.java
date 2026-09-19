@@ -28,7 +28,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import org.filteredpush.bdq_workbench.app.AppException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -60,23 +59,120 @@ final class DataPackageDialectParser {
 	}
 
 	/**
+	 * Parses every tabular resource a data package manifest declares, as candidate core tables.
+	 *
+	 * <p>Resource order in a manifest carries no meaning, so every readable resource is offered
+	 * and {@link CoreTableSelector} chooses between them. Resources with no readable data file —
+	 * inline data, remote URLs, paths escaping the package directory — are skipped rather than
+	 * failing the run, since a package may legitimately mix them with readable ones.
+	 *
+	 * @param mapper JSON mapper used to read a referenced dialect file
+	 * @param root the parsed {@code datapackage.json} manifest
+	 * @param packageDir the directory containing the manifest, which resource paths resolve against
+	 * @return the readable resources in declaration order
+	 */
+	static List<CoreTableCandidate<DataPackageResourceMeta>> parseResources(ObjectMapper mapper, JsonNode root,
+			Path packageDir) {
+		List<CoreTableCandidate<DataPackageResourceMeta>> tables = new ArrayList<>();
+		for (JsonNode resource : root.path("resources")) {
+			DataPackageResourceMeta meta = parseResource(mapper, resource, packageDir);
+			if (meta == null) {
+				continue;
+			}
+			tables.add(new CoreTableCandidate<>(
+					meta,
+					meta.label(),
+					identifyRowType(meta),
+					rowTypeEvidence(meta),
+					false,
+					tables.size(),
+					aliasesOf(meta)));
+		}
+		return tables;
+	}
+
+	/**
+	 * Identifies a resource's row type, preferring its declared name, then its table schema
+	 * reference, then its file name, and finally the terms its columns carry.
+	 *
+	 * @param meta the parsed resource descriptor
+	 * @return the identified row type
+	 */
+	private static DatasetRowType identifyRowType(DataPackageResourceMeta meta) {
+		for (String identifier : identifiersOf(meta)) {
+			DatasetRowType rowType = DatasetRowType.fromIdentifier(identifier);
+			if (rowType != DatasetRowType.OTHER) {
+				return rowType;
+			}
+		}
+		return DatasetRowType.fromColumnNames(meta.columnNames());
+	}
+
+	/**
+	 * Describes which signal identified a resource's row type.
+	 *
+	 * @param meta the parsed resource descriptor
+	 * @return a short description of the deciding signal
+	 */
+	private static String rowTypeEvidence(DataPackageResourceMeta meta) {
+		String[] evidence = {"resource name", "table schema reference", "file name"};
+		List<String> identifiers = identifiersOf(meta);
+		for (int index = 0; index < identifiers.size(); index++) {
+			if (DatasetRowType.fromIdentifier(identifiers.get(index)) != DatasetRowType.OTHER) {
+				return evidence[index];
+			}
+		}
+		return DatasetRowType.fromColumnNames(meta.columnNames()) != DatasetRowType.OTHER
+				? "schema field names"
+				: "unidentified";
+	}
+
+	/**
+	 * Lists a resource's row-type identifiers, strongest signal first.
+	 *
+	 * @param meta the parsed resource descriptor
+	 * @return the resource's name, table schema reference and first file name
+	 */
+	private static List<String> identifiersOf(DataPackageResourceMeta meta) {
+		return List.of(meta.name(), meta.schemaReference(), meta.paths().get(0).getFileName().toString());
+	}
+
+	/**
+	 * Lists the names by which a user may request a resource.
+	 *
+	 * @param meta the parsed resource descriptor
+	 * @return the resource's name and its data file names
+	 */
+	private static List<String> aliasesOf(DataPackageResourceMeta meta) {
+		List<String> aliases = new ArrayList<>();
+		if (!meta.name().isBlank()) {
+			aliases.add(meta.name());
+		}
+		meta.paths().forEach(path -> aliases.add(path.getFileName().toString()));
+		return aliases;
+	}
+
+	/**
 	 * Parses a resource entry from a data package manifest.
 	 *
 	 * @param mapper JSON mapper used to read a referenced dialect file
 	 * @param resource the resource entry from the manifest's {@code resources} array
 	 * @param packageDir the directory containing the manifest, which resource paths resolve against
-	 * @return the resource descriptor
-	 * @throws AppException if the resource declares no usable data file path
+	 * @return the resource descriptor, or {@code null} if the resource has no readable data file
 	 */
 	static DataPackageResourceMeta parseResource(ObjectMapper mapper, JsonNode resource, Path packageDir) {
 		List<Path> paths = resolvePaths(resource.path("path"), packageDir);
 		if (paths.isEmpty()) {
-			throw new AppException("Data package resource declares no readable data file path"
-					+ " (inline data and remote resource URLs are not supported)");
+			LOG.debug("Skipping data package resource '{}', which declares no readable data file path"
+					+ " (inline data and remote resource URLs are not supported)",
+					resource.path("name").asText("unnamed"));
+			return null;
 		}
 		JsonNode dialect = resolveDialect(mapper, resource.path("dialect"), packageDir);
 		List<String> columnNames = readSchemaFieldNames(resource.path("schema"));
 		DataPackageResourceMeta meta = new DataPackageResourceMeta(
+				resource.path("name").asText(""),
+				resolveSchemaReference(resource),
 				paths,
 				resolveEncoding(text(resource, "encoding")),
 				requireNonEmpty(text(dialect, "delimiter"), DEFAULT_DELIMITER),
@@ -86,12 +182,33 @@ final class DataPackageDialectParser {
 				text(dialect, "nullSequence"),
 				dialect.path("skipInitialSpace").asBoolean(false),
 				resolveHeaderLines(dialect),
-				columnNames);
-		LOG.debug("Parsed data package resource: paths={}, encoding={}, delimiter={}, quoteChar={}, escapeChar={},"
-						+ " headerLines={}, schemaColumns={}",
-				meta.paths(), meta.encoding(), describe(meta.delimiter()), describe(meta.quoteChar()),
+				columnNames,
+				readPrimaryKey(resource.path("schema")));
+		LOG.debug("Parsed data package resource '{}': paths={}, encoding={}, delimiter={}, quoteChar={},"
+						+ " escapeChar={}, headerLines={}, schemaColumns={}",
+				meta.label(), meta.paths(), meta.encoding(), describe(meta.delimiter()), describe(meta.quoteChar()),
 				describe(meta.escapeChar()), meta.headerLines(), meta.columnNames().size());
 		return meta;
+	}
+
+	/**
+	 * Reads a resource's table schema reference, where the schema is given by reference rather
+	 * than inline.
+	 *
+	 * <p>Darwin Core Data Packages point their resources at per-table JSON Schemas published at
+	 * stable URLs, whose names identify the table as reliably as the resource name does and
+	 * survive a publisher renaming their files.
+	 *
+	 * @param resource the resource entry from the manifest
+	 * @return the schema reference, or {@code ""} when the schema is inline or absent
+	 */
+	private static String resolveSchemaReference(JsonNode resource) {
+		String schema = text(resource, "schema");
+		if (schema != null) {
+			return schema;
+		}
+		String profile = textOrDefault(resource, "$schema", text(resource, "profile"));
+		return profile == null ? "" : profile;
 	}
 
 	/**
@@ -166,6 +283,26 @@ final class DataPackageDialectParser {
 					dialectPath, e.toString());
 			return dialectNode;
 		}
+	}
+
+	/**
+	 * Reads the single-column primary key a resource's table schema declares.
+	 *
+	 * <p>A composite primary key names no single column that could serve as a record identifier,
+	 * so it is ignored rather than joined into one.
+	 *
+	 * @param schema the resource's {@code schema} property
+	 * @return the primary key column name, or {@code ""} when there is no single-column key
+	 */
+	private static String readPrimaryKey(JsonNode schema) {
+		JsonNode primaryKey = schema.path("primaryKey");
+		if (primaryKey.isTextual()) {
+			return primaryKey.asText();
+		}
+		if (primaryKey.isArray() && primaryKey.size() == 1 && primaryKey.get(0).isTextual()) {
+			return primaryKey.get(0).asText();
+		}
+		return "";
 	}
 
 	/**

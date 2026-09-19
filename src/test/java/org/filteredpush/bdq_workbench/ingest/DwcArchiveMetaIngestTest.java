@@ -141,6 +141,28 @@ class DwcArchiveMetaIngestTest {
 	}
 
 	@Test
+	void anEmptyDeclaredIdColumnFallsBackToPositionalRecordIds(@TempDir Path tempDir) throws Exception {
+		String meta = """
+				<?xml version="1.0" encoding="UTF-8"?>
+				<archive xmlns="http://rs.tdwg.org/dwc/text/">
+				  <core fieldsTerminatedBy="\\t" fieldsEnclosedBy="" ignoreHeaderLines="1"
+				        rowType="http://rs.tdwg.org/dwc/terms/Occurrence">
+				    <files><location>occurrence.txt</location></files>
+				    <id index="0"/>
+				    <field index="1" term="http://rs.tdwg.org/dwc/terms/institutionCode"/>
+				  </core>
+				</archive>
+				""";
+		Path archive = writeArchive(tempDir, meta, "occurrence.txt", StandardCharsets.UTF_8,
+				"id\tinstitutionCode\n\tGNHM\n\tGNHM\n");
+
+		RecordDataset dataset = new DwcArchiveIngestor().ingest(archive);
+
+		assertThat(dataset.records()).hasSize(2);
+		assertThat(dataset.records()).extracting(record -> record.id()).containsExactly("row-1", "row-2");
+	}
+
+	@Test
 	void archiveWithoutMetaXmlStillUsesTabDelimitedConvention(@TempDir Path tempDir) throws Exception {
 		Path archive = writeArchive(tempDir, null, "occurrence.txt", StandardCharsets.UTF_8,
 				"occurrenceID\tcountry\nocc-0\tCanada\n");

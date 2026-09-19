@@ -51,6 +51,40 @@ public class ConfigLoader {
      *     {@code bdq.threads} is not a whole number
      */
     public AppConfig load(Map<String, String> overrides) {
+        return load(overrides, null);
+    }
+
+    /**
+     * Builds an {@link AppConfig} for a command line run, filling in the same default resource
+     * sources the GUI uses and fetching any remote ones.
+     *
+     * <p>{@link #load(Map)} treats the use case, test definition and ontology settings as literal
+     * file paths, because the GUI resolves its own source fields before handing them over. A
+     * command line run has nobody to do that for it, so this variant applies
+     * {@link WorkbenchDefaults}' published sources wherever a setting is blank and resolves any
+     * HTTP source through {@code resolver}. That is what makes {@code --dataset} the only
+     * argument a run needs.
+     *
+     * @param overrides property-name-keyed override values parsed from command line arguments
+     * @param resolver resolver used to fetch and cache remote sources
+     * @return the resolved application configuration, with every resource source a local file
+     * @throws AppException if a setting is malformed or a remote source cannot be fetched
+     */
+    public AppConfig loadForCliRun(Map<String, String> overrides, CachedResourceResolver resolver) {
+        return load(overrides, resolver);
+    }
+
+    /**
+     * Builds an {@link AppConfig} from classpath defaults and the given overrides.
+     *
+     * @param overrides property-name-keyed override values
+     * @param resolver resolver used to fetch remote resource sources and to supply the default
+     *     sources, or {@code null} to treat every source setting as a literal local path
+     * @return the resolved application configuration
+     * @throws AppException if {@code application.properties} exists but cannot be read, or if a
+     *     setting is malformed
+     */
+    private AppConfig load(Map<String, String> overrides, CachedResourceResolver resolver) {
         Properties defaults = new Properties();
         try (InputStream in = getClass().getClassLoader().getResourceAsStream("application.properties")) {
             if (in != null) {
@@ -60,10 +94,13 @@ public class ConfigLoader {
             throw new AppException("Unable to load application.properties", e);
         }
         String rdfRaw = getValue(defaults, overrides, "bdq.rdf.files", "bdqtest.ttl,bdqffdq.owl");
+        if (resolver != null && rdfRaw.isBlank()) {
+            rdfRaw = WorkbenchDefaults.TEST_DEFINITIONS_SOURCE + "," + WorkbenchDefaults.ONTOLOGY_SOURCE;
+        }
         List<Path> rdfFiles = Arrays.stream(rdfRaw.split(","))
                 .map(String::trim)
                 .filter(s -> !s.isEmpty())
-                .map(Path::of)
+                .map(source -> resolveSource(source, resolver))
                 .toList();
 
         List<String> implPackages = Arrays.stream(getValue(defaults, overrides, "bdq.discovery.packages", "org.filteredpush.qc")
@@ -73,14 +110,48 @@ public class ConfigLoader {
                 .toList();
 
         return new AppConfig(
-                Path.of(getValue(defaults, overrides, "bdq.usecase.file", "bdquc.xml")),
+                resolveSource(
+                        orDefaultSource(
+                                getValue(defaults, overrides, "bdq.usecase.file", "bdquc.xml"),
+                                WorkbenchDefaults.USE_CASE_SOURCE,
+                                resolver),
+                        resolver),
                 rdfFiles,
                 Path.of(getValue(defaults, overrides, "bdq.dataset", "dataset.zip")),
                 getValue(defaults, overrides, "bdq.usecase.id", ""),
                 implPackages,
                 parseThreadCount(getValue(defaults, overrides, "bdq.threads", "4")),
                 parseBoolean(getValue(defaults, overrides, "bdq.execution.dedup", "true"), "bdq.execution.dedup"),
-                RecordFilterSpec.parse(getValue(defaults, overrides, "bdq.record.filters", "")));
+                RecordFilterSpec.parse(getValue(defaults, overrides, "bdq.record.filters", "")),
+                getValue(defaults, overrides, "bdq.dataset.table", ""));
+    }
+
+    /**
+     * Resolves one resource source setting to a local file.
+     *
+     * @param source the configured source, a local path or an HTTP URL
+     * @param resolver resolver used to fetch remote sources, or {@code null} to treat every
+     *     source as a literal local path
+     * @return the local path of the resource
+     */
+    private static Path resolveSource(String source, CachedResourceResolver resolver) {
+        if (resolver != null && CachedResourceResolver.isRemote(source)) {
+            return resolver.resolveSource(source.trim());
+        }
+        return Path.of(source);
+    }
+
+    /**
+     * Substitutes a default source for a blank setting, for command line runs.
+     *
+     * @param configured the configured value
+     * @param defaultSource the default source to use when {@code configured} is blank
+     * @param resolver non-null for a command line run, {@code null} otherwise
+     * @return the source to resolve
+     */
+    private static String orDefaultSource(String configured, String defaultSource,
+            CachedResourceResolver resolver) {
+        return resolver != null && configured.isBlank() ? defaultSource : configured;
     }
 
     /**

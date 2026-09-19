@@ -144,6 +144,63 @@ final class CachedResourceResolver {
         return Path.of(userHome, ".bdq-workbench", "cache");
     }
 
+
+    /**
+     * Resolves a resource source to a local file, deriving its cache file name automatically.
+     *
+     * @param source the resource URL or local path
+     * @return the local path of the resource, downloading and caching it if it is remote
+     */
+    Path resolveSource(String source) {
+        return resolve(source, cacheNameFor(source));
+    }
+
+    /**
+     * Reports whether a resource source is remote and therefore needs fetching and caching.
+     *
+     * @param source the resource URL or local path
+     * @return {@code true} if {@code source} is an HTTP or HTTPS URL
+     */
+    static boolean isRemote(String source) {
+        return source != null && isHttpUrl(source.trim());
+    }
+
+    static String cacheNameFor(String source) {
+        String baseName = "resource";
+        try {
+            String uriPath = java.net.URI.create(source).getPath();
+            if (uriPath != null && !uriPath.isBlank()) {
+                baseName = Path.of(uriPath).getFileName().toString();
+            }
+        } catch (Exception ignored) {
+            // source is not a URI, treat as local path
+        }
+        if ("resource".equals(baseName) && source != null && !source.isBlank()) {
+            try {
+                baseName = Path.of(source).getFileName().toString();
+            } catch (Exception ignored) {
+                // keep fallback
+            }
+        }
+        if (baseName.contains(".")) {
+            baseName = baseName.substring(0, baseName.lastIndexOf('.'));
+        }
+        baseName = baseName.toLowerCase().replaceAll("[^a-z0-9._-]+", "-").replaceAll("(^-+|-+$)", "");
+        if (baseName.isBlank()) {
+            baseName = "resource";
+        }
+        int hash = Math.abs(source.hashCode());
+        String extension = ".rdf";
+        int dot = source.lastIndexOf('.');
+        if (dot >= 0 && dot < source.length() - 1) {
+            String candidate = source.substring(dot).toLowerCase();
+            if (candidate.matches("\\.[a-z0-9]{1,8}")) {
+                extension = candidate;
+            }
+        }
+        return baseName + "-cached-" + hash + extension;
+    }
+
     /**
      * @param value the string to check
      * @return {@code true} if {@code value} starts with {@code http://} or {@code https://}

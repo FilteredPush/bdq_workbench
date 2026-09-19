@@ -25,6 +25,7 @@ import java.awt.GraphicsEnvironment;
 import java.nio.file.Files;
 import java.util.HashMap;
 import java.util.List;
+import java.util.List;
 import java.util.Map;
 import org.filteredpush.bdq_workbench.execution.ParallelPhaseExecutionService;
 import org.filteredpush.bdq_workbench.execution.ReflectionExecutionAdapter;
@@ -37,6 +38,8 @@ import org.filteredpush.bdq_workbench.reporting.ReportingService;
 import org.filteredpush.bdq_workbench.reporting.SummaryReportExporter;
 import org.filteredpush.bdq_workbench.reporting.UnresolvedResponsesExporter;
 import org.filteredpush.bdq_workbench.reporting.XlsxReportExporter;
+import org.filteredpush.bdq_workbench.model.UseCase;
+import org.filteredpush.bdq_workbench.rdf_policy.UseCaseXmlParser;
 import org.filteredpush.bdq_workbench.test_discovery.ClasspathAnnotationTestDiscoveryService;
 import org.filteredpush.bdq_workbench.test_discovery.DefaultTestBindingService;
 import org.slf4j.Logger;
@@ -57,6 +60,7 @@ public final class BdqWorkbenchApplication {
     private static final Logger LOG = LoggerFactory.getLogger(BdqWorkbenchApplication.class);
     private static final String HELP_FLAG = "--help";
     private static final String HELP_SHORT_FLAG = "-h";
+    private static final String GUI_FLAG = "--gui";
 
     private BdqWorkbenchApplication() {
     }
@@ -96,7 +100,7 @@ public final class BdqWorkbenchApplication {
         try {
             if (args.length == 0 && !GraphicsEnvironment.isHeadless()) {
                 LOG.info("Starting BDQ Workbench GUI");
-                BdqWorkbenchGui.launch();
+                BdqWorkbenchGui.launch(Map.of());
                 return 0;
             }
             if (wantsHelp(args)) {
@@ -110,9 +114,17 @@ public final class BdqWorkbenchApplication {
                 renderUsage(err);
                 return 2;
             }
-            AppConfig config = new ConfigLoader().load(parseResult.overrides());
-            validateStartupConfig(config);
-            LOG.info("Starting BDQ Workbench CLI run with dataset {}", config.datasetPath());
+            if (parseResult.guiRequested()) {
+                return launchGui(parseResult.overrides(), err);
+            }
+            // Validate the dataset against the plain configuration first: it is the one thing a
+            // run cannot supply a default for, and checking it here keeps a mistyped path from
+            // fetching the ratified definitions before failing.
+            validateStartupConfig(new ConfigLoader().load(parseResult.overrides()));
+            AppConfig config = resolveDefaultUseCase(
+                    new ConfigLoader().loadForCliRun(parseResult.overrides(), new CachedResourceResolver()));
+            LOG.info("Starting BDQ Workbench CLI run with dataset {} and use case {}",
+                    config.datasetPath(), config.useCaseId());
             ExecutionSummary summary = execute(config);
             render(summary, out);
             return 0;
@@ -125,6 +137,61 @@ public final class BdqWorkbenchApplication {
             LOG.error("BDQ Workbench execution failed", e);
             return 1;
         }
+    }
+
+    /**
+     * Opens the GUI seeded with the command line overrides.
+     *
+     * <p>{@code --gui} is how a user asks for the window with their arguments already filled in,
+     * rather than either the GUI's own defaults or a headless run.
+     *
+     * @param overrides the parsed command line overrides to seed the GUI's fields with
+     * @param err stream for error output
+     * @return {@code 0} once the GUI has been scheduled, or {@code 1} if there is no display
+     */
+    private static int launchGui(Map<String, String> overrides, PrintStream err) {
+        if (GraphicsEnvironment.isHeadless()) {
+            LOG.error("Cannot start the GUI: no graphical display is available");
+            err.println("Cannot start the GUI: no graphical display is available.");
+            err.println("Omit " + GUI_FLAG + " to run from the command line.");
+            return 1;
+        }
+        LOG.info("Starting BDQ Workbench GUI with command line overrides {}", overrides.keySet());
+        BdqWorkbenchGui.launch(overrides);
+        return 0;
+    }
+
+    /**
+     * Fills in the use case a run should execute when the command line named none.
+     *
+     * <p>The GUI preselects a use case from those its use case source offers; a headless run
+     * makes the same choice through {@link WorkbenchDefaults#preferredUseCaseId}, so that
+     * {@code --dataset} really is the only argument a run needs.
+     *
+     * @param config the configuration loaded from the command line
+     * @return the configuration, with a use case identifier filled in if it had none
+     */
+    private static AppConfig resolveDefaultUseCase(AppConfig config) {
+        if (!config.useCaseId().isBlank()) {
+            return config;
+        }
+        List<UseCase> useCases = List.copyOf(UseCaseXmlParser.loadUseCases(config.useCaseXml()).values());
+        String useCaseId = WorkbenchDefaults.preferredUseCaseId(useCases, "");
+        if (useCaseId.isBlank()) {
+            throw new AppException("No use cases found in " + config.useCaseXml()
+                    + "; name one with --usecase-id or point --usecase-file at a source that has some");
+        }
+        LOG.info("No use case given; defaulting to {}", useCaseId);
+        return new AppConfig(
+                config.useCaseXml(),
+                config.rdfDefinitions(),
+                config.datasetPath(),
+                useCaseId,
+                config.implementationPackages(),
+                config.threadCount(),
+                config.dedupEnabled(),
+                config.recordFilter(),
+                config.datasetTable());
     }
 
     /**
@@ -168,13 +235,19 @@ public final class BdqWorkbenchApplication {
      */
     private static ParseResult parseArguments(String[] args) {
         Map<String, String> overrides = new HashMap<>();
+        boolean guiRequested = false;
         for (int i = 0; i < args.length; i++) {
             String arg = args[i];
             if (HELP_FLAG.equals(arg) || HELP_SHORT_FLAG.equals(arg)) {
                 continue;
             }
+            if (GUI_FLAG.equals(arg)) {
+                guiRequested = true;
+                continue;
+            }
             String key = switch (arg) {
                 case "--dataset" -> "bdq.dataset";
+                case "--dataset-table" -> "bdq.dataset.table";
                 case "--usecase-file" -> "bdq.usecase.file";
                 case "--rdf-files" -> "bdq.rdf.files";
                 case "--usecase-id" -> "bdq.usecase.id";
@@ -185,10 +258,10 @@ public final class BdqWorkbenchApplication {
                 default -> null;
             };
             if (key == null) {
-                return new ParseResult(Map.of(), "Unknown argument: " + arg);
+                return new ParseResult(Map.of(), false, "Unknown argument: " + arg);
             }
             if (i + 1 >= args.length) {
-                return new ParseResult(Map.of(), "Missing value for argument: " + arg);
+                return new ParseResult(Map.of(), false, "Missing value for argument: " + arg);
             }
             String value = args[++i];
             if ("bdq.record.filters".equals(key) && overrides.containsKey(key) && !overrides.get(key).isBlank()) {
@@ -197,7 +270,7 @@ public final class BdqWorkbenchApplication {
                 overrides.put(key, value);
             }
         }
-        return new ParseResult(Map.copyOf(overrides), null);
+        return new ParseResult(Map.copyOf(overrides), guiRequested, null);
     }
 
     /**
@@ -212,7 +285,11 @@ public final class BdqWorkbenchApplication {
         out.println();
         out.println("Options:");
         out.println("  -h, --help                     Show this help");
+        out.println("  --gui                          Open the GUI with the other options filled in");
         out.println("  --dataset <path>               Input dataset (.zip DwC-A or datapackage.json)");
+        out.println("  --dataset-table <name>         Which table of the dataset to run against, named by");
+        out.println("                                 location, resource name or Darwin Core row type");
+        out.println("                                 (default: the best-ranked table the dataset offers)");
         out.println("  --usecase-file <path>          Use case XML file");
         out.println("  --rdf-files <paths>            Comma-separated RDF/OWL files");
         out.println("  --usecase-id <id>              Optional use case identifier");
@@ -265,6 +342,13 @@ public final class BdqWorkbenchApplication {
      * @param overrides the parsed {@link ConfigLoader} override keys/values
      * @param error a descriptive error message if parsing failed, or {@code null} on success
      */
-    private record ParseResult(Map<String, String> overrides, String error) {
+    /**
+     * The outcome of parsing command line arguments.
+     *
+     * @param overrides property-name-keyed override values
+     * @param guiRequested whether {@code --gui} asked for the window rather than a headless run
+     * @param error a descriptive parse error, or {@code null} when parsing succeeded
+     */
+    private record ParseResult(Map<String, String> overrides, boolean guiRequested, String error) {
     }
 }

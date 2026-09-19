@@ -120,8 +120,23 @@ final class DelimitedRecordReader {
 	 * @throws IOException if the source cannot be opened or read
 	 */
 	static RecordDataset read(ReaderSupplier readerSupplier, CSVFormat csvFormat) throws IOException {
+		return read(readerSupplier, csvFormat, "");
+	}
+
+	/**
+	 * Reads a delimited source into canonical records, taking record IDs from a named column.
+	 *
+	 * @param readerSupplier supplies a fresh reader for the source
+	 * @param csvFormat primary Commons CSV format to use
+	 * @param idColumn the column the source's descriptor declares as its record identifier, blank
+	 *     when it declares none
+	 * @return the parsed dataset
+	 * @throws IOException if the source cannot be opened or read
+	 */
+	static RecordDataset read(ReaderSupplier readerSupplier, CSVFormat csvFormat, String idColumn)
+			throws IOException {
 		try {
-			return readWithCommonsCsv(readerSupplier, csvFormat);
+			return readWithCommonsCsv(readerSupplier, csvFormat, idColumn);
 		} catch (UncheckedIOException e) {
 			throw e.getCause();
 		} catch (RuntimeException e) {
@@ -138,17 +153,19 @@ final class DelimitedRecordReader {
 	 *
 	 * @param readerSupplier supplies a fresh reader
 	 * @param csvFormat configured CSV format
+	 * @param idColumn the column declared as the source's record identifier, possibly blank
 	 * @return the parsed dataset
 	 * @throws IOException if the source cannot be opened or parsed
 	 */
-	private static RecordDataset readWithCommonsCsv(ReaderSupplier readerSupplier, CSVFormat csvFormat) throws IOException {
+	private static RecordDataset readWithCommonsCsv(ReaderSupplier readerSupplier, CSVFormat csvFormat,
+			String idColumn) throws IOException {
 		try (BufferedReader reader = readerSupplier.open();
 				CSVParser parser = csvFormat.parse(reader)) {
 			List<CanonicalRecord> records = new ArrayList<>();
 			parser.forEach(row -> {
 				Map<String, String> values = new LinkedHashMap<>();
 				row.toMap().forEach((key, value) -> values.put(normalize(key), normalize(value)));
-				records.add(new CanonicalRecord(resolveRecordId(values, row.getRecordNumber()), values));
+				records.add(new CanonicalRecord(resolveRecordId(values, row.getRecordNumber(), idColumn), values));
 			});
 			return new RecordDataset(records);
 		}
@@ -157,12 +174,48 @@ final class DelimitedRecordReader {
 	/**
 	 * Resolves the record ID using the standard workbench precedence.
 	 *
+	 * <p>A column the source's own descriptor declares as its identifier wins, so that a table
+	 * of something other than occurrences — an event or taxon table, whose identifier is
+	 * {@code eventID} or {@code taxonID} — still yields meaningful record IDs. Otherwise the
+	 * conventional {@code id} and {@code occurrenceID} columns are tried, and failing those the
+	 * record's position in the source is synthesized into an identifier.
+	 *
+	 * <p>A column that is present but empty counts as absent at every step. Published archives
+	 * do carry an {@code id} column they never populated, and taking it at face value would give
+	 * every record in such a dataset the same empty identifier, collapsing them together
+	 * wherever a report keys on the record ID.
+	 *
 	 * @param values canonicalized row values
 	 * @param recordNumber 1-based source record number excluding the header
+	 * @param idColumn the column declared as the source's record identifier, possibly blank
 	 * @return the record identifier
 	 */
-	private static String resolveRecordId(Map<String, String> values, long recordNumber) {
-		return values.getOrDefault("id", values.getOrDefault("occurrenceID", "row-" + recordNumber));
+	private static String resolveRecordId(Map<String, String> values, long recordNumber, String idColumn) {
+		String declared = idColumn == null ? null : nonEmpty(values, idColumn.trim());
+		if (declared != null) {
+			return declared;
+		}
+		String conventional = nonEmpty(values, "id");
+		if (conventional != null) {
+			return conventional;
+		}
+		String occurrenceId = nonEmpty(values, "occurrenceID");
+		return occurrenceId != null ? occurrenceId : "row-" + recordNumber;
+	}
+
+	/**
+	 * Reads a row value, treating a blank value as absent.
+	 *
+	 * @param values canonicalized row values
+	 * @param column the column to read, possibly blank
+	 * @return the value, or {@code null} if the column is absent or its value is blank
+	 */
+	private static String nonEmpty(Map<String, String> values, String column) {
+		if (column == null || column.isEmpty()) {
+			return null;
+		}
+		String value = values.get(column);
+		return value == null || value.isBlank() ? null : value;
 	}
 
 	/**

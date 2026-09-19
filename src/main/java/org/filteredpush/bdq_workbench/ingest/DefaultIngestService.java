@@ -64,12 +64,28 @@ public class DefaultIngestService implements IngestService {
      */
     @Override
     public RecordDataset ingest(Path inputPath) {
+        return ingest(inputPath, "");
+    }
+
+    /**
+     * Ingests the given input path, dispatching to the appropriate ingestor based on its file
+     * extension and passing on the caller's choice of table.
+     *
+     * @param inputPath path to the dataset input, a {@code .zip} archive or a
+     *     {@code .json}/{@code datapackage} manifest
+     * @param requestedTable the name, file name or Darwin Core row type of the table to read;
+     *     blank to let the ingestor choose
+     * @return the ingested dataset
+     * @throws AppException if the input's file extension does not match a supported format
+     */
+    @Override
+    public RecordDataset ingest(Path inputPath, String requestedTable) {
         String fileName = inputPath.getFileName().toString().toLowerCase();
         if (fileName.endsWith(".zip")) {
-            return dwcArchiveIngestor.ingest(inputPath);
+            return dwcArchiveIngestor.ingest(inputPath, requestedTable);
         }
         if (fileName.endsWith(".json") || fileName.endsWith("datapackage")) {
-            return dataPackageIngestor.ingest(inputPath);
+            return dataPackageIngestor.ingest(inputPath, requestedTable);
         }
         throw new AppException("Unsupported dataset input: " + inputPath);
     }

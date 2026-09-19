@@ -603,6 +603,7 @@ class BdqWorkbenchGuiTest {
                 String.class,
                 String.class,
                 String.class,
+                String.class,
                 boolean.class,
                 CachedResourceResolver.class,
                 AppConfig.class);
@@ -622,6 +623,7 @@ class BdqWorkbenchGuiTest {
                 null,
                 base.resolve("dataset.zip").toString(),
                 "uc1",
+                "",
                 "",
                 base.resolve("bdquc.xml").toString(),
                 base.resolve("bdqtest.ttl").toString(),

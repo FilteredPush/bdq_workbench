@@ -45,6 +45,9 @@ import org.filteredpush.bdq_workbench.model.RecordFilterSpec;
  *     every record sharing that combination; defaults to {@code true}
  * @param recordFilter pre-execution record filter criteria limiting which records enter the BDQ
  *     test pipeline; empty to run against every ingested record
+ * @param datasetTable which of the input dataset's tables to run against — a Darwin Core
+ *     Archive's core or one of its extensions, or one of a Data Package's resources — named by
+ *     its location, resource name or Darwin Core row type; empty to let the ingestor choose
  */
 public record AppConfig(
         Path useCaseXml,
@@ -54,7 +57,8 @@ public record AppConfig(
         List<String> implementationPackages,
         int threadCount,
         boolean dedupEnabled,
-        RecordFilterSpec recordFilter) {
+        RecordFilterSpec recordFilter,
+        String datasetTable) {
 
 	/**
 	 * Creates a configuration with no record filters.
@@ -76,13 +80,40 @@ public record AppConfig(
 			int threadCount,
 			boolean dedupEnabled) {
 		this(useCaseXml, rdfDefinitions, datasetPath, useCaseId, implementationPackages, threadCount, dedupEnabled,
-				RecordFilterSpec.empty());
+				RecordFilterSpec.empty(), "");
 	}
 
 	/**
-	 * Canonical constructor; substitutes an empty record filter when none is supplied.
+	 * Creates a configuration that lets the ingestor choose which dataset table to run against.
+	 *
+	 * @param useCaseXml path to the use case XML definition file
+	 * @param rdfDefinitions RDF/OWL files used to resolve policy/test metadata
+	 * @param datasetPath path to the dataset input
+	 * @param useCaseId optional use case identifier
+	 * @param implementationPackages Java packages to scan for test implementations
+	 * @param threadCount number of worker threads to use
+	 * @param dedupEnabled whether distinct-value execution is enabled
+	 * @param recordFilter pre-execution record filter criteria
+	 */
+	public AppConfig(
+			Path useCaseXml,
+			List<Path> rdfDefinitions,
+			Path datasetPath,
+			String useCaseId,
+			List<String> implementationPackages,
+			int threadCount,
+			boolean dedupEnabled,
+			RecordFilterSpec recordFilter) {
+		this(useCaseXml, rdfDefinitions, datasetPath, useCaseId, implementationPackages, threadCount, dedupEnabled,
+				recordFilter, "");
+	}
+
+	/**
+	 * Canonical constructor; substitutes an empty record filter and table selection when none
+	 * is supplied.
 	 */
 	public AppConfig {
 		recordFilter = recordFilter == null ? RecordFilterSpec.empty() : recordFilter;
+		datasetTable = datasetTable == null ? "" : datasetTable.trim();
 	}
 }

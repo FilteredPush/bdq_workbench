@@ -244,7 +244,7 @@ class DataPackageDialectIngestTest {
 
 		assertThatThrownBy(() -> new DataPackageIngestor().ingest(manifest))
 				.isInstanceOf(AppException.class)
-				.hasMessageContaining("no readable data file path");
+				.hasMessageContaining("no resource with a readable data file path");
 	}
 
 	/**

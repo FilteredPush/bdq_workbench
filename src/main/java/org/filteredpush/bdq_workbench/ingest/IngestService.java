@@ -33,10 +33,27 @@ import org.filteredpush.bdq_workbench.model.RecordDataset;
 public interface IngestService {
 
     /**
-     * Ingests the dataset at the given input path.
+     * Ingests the dataset at the given input path, choosing which of its tables to read.
      *
      * @param inputPath path to the dataset input file
      * @return the ingested dataset of canonical records
      */
     RecordDataset ingest(Path inputPath);
+
+    /**
+     * Ingests the dataset at the given input path, reading the named table.
+     *
+     * <p>Datasets commonly offer several tables — a Darwin Core Archive's core and its
+     * extensions, a Data Package's resources — and the one an implementation would choose is not
+     * always the one the user wants. Implementations that can choose should honor the request;
+     * the default implementation ignores it and defers to {@link #ingest(Path)}.
+     *
+     * @param inputPath path to the dataset input file
+     * @param requestedTable the name, file name or Darwin Core row type of the table to read;
+     *     blank to let the implementation choose
+     * @return the ingested dataset of canonical records
+     */
+    default RecordDataset ingest(Path inputPath, String requestedTable) {
+        return ingest(inputPath);
+    }
 }

@@ -38,16 +38,32 @@ repository first: `cd path/to/kurator-ffdq && mvn -q -DskipTests install`.
 Run the application:
 
 ```bash
-java -jar target/bdq_workbench-0.1.0-SNAPSHOT.jar            # opens the desktop GUI
-java -jar target/bdq_workbench-0.1.0-SNAPSHOT.jar --dataset path/to/dataset.zip
+java -jar target/bdq_workbench-0.1.0-SNAPSHOT.jar            # no options: opens the desktop GUI
+java -jar target/bdq_workbench-0.1.0-SNAPSHOT.jar --dataset path/to/dataset.zip   # headless run
+java -jar target/bdq_workbench-0.1.0-SNAPSHOT.jar --gui --dataset path/to/dataset.zip
 java -jar target/bdq_workbench-0.1.0-SNAPSHOT.jar --help
 ```
 
+Launch modes (`BdqWorkbenchApplication.run`): no options opens the GUI; options without `--gui`
+run headless; options with `--gui` open the GUI with those options filled into its fields instead
+of the built-in defaults (`--gui` on a headless JVM is an error, exit 1). A headless run needs
+only `--dataset`: `WorkbenchDefaults` supplies the same published use-case/test-definition/
+ontology sources the GUI shows (fetched and cached by `CachedResourceResolver` via
+`ConfigLoader.loadForCliRun`) and the same preselected use case
+(`WorkbenchDefaults.preferredUseCaseId`, "Spatial-Temporal Patterns" if available). The dataset
+path is validated against the plain `ConfigLoader.load` *before* any source is fetched, so a
+mistyped path fails fast and offline — keep that ordering, it is what keeps the unit tests from
+touching the network.
+
 Configuration defaults live in `src/main/resources/application.properties`
-(`bdq.usecase.file`, `bdq.rdf.files`, `bdq.dataset`, `bdq.usecase.id`, `bdq.discovery.packages`,
-`bdq.threads`, `bdq.execution.dedup`) and are merged with CLI/GUI overrides by `ConfigLoader`. By default the GUI fetches
-and caches use-case/test-definition/ontology RDF from `bdq.tdwg.org` (`CachedResourceResolver`);
-RDF/XML, Turtle, and JSON-LD serializations are all supported. Logging is DEBUG-by-default to the
+(`bdq.usecase.file`, `bdq.rdf.files`, `bdq.dataset`, `bdq.dataset.table`, `bdq.usecase.id`,
+`bdq.discovery.packages`, `bdq.threads`, `bdq.execution.dedup`) and are merged with CLI/GUI
+overrides by `ConfigLoader`. `bdq.usecase.file` and `bdq.rdf.files` ship blank, which means "use
+the `WorkbenchDefaults` published sources"; set either to a local path or an HTTP URL to pin a
+run. `bdq.dataset.table` (CLI `--dataset-table`, GUI advanced options) names which table of a
+multi-table dataset to run against. Both entry points fetch and cache use-case/test-definition/
+ontology RDF from `bdq.tdwg.org` through `CachedResourceResolver`; RDF/XML, Turtle, and JSON-LD
+serializations are all supported. Logging is DEBUG-by-default to the
 console via `src/main/resources/logback.xml`.
 
 ## Architecture
@@ -80,6 +96,27 @@ understanding how the stages connect — read its class Javadoc first. The pipel
    escapes and remote URLs are rejected, not resolved. Both ingestors share
    `DelimitedRecordReader.prepare` (BOM + declared header lines) and report parse failures
    against the offending data file rather than the archive/manifest as a whole.
+
+   **Which table gets run.** A dataset offers several tables — a DwC-A's `<core>` and each
+   `<extension>`, a data package's resources — and neither the declared core nor the first
+   resource is reliably the one a use case is about (a sample-based archive declares `Event` as
+   its core and carries occurrences in an extension; resource order in a manifest is
+   meaningless). `CoreTableSelector` ranks the `CoreTableCandidate`s each ingestor enumerates by
+   `DatasetRowType` priority (`OCCURRENCE` > `TAXON` > `EVENT` > `OTHER`, since the ratified BDQ
+   tests are predominantly occurrence-level), preferring a declared core on ties and falling back
+   to declaration order; `bdq.dataset.table` overrides the ranking outright. Row type is
+   identified from the strongest signal available: DwC-A `rowType`, else file name, else declared
+   terms; for a data package, `resource.name`, else the table schema reference (DwC-DP publishes
+   per-table schema URLs), else file name, else `schema.fields` names. Term-based inference needs
+   at least two discriminating terms and an outright winner, since an occurrence table commonly
+   carries a `taxonID`. Selecting an extension logs a warning: it is read standalone, **not**
+   joined to its core rows — see item 3 under "Significant work yet to be done".
+
+   Record IDs come from the descriptor's declared key (`<id index>`, `schema.primaryKey`), else
+   the selected table's conventional identifier for its row type (`occurrenceID`/`taxonID`/
+   `eventID`), else `id`/`occurrenceID`, else a synthesized `row-<n>`. A column that is present
+   but empty counts as absent at every step — published archives do carry an unpopulated `id`
+   column, and taking it at face value gave every record the same empty ID.
 2. **`rdf_policy`** — `PolicyResolverService` resolves a use-case identifier into an
    `ExecutionPlan` (the ordered, phase-tagged list of tests the use case calls for), reading the
    use-case XML and the `bdqtest.ttl`/`bdqffdq.owl` RDF definitions via `BdqSpecificationIndex` and
@@ -189,7 +226,12 @@ one of those upstream libraries than in the discovery/binding/execution code her
 ### GUI
 
 `BdqWorkbenchGui` is the desktop entry point (dataset file picker, use-case selection, advanced
-options for custom use-case/test-definition/ontology sources, discovery packages, thread count).
+options for custom use-case/test-definition/ontology sources, dataset table, discovery packages,
+thread count). `BdqWorkbenchGui.launch(overrides)` takes the raw CLI override map so `--gui`
+seeds the form; the source fields show source *strings* (URL or path) while `AppConfig` holds the
+resolved local paths, which is why those fields are seeded from the overrides rather than from
+`AppConfig`.
+
 `BindingReviewTableModel` backs the preflight review grid. `ExecutionProgressTracker`/
 `ExecutionProgressSnapshot` back live per-phase progress and response/result counters during a
 run.
@@ -210,6 +252,16 @@ run.
    `Issue` context class is missing the no-arg constructor its sibling context classes
    (`Measure`/`Validation`/`Amendment`) have, which breaks RDFBeans deserialization if it's ever
    attached to a saved `IssueResponse`.
+3. Non-flat data. `CoreTableSelector` picks one table and reads it on its own; it does not follow
+   a DwC-A extension's `coreid` or a data package's foreign keys back to the related rows. This
+   matters because DwC-DP normalizes a star schema — `basisOfRecord` on occurrence,
+   `scientificName` on identification/taxon, coordinates on event — so tests whose information
+   elements span tables see only what the selected table carries. Flattening is not just an
+   ingest question: an occurrence core with a related taxon record may call for evaluating taxon
+   terms in the core *and* a multiplicity of related terms in the related table, which the RDF
+   report can express but a flat XLSX sheet cannot. The bdqffdq ontology supports this
+   conceptually and leaves the representation to implementations, so this needs a decision about
+   how the workbench models and reports non-flat data before any ingest work follows from it.
 
 ## Development
 

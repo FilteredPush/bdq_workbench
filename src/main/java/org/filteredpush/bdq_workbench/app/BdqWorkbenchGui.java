@@ -124,9 +124,9 @@ final class BdqWorkbenchGui {
     private static final Logger LOG = LoggerFactory.getLogger(BdqWorkbenchGui.class);
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
-    private static final String DEFAULT_USECASE_SOURCE = "https://bdq.tdwg.org/draft/dist/bdquc.xml";
-    private static final String DEFAULT_TEST_DEFINITIONS_SOURCE = "https://bdq.tdwg.org/draft/dist/bdqtest.ttl";
-    private static final String DEFAULT_ONTOLOGY_SOURCE = "https://bdq.tdwg.org/draft/vocabulary/bdqffdq.ttl";
+    private static final String DEFAULT_USECASE_SOURCE = WorkbenchDefaults.USE_CASE_SOURCE;
+    private static final String DEFAULT_TEST_DEFINITIONS_SOURCE = WorkbenchDefaults.TEST_DEFINITIONS_SOURCE;
+    private static final String DEFAULT_ONTOLOGY_SOURCE = WorkbenchDefaults.ONTOLOGY_SOURCE;
 
     /** Utility class; not instantiable. */
     private BdqWorkbenchGui() {
@@ -138,14 +138,20 @@ final class BdqWorkbenchGui {
      * Swing event dispatch thread, and shows it. Startup failures are logged and reported to the
      * user in a dialog rather than propagated, since there is no console the user is expected to
      * be watching.
+     *
+     * <p>{@code overrides} carries any settings the user gave on the command line alongside
+     * {@code --gui}, so the window opens with those values in its fields instead of the
+     * built-in defaults.
+     *
+     * @param overrides property-name-keyed values to seed the form with, empty for the defaults
      */
-    static void launch() {
+    static void launch(Map<String, String> overrides) {
         LOG.debug("Scheduling BDQ Workbench GUI startup");
         SwingUtilities.invokeLater(() -> {
             try {
                 ConfigLoader loader = new ConfigLoader();
-                AppConfig defaults = loader.load(Map.of());
-                createFrame(defaults).setVisible(true);
+                AppConfig defaults = loader.load(overrides);
+                createFrame(defaults, overrides).setVisible(true);
                 LOG.info("BDQ Workbench GUI started");
             } catch (Exception e) {
                 LOG.error("Unable to start BDQ Workbench GUI", e);
@@ -166,9 +172,11 @@ final class BdqWorkbenchGui {
      *
      * @param defaults initial field values (dataset path, use case ID, discovery packages,
      *     thread count) loaded before the window is shown
+     * @param overrides raw command line values used to seed the resource source fields, whose
+     *     contents are source strings rather than the resolved paths {@code defaults} holds
      * @return the fully constructed, not-yet-visible application frame
      */
-    private static JFrame createFrame(AppConfig defaults) {
+    private static JFrame createFrame(AppConfig defaults, Map<String, String> overrides) {
         JFrame frame = new JFrame("BDQ Workbench");
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         frame.setSize(980, 640);
@@ -312,7 +320,8 @@ final class BdqWorkbenchGui {
         advanced.setLayout(new BoxLayout(advanced, BoxLayout.Y_AXIS));
         advanced.setVisible(false);
 
-        JTextField useCaseSource = addField(advanced, "Use case file/URL", DEFAULT_USECASE_SOURCE);
+        JTextField useCaseSource = addField(advanced, "Use case file/URL",
+                overrides.getOrDefault("bdq.usecase.file", DEFAULT_USECASE_SOURCE));
         JButton loadUseCases = new JButton("Load use cases");
         JButton pickUseCaseFile = new JButton("Pick use case file");
         JPanel useCaseButtons = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
@@ -320,7 +329,8 @@ final class BdqWorkbenchGui {
         useCaseButtons.add(pickUseCaseFile);
         advanced.add(useCaseButtons);
 
-        JTextField testDefinitionsSource = addField(advanced, "Test definitions file/URL", DEFAULT_TEST_DEFINITIONS_SOURCE);
+        JTextField testDefinitionsSource = addField(advanced, "Test definitions file/URL",
+                firstRdfSource(overrides, DEFAULT_TEST_DEFINITIONS_SOURCE));
         JButton pickTestDefinitionsFile = new JButton("Pick test definitions file");
         JButton loadTests = new JButton("Load tests");
         JPanel testDefinitionsButtons = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
@@ -336,7 +346,12 @@ final class BdqWorkbenchGui {
         advanced.add(testDefinitionLoadStatus);
 
         JTextField additionalTestDefinitions = addField(advanced, "Additional test definition files/URLs (comma-separated)", "");
-        JTextField ontologySource = addField(advanced, "BDQ FFDQ ontology file/URL", DEFAULT_ONTOLOGY_SOURCE);
+        JTextField ontologySource = addField(advanced, "BDQ FFDQ ontology file/URL",
+                secondRdfSource(overrides, DEFAULT_ONTOLOGY_SOURCE));
+        JTextField datasetTable = addField(
+                advanced,
+                "Dataset table (blank = choose automatically)",
+                defaults.datasetTable());
         JTextField discoveryPackages = addField(
                 advanced,
                 "Discovery packages (comma-separated)",
@@ -489,6 +504,7 @@ final class BdqWorkbenchGui {
                             dataset.field().getText().trim(),
                             selectedUseCaseId(useCaseChoice),
                             configuredRecordFilters[0],
+                            datasetTable.getText().trim(),
                             useCaseSource.getText().trim(),
                             testDefinitionsSource.getText().trim(),
                             additionalTestDefinitions.getText().trim(),
@@ -1178,6 +1194,8 @@ final class BdqWorkbenchGui {
      * @param selectedUseCaseId ID of the use case chosen in the combo box
      * @param recordFilters record-filter field value in {@code field=value1|value2; field2=value}
      *     form
+     * @param datasetTable which of the dataset's tables to run against, named by location,
+     *     resource name or Darwin Core row type; blank to let the ingestor choose
      * @param useCaseSource use case RDF file/URL field value
      * @param testDefinitionsSource primary test definitions file/URL field value
      * @param additionalTestDefinitions comma-separated extra test definition files/URLs
@@ -1193,6 +1211,7 @@ final class BdqWorkbenchGui {
             String dataset,
             String selectedUseCaseId,
             String recordFilters,
+            String datasetTable,
             String useCaseSource,
             String testDefinitionsSource,
             String additionalTestDefinitions,
@@ -1227,7 +1246,8 @@ final class BdqWorkbenchGui {
                 List.copyOf(packages),
                 parseThreads(threads),
                 dedupEnabled,
-                RecordFilterSpec.parse(recordFilters));
+                RecordFilterSpec.parse(recordFilters),
+                datasetTable);
     }
 
     /**
@@ -1383,20 +1403,33 @@ final class BdqWorkbenchGui {
      * @return the preferred default use case ID, or {@code ""} if no use cases are available
      */
     private static String preferredDefaultUseCaseId(List<UseCase> useCases, String configuredDefaultUseCaseId) {
-        if (configuredDefaultUseCaseId != null && !configuredDefaultUseCaseId.isBlank()) {
-            for (UseCase useCase : useCases) {
-                if (configuredDefaultUseCaseId.equals(useCase.id())) {
-                    return useCase.id();
-                }
-            }
-        }
-        for (UseCase useCase : useCases) {
-            String label = useCase.label();
-            if (label != null && "Spatial-Temporal Patterns".equalsIgnoreCase(label.trim())) {
-                return useCase.id();
-            }
-        }
-        return useCases.isEmpty() ? "" : useCases.get(0).id();
+        return WorkbenchDefaults.preferredUseCaseId(useCases, configuredDefaultUseCaseId);
+    }
+
+    /**
+     * Returns the first comma-separated RDF source a command line run supplied, for the primary
+     * test definitions field.
+     *
+     * @param overrides raw command line values
+     * @param fallback the value to use when no RDF sources were supplied
+     * @return the source to show in the test definitions field
+     */
+    private static String firstRdfSource(Map<String, String> overrides, String fallback) {
+        List<String> sources = splitCsv(overrides.getOrDefault("bdq.rdf.files", ""));
+        return sources.isEmpty() ? fallback : sources.get(0);
+    }
+
+    /**
+     * Returns the second comma-separated RDF source a command line run supplied, for the
+     * ontology field.
+     *
+     * @param overrides raw command line values
+     * @param fallback the value to use when fewer than two RDF sources were supplied
+     * @return the source to show in the ontology field
+     */
+    private static String secondRdfSource(Map<String, String> overrides, String fallback) {
+        List<String> sources = splitCsv(overrides.getOrDefault("bdq.rdf.files", ""));
+        return sources.size() < 2 ? fallback : sources.get(1);
     }
 
     /**
@@ -2055,39 +2088,7 @@ final class BdqWorkbenchGui {
      * @return the cache file name, e.g. {@code "bdqtest-cached-12345.ttl"}
      */
     private static String cacheNameFor(String source) {
-        String baseName = "resource";
-        try {
-            String uriPath = java.net.URI.create(source).getPath();
-            if (uriPath != null && !uriPath.isBlank()) {
-                baseName = Path.of(uriPath).getFileName().toString();
-            }
-        } catch (Exception ignored) {
-            // source is not a URI, treat as local path
-        }
-        if ("resource".equals(baseName) && source != null && !source.isBlank()) {
-            try {
-                baseName = Path.of(source).getFileName().toString();
-            } catch (Exception ignored) {
-                // keep fallback
-            }
-        }
-        if (baseName.contains(".")) {
-            baseName = baseName.substring(0, baseName.lastIndexOf('.'));
-        }
-        baseName = baseName.toLowerCase().replaceAll("[^a-z0-9._-]+", "-").replaceAll("(^-+|-+$)", "");
-        if (baseName.isBlank()) {
-            baseName = "resource";
-        }
-        int hash = Math.abs(source.hashCode());
-        String extension = ".rdf";
-        int dot = source.lastIndexOf('.');
-        if (dot >= 0 && dot < source.length() - 1) {
-            String candidate = source.substring(dot).toLowerCase();
-            if (candidate.matches("\\.[a-z0-9]{1,8}")) {
-                extension = candidate;
-            }
-        }
-        return baseName + "-cached-" + hash + extension;
+        return CachedResourceResolver.cacheNameFor(source);
     }
 
     private static void setStatus(JTextArea statusArea, String message) {
