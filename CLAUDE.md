@@ -58,7 +58,28 @@ understanding how the stages connect — read its class Javadoc first. The pipel
 
 1. **`ingest`** — `IngestService` turns a DwC-A zip or Data Package into a `RecordDataset` of
    `CanonicalRecord`s (id + Darwin Core term map). `DwcArchiveIngestor` and `DataPackageIngestor`
-   are the two format-specific readers.
+   are the two format-specific readers. `DwcArchiveIngestor` parses the archive's `meta.xml`
+   (`DwcArchiveMetaParser` → `DwcArchiveCoreMeta`) and reads the core exactly as declared: core
+   file location(s), encoding, `fieldsTerminatedBy`, `fieldsEnclosedBy`, `ignoreHeaderLines`, and
+   the per-column Darwin Core terms (column names are the term IRIs' local names, so they don't
+   depend on the file's header row; `<field default=...>` with no index becomes a constant term on
+   every record). Honoring `fieldsEnclosedBy` matters most: published archives (GBIF downloads
+   included) overwhelmingly declare `fieldsEnclosedBy=""`, and their data contains bare `"`
+   characters, so parsing them as if `"` encapsulated fields either throws
+   `CSVException: Invalid character between encapsulated token and delimiter` at the first
+   offending row or — once Commons CSV is configured leniently — silently merges every following
+   row into one field. Archives with no usable `meta.xml` fall back to the old convention
+   (`occurrence.txt`, else the first `.txt` entry, read as UTF-8 TDF with a header row).
+   `DataPackageIngestor` does the same for the Frictionless side (`DataPackageDialectParser` →
+   `DataPackageResourceMeta`): the resource's `path` (single or multipart), `encoding`, table
+   `dialect` (`delimiter`, `quoteChar`, `escapeChar`/`doubleQuote`, `commentChar`,
+   `nullSequence`, `skipInitialSpace`, `header`/`headerRows`, inline or referenced by file path)
+   and `schema.fields[].name` for column names. Unstated properties fall back to the
+   Frictionless table dialect defaults, which are the comma/quote/header conventions the ingestor
+   assumed before. Resource paths must stay inside the package directory — absolute paths, `..`
+   escapes and remote URLs are rejected, not resolved. Both ingestors share
+   `DelimitedRecordReader.prepare` (BOM + declared header lines) and report parse failures
+   against the offending data file rather than the archive/manifest as a whole.
 2. **`rdf_policy`** — `PolicyResolverService` resolves a use-case identifier into an
    `ExecutionPlan` (the ordered, phase-tagged list of tests the use case calls for), reading the
    use-case XML and the `bdqtest.ttl`/`bdqffdq.owl` RDF definitions via `BdqSpecificationIndex` and

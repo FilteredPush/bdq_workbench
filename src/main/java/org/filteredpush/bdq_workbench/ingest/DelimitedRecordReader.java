@@ -23,11 +23,13 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
+import org.apache.commons.csv.CSVRecord;
 import org.filteredpush.bdq_workbench.model.CanonicalRecord;
 import org.filteredpush.bdq_workbench.model.RecordDataset;
 
@@ -39,6 +41,10 @@ import org.filteredpush.bdq_workbench.model.RecordDataset;
  * to pass a format configured with the leniency appropriate for the source they are reading.
  */
 final class DelimitedRecordReader {
+
+	/** Unicode byte order mark, which some producers write at the start of a text file. */
+	private static final int BYTE_ORDER_MARK = '﻿';
+
 	/** Utility class; not instantiable. */
 	private DelimitedRecordReader() {
 	}
@@ -55,6 +61,54 @@ final class DelimitedRecordReader {
 		 * @throws IOException if the source cannot be opened
 		 */
 		BufferedReader open() throws IOException;
+	}
+
+	/**
+	 * Positions a freshly opened reader at the first line the parser should see.
+	 *
+	 * <p>Consumes a leading byte order mark if the source has one, then the requested number of
+	 * leading lines. Callers use this for header lines their format descriptor declares but
+	 * Commons CSV cannot skip itself, and for sources whose column names come from a descriptor
+	 * rather than from the file.
+	 *
+	 * @param reader a reader positioned at the start of the source; closed if preparation fails
+	 * @param linesToSkip the number of leading lines to consume, zero or negative for none
+	 * @return the same reader, positioned at the first line to parse
+	 * @throws IOException if the source cannot be read
+	 */
+	static BufferedReader prepare(BufferedReader reader, int linesToSkip) throws IOException {
+		try {
+			reader.mark(1);
+			if (reader.read() != BYTE_ORDER_MARK) {
+				reader.reset();
+			}
+			for (int line = 0; line < linesToSkip; line++) {
+				if (reader.readLine() == null) {
+					break;
+				}
+			}
+			return reader;
+		} catch (IOException | RuntimeException e) {
+			reader.close();
+			throw e;
+		}
+	}
+
+	/**
+	 * Counts the columns in the source's first record, for sources that carry no header and no
+	 * descriptor naming their columns.
+	 *
+	 * @param readerSupplier supplies a fresh reader for the source
+	 * @param csvFormat a header-less format matching the source's dialect
+	 * @return the number of columns in the first record, or zero if the source has no records
+	 * @throws IOException if the source cannot be opened or read
+	 */
+	static int countFirstRecordColumns(ReaderSupplier readerSupplier, CSVFormat csvFormat) throws IOException {
+		try (BufferedReader reader = readerSupplier.open();
+				CSVParser parser = csvFormat.parse(reader)) {
+			Iterator<CSVRecord> rows = parser.iterator();
+			return rows.hasNext() ? rows.next().size() : 0;
+		}
 	}
 
 	/**
