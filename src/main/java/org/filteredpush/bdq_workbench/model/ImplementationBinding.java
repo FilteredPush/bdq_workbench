@@ -77,13 +77,17 @@ public record ImplementationBinding(
      * <p>The signature uses only Java parameter types because those are stable across discovery,
      * explicit mappings, and runtime reflective lookup. The richer role/source metadata remains on
      * {@link #parameterBindings()} and is checked separately when resolving a discovered
-     * implementation at execution time.
+     * implementation at execution time. When no bound-parameter metadata is present, this falls
+     * back to the legacy {@code class#method} form rather than guessing an overload signature.
      *
-     * @return {@code "<implementationClass>#<implementationMethod>(type1, type2, ...)"} or the
-     *     no-argument form when the binding has no parameters
+     * @return {@code "<implementationClass>#<implementationMethod>(type1, type2, ...)"} when
+     *     bound-parameter metadata is available, otherwise the legacy
+     *     {@code "<implementationClass>#<implementationMethod>"} form
      */
     public String fullImplementationSignature() {
-        return legacyImplementationKey() + parameterTypeSignature();
+        return parameterBindings == null || parameterBindings.isEmpty()
+                ? legacyImplementationKey()
+                : legacyImplementationKey() + parameterTypeSignature();
     }
 
     /**
