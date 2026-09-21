@@ -133,7 +133,24 @@ class WorkbenchFacadeTest {
                             List.of(missingImplementation, missingTerm),
                             List.of()),
                     () -> List.of(),
-                    (tests, discovered, explicitMapping, availableTerms) -> bindingResult,
+                    new TestBindingService() {
+                        @Override
+                        public TestBindingResult bind(
+                                List<TestDefinition> tests,
+                                List<DiscoveredImplementation> discovered,
+                                Map<String, String> explicitMapping) {
+                            return bindingResult;
+                        }
+
+                        @Override
+                        public TestBindingResult bind(
+                                List<TestDefinition> tests,
+                                List<DiscoveredImplementation> discovered,
+                                Map<String, String> explicitMapping,
+                                java.util.Collection<String> availableTerms) {
+                            return bindingResult;
+                        }
+                    },
                     (dataset, bindings, discovered) -> List.of(),
                     new ReportingService(List.of()),
                     new DefaultRecordFilterService());
@@ -192,7 +209,24 @@ class WorkbenchFacadeTest {
                             List.of(test),
                             List.of()),
                     () -> List.of(),
-                    (tests, discovered, explicitMapping, availableTerms) -> bindingResult,
+                    new TestBindingService() {
+                        @Override
+                        public TestBindingResult bind(
+                                List<TestDefinition> tests,
+                                List<DiscoveredImplementation> discovered,
+                                Map<String, String> explicitMapping) {
+                            return bindingResult;
+                        }
+
+                        @Override
+                        public TestBindingResult bind(
+                                List<TestDefinition> tests,
+                                List<DiscoveredImplementation> discovered,
+                                Map<String, String> explicitMapping,
+                                java.util.Collection<String> availableTerms) {
+                            return bindingResult;
+                        }
+                    },
                     (dataset, bindings, discovered) -> List.of(),
                     new ReportingService(List.of()),
                     new DefaultRecordFilterService());
