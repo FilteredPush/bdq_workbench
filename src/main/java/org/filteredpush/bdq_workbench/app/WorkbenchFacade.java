@@ -42,6 +42,7 @@ import org.filteredpush.bdq_workbench.model.OutcomeStatus;
 import org.filteredpush.bdq_workbench.model.PreparedRun;
 import org.filteredpush.bdq_workbench.model.RecordFilterSummary;
 import org.filteredpush.bdq_workbench.model.Response;
+import org.filteredpush.bdq_workbench.model.TestType;
 import org.filteredpush.bdq_workbench.rdf_policy.PolicyResolverService;
 import org.filteredpush.bdq_workbench.reporting.ReportingService;
 import org.filteredpush.bdq_workbench.test_discovery.DiscoveredImplementation;
@@ -219,7 +220,7 @@ public class WorkbenchFacade {
      */
     private static Comparator<BindingReview> bindingDiagnosticComparator() {
         return Comparator
-                .comparingInt((BindingReview review) -> review.bindingStatus() == BindingStatus.TERM_MISSING ? 1 : 0)
+                .comparingInt(WorkbenchFacade::bindingDiagnosticCategory)
                 .thenComparing((BindingReview review) -> review.test().phase())
                 .thenComparing(review -> review.test().id());
     }
@@ -237,9 +238,27 @@ public class WorkbenchFacade {
         StringBuilder builder = new StringBuilder();
         builder.append("BDQ Workbench binding diagnostics\n");
         builder.append("Use case: ").append(plan.useCase().id()).append(" (").append(plan.useCase().label()).append(")\n");
-        builder.append("Entries are ordered with binding/configuration errors first, followed by missing-input-term problems.\n\n");
-        appendBindingDiagnosticSection(builder, "Binding/configuration errors", diagnosticReviews, false);
-        appendBindingDiagnosticSection(builder, "Missing input term problems", diagnosticReviews, true);
+        builder.append("Problem summary\n");
+        builder.append(" - Single-record test errors: ")
+                .append(countBindingDiagnostics(diagnosticReviews, 0))
+                .append('\n');
+        builder.append(" - Single-record test binding problems: ")
+                .append(countBindingDiagnostics(diagnosticReviews, 1))
+                .append('\n');
+        builder.append(" - Multi-record measure downstream errors/binding problems: ")
+                .append(countBindingDiagnostics(diagnosticReviews, 2))
+                .append('\n');
+        builder.append(" - Missing input term problems: ")
+                .append(countBindingDiagnostics(diagnosticReviews, 3))
+                .append('\n');
+        builder.append(" - Total diagnostics entries: ")
+                .append(diagnosticReviews.size())
+                .append("\n\n");
+        builder.append("Entries are ordered with single-record test errors first, then single-record binding problems, then downstream multi-record measure issues, and finally missing-input-term problems.\n\n");
+        appendBindingDiagnosticSection(builder, "Single-record test errors", diagnosticReviews, 0);
+        appendBindingDiagnosticSection(builder, "Single-record test binding problems", diagnosticReviews, 1);
+        appendBindingDiagnosticSection(builder, "Multi-record measure downstream errors/binding problems", diagnosticReviews, 2);
+        appendBindingDiagnosticSection(builder, "Missing input term problems", diagnosticReviews, 3);
         return builder.toString();
     }
 
@@ -249,16 +268,15 @@ public class WorkbenchFacade {
      * @param builder report buffer under construction
      * @param title section title
      * @param reviews all candidate reviews
-     * @param termMissingSection whether to append the missing-term section ({@code true}) or the
-     *     non-term error section ({@code false})
+     * @param category the diagnostics category to append
      */
     private static void appendBindingDiagnosticSection(
             StringBuilder builder,
             String title,
             List<BindingReview> reviews,
-            boolean termMissingSection) {
+            int category) {
         List<BindingReview> sectionReviews = reviews.stream()
-                .filter(review -> (review.bindingStatus() == BindingStatus.TERM_MISSING) == termMissingSection)
+                .filter(review -> bindingDiagnosticCategory(review) == category)
                 .toList();
         if (sectionReviews.isEmpty()) {
             return;
@@ -288,6 +306,50 @@ public class WorkbenchFacade {
             review.diagnostics().forEach(diagnostic -> builder.append("    * ").append(diagnostic).append('\n'));
         }
         builder.append('\n');
+    }
+
+    /**
+     * Counts how many diagnostics reviews fall into one category.
+     *
+     * @param reviews the diagnostic reviews to count
+     * @param category the category identifier returned by {@link #bindingDiagnosticCategory}
+     * @return the number of reviews in that category
+     */
+    private static long countBindingDiagnostics(List<BindingReview> reviews, int category) {
+        return reviews.stream()
+                .filter(review -> bindingDiagnosticCategory(review) == category)
+                .count();
+    }
+
+    /**
+     * Classifies one binding diagnostic into its report ordering bucket.
+     *
+     * @param review the binding review to classify
+     * @return 0 for single-record errors, 1 for single-record binding problems, 2 for multi-record
+     *     measure downstream problems, 3 for missing-input-term problems
+     */
+    private static int bindingDiagnosticCategory(BindingReview review) {
+        if (review.bindingStatus() == BindingStatus.TERM_MISSING) {
+            return 3;
+        }
+        if (isMultiRecordMeasure(review)) {
+            return 2;
+        }
+        if (review.implementationStatus() != ImplementationStatus.FOUND) {
+            return 0;
+        }
+        return 1;
+    }
+
+    /**
+     * Reports whether a binding review describes a multi-record measure.
+     *
+     * @param review the binding review to inspect
+     * @return {@code true} for multi-record measure tests, {@code false} otherwise
+     */
+    private static boolean isMultiRecordMeasure(BindingReview review) {
+        return review.test().type() == TestType.MEASURE
+                || (review.test().label() != null && review.test().label().startsWith("MULTIRECORD_"));
     }
 
     /**

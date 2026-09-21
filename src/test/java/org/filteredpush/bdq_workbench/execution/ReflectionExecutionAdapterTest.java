@@ -152,6 +152,52 @@ class ReflectionExecutionAdapterTest {
     }
 
     @Test
+    void treatsMissingInputTermAsEmptyStringAtInvocationTime() throws Exception {
+        ReflectionExecutionAdapter adapter = new ReflectionExecutionAdapter();
+        Method method = Impl.class.getMethod("echo", String.class);
+        MethodParameter actedUpon = new MethodParameter(0, "p0", ParameterRole.ACTED_UPON, "dwc:countryCode", String.class.getName(), true);
+        ImplementationBinding binding = new ImplementationBinding(
+                "urn:test:missing-term",
+                TestType.VALIDATION,
+                Impl.class.getName(),
+                "echo",
+                Phase.PRE_AMENDMENT,
+                Map.of(),
+                BindingStatus.BOUND,
+                ParameterizationCapability.DEFAULT_ONLY,
+                "default",
+                true,
+                List.of(new BoundMethodParameter(
+                        actedUpon,
+                        "dwc:countryCode",
+                        "",
+                        true,
+                        "Term acted_upon/consulted absent in input data: dwc:countryCode; binding as an empty string")),
+                List.of());
+        DiscoveredImplementation implementation = new DiscoveredImplementation(
+                "urn:test:missing-term",
+                null,
+                TestType.VALIDATION,
+                Phase.PRE_AMENDMENT,
+                Impl.class.getName(),
+                "echo",
+                null,
+                List.of(actedUpon),
+                new Impl(),
+                method);
+
+        ReflectionExecutionAdapter.ExecutionTrace trace = adapter.executeWithTrace(
+                new CanonicalRecord("r1", Map.of("dwc:eventDate", "2025-01-01")),
+                binding,
+                implementation);
+
+        assertThat(trace.response().status()).isEqualTo(OutcomeStatus.PASSED);
+        assertThat(trace.argumentTraces()).singleElement().satisfies(argument ->
+                assertThat(argument.rawValue()).isEqualTo(""));
+        assertThat(trace.response().responseResult()).isEqualTo("");
+    }
+
+    @Test
     void returnsErrorResponseWhenBoundParameterCannotBeConverted() throws Exception {
         ReflectionExecutionAdapter adapter = new ReflectionExecutionAdapter();
         Method method = Impl.class.getMethod("validate", String.class, Integer.class);
@@ -257,6 +303,10 @@ class ReflectionExecutionAdapterTest {
 
         public StubDQResponse.StubDQResponseWithoutValue prerequisiteOnly(String eventDate) {
             return new StubDQResponse.StubDQResponseWithoutValue("INTERNAL_PREREQUISITES_NOT_MET", "{}", null);
+        }
+
+        public StubDQResponse echo(String value) {
+            return new StubDQResponse("RUN_HAS_RESULT", value, value);
         }
 
         public StubDQResponse validateFour(String decimalLatitude, String decimalLongitude, String countryCode, String sourceAuthority) {

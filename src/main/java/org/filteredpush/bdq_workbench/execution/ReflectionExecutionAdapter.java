@@ -335,7 +335,7 @@ public class ReflectionExecutionAdapter implements ExecutionAdapter {
         List<ArgumentTrace> argumentTraces = new ArrayList<>();
         for (BoundMethodParameter parameter : binding.parameterBindings()) {
             String rawValue = switch (parameter.parameter().role()) {
-                case ACTED_UPON, CONSULTED -> recordTerms.get(parameter.resolvedSource());
+                case ACTED_UPON, CONSULTED -> java.util.Objects.toString(recordTerms.get(parameter.resolvedSource()), "");
                 case PARAMETER -> parameter.suppliedValue();
                 case LEGACY_RECORD -> recordTerms.toString();
                 case LEGACY_PARAMETERS -> binding.parameters().toString();

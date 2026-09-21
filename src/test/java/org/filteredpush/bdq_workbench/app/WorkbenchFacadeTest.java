@@ -101,11 +101,15 @@ class WorkbenchFacadeTest {
                     new CanonicalRecord("r1", Map.of("dwc:eventDate", "2025-01-01"))));
             TestDefinition missingImplementation =
                     new TestDefinition("urn:test:missing", "Missing impl", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of());
+            TestDefinition bindingProblem =
+                    new TestDefinition("urn:test:binding", "Binding problem", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of());
+            TestDefinition downstreamMeasure =
+                    new TestDefinition("urn:test:measure", "MULTIRECORD_MEASURE_QA_BINDING", TestType.MEASURE, Phase.PRE_AMENDMENT, Map.of());
             TestDefinition missingTerm =
                     new TestDefinition("urn:test:term", "Missing term", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of());
             TestBindingResult bindingResult = new TestBindingResult(
                     List.of(),
-                    List.of(missingImplementation, missingTerm),
+                    List.of(missingImplementation, bindingProblem, downstreamMeasure, missingTerm),
                     List.of(
                             new BindingReview(
                                     missingImplementation,
@@ -116,6 +120,24 @@ class WorkbenchFacadeTest {
                                     Map.of(),
                                     true,
                                     List.of("No implementation discovered for urn:test:missing")),
+                            new BindingReview(
+                                    bindingProblem,
+                                    ImplementationStatus.FOUND,
+                                    BindingStatus.UNBOUND,
+                                    ParameterizationCapability.DEFAULT_ONLY,
+                                    "example.Impl#binding()",
+                                    Map.of(),
+                                    true,
+                                    List.of("Missing parameter value for bdq:sourceAuthority")),
+                            new BindingReview(
+                                    downstreamMeasure,
+                                    ImplementationStatus.FOUND,
+                                    BindingStatus.UNBOUND,
+                                    ParameterizationCapability.DEFAULT_ONLY,
+                                    "built-in",
+                                    Map.of(),
+                                    true,
+                                    List.of("Built-in multi-record measure target is not runnable")),
                             new BindingReview(
                                     missingTerm,
                                     ImplementationStatus.FOUND,
@@ -129,8 +151,8 @@ class WorkbenchFacadeTest {
                     inputPath -> ingested,
                     useCaseId -> new ExecutionPlan(
                             new UseCase("uc1", "Use Case", "policy:1"),
-                            new Policy("policy:1", List.of(missingImplementation.id(), missingTerm.id())),
-                            List.of(missingImplementation, missingTerm),
+                            new Policy("policy:1", List.of(missingImplementation.id(), bindingProblem.id(), downstreamMeasure.id(), missingTerm.id())),
+                            List.of(missingImplementation, bindingProblem, downstreamMeasure, missingTerm),
                             List.of()),
                     () -> List.of(),
                     new TestBindingService() {
@@ -168,11 +190,20 @@ class WorkbenchFacadeTest {
             assertThat(Files.exists(diagnosticsPath)).isTrue();
             String diagnostics = Files.readString(diagnosticsPath);
             assertThat(diagnostics).contains("BDQ Workbench binding diagnostics");
-            assertThat(diagnostics).contains("Binding/configuration errors");
+            assertThat(diagnostics).contains("Problem summary");
+            assertThat(diagnostics).contains("Single-record test errors: 1");
+            assertThat(diagnostics).contains("Single-record test binding problems: 1");
+            assertThat(diagnostics).contains("Multi-record measure downstream errors/binding problems: 1");
+            assertThat(diagnostics).contains("Missing input term problems: 1");
+            assertThat(diagnostics).contains("Single-record test errors");
+            assertThat(diagnostics).contains("Single-record test binding problems");
+            assertThat(diagnostics).contains("Multi-record measure downstream errors/binding problems");
             assertThat(diagnostics).contains("Missing input term problems");
             assertThat(diagnostics).contains("No discovered implementation matched this policy test");
             assertThat(diagnostics).contains("The selected implementation requires one or more Darwin Core terms");
-            assertThat(diagnostics.indexOf("urn:test:missing")).isLessThan(diagnostics.indexOf("urn:test:term"));
+            assertThat(diagnostics.indexOf("urn:test:missing")).isLessThan(diagnostics.indexOf("urn:test:binding"));
+            assertThat(diagnostics.indexOf("urn:test:binding")).isLessThan(diagnostics.indexOf("urn:test:measure"));
+            assertThat(diagnostics.indexOf("urn:test:measure")).isLessThan(diagnostics.indexOf("urn:test:term"));
         } finally {
             System.setProperty("user.dir", originalUserDir);
         }

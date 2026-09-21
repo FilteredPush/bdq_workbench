@@ -195,7 +195,7 @@ class DefaultTestBindingServiceTest {
     }
 
     @Test
-    void reportsMissingDwCTermAsTermMissingDiagnostic() throws Exception {
+    void treatsMissingDwCTermAsEmptyStringBinding() throws Exception {
         DefaultTestBindingService service = new DefaultTestBindingService();
 
         DiscoveredImplementation discovered = new DiscoveredImplementation(
@@ -217,12 +217,15 @@ class DefaultTestBindingServiceTest {
                 Set.of("dwc:scientificName"));
 
         assertThat(result.bindings()).singleElement().satisfies(binding -> {
-            assertThat(binding.bindingStatus()).isEqualTo(BindingStatus.TERM_MISSING);
+            assertThat(binding.bindingStatus()).isEqualTo(BindingStatus.BOUND);
             assertThat(binding.diagnostics()).anyMatch(message -> message.contains(
-                    "TERM MISSING")
+                    "empty string")
                     && message.contains(
                     "Term acted_upon/consulted absent in input data: dwc:eventDate"));
+            assertThat(binding.parameterBindings()).singleElement().satisfies(parameter ->
+                    assertThat(parameter.resolvedSource()).isEqualTo("dwc:eventDate"));
         });
+        assertThat(result.unresolved()).isEmpty();
     }
 
     @Test

@@ -261,10 +261,10 @@ public class DefaultTestBindingService implements TestBindingService {
      * {@link org.filteredpush.bdq_workbench.model.BindingStatus} for the test.
      *
      * <p>The status starts as {@code BOUND} and is downgraded as unbound parameters are found:
-     * a missing acted-upon/consulted term downgrades to {@code TERM_MISSING} (or leaves
-     * {@code UNBOUND} if already set), any other unbound optional parameter downgrades to
-     * {@code PARTIAL}, and any unbound required parameter (other than a missing term) forces
-     * {@code UNBOUND}.
+     * an acted-upon/consulted term that is absent from the dataset is normally treated as a bound
+     * empty-string input, any other unbound optional parameter downgrades to {@code PARTIAL}, and
+     * any unbound required parameter forces {@code UNBOUND}. The {@code TERM_MISSING} status is
+     * still preserved if an acted-upon/consulted binding explicitly reports that condition.
      *
      * @param test the policy test being bound
      * @param chosen the implementation selected by {@link #selectCandidate}
@@ -341,7 +341,8 @@ public class DefaultTestBindingService implements TestBindingService {
      * layer supplies them directly. {@link ParameterRole#PARAMETER} parameters are resolved
      * against the test's supplied parameter values (falling back to the implementation default
      * when unsupplied and the type allows it). All other parameters (acted-upon/consulted terms)
-     * are resolved against the dataset's available terms via {@link #resolveTerm}.
+     * are resolved against the dataset's available terms; if no matching term exists, the binding
+     * is retained and the invocation will receive an empty string for that information element.
      *
      * @param test the policy test supplying parameter values
      * @param parameter the reflected parameter being bound
@@ -409,12 +410,22 @@ public class DefaultTestBindingService implements TestBindingService {
         }
         String resolvedField = resolution.preferredMatch();
         if (resolvedField == null) {
+            if (!isSupportedScalarType(parameter.typeName())) {
+                return new BoundMethodParameter(
+                        parameter,
+                        parameter.source(),
+                        null,
+                        false,
+                        "Unsupported parameter type " + parameter.typeName() + " for term " + parameter.source());
+            }
             return new BoundMethodParameter(
                     parameter,
                     parameter.source(),
-                    null,
-                    false,
-                    "TERM MISSING: Term acted_upon/consulted absent in input data: " + parameter.source());
+                    "",
+                    true,
+                    "Term acted_upon/consulted absent in input data: "
+                            + parameter.source()
+                            + "; binding as an empty string");
         }
         if (!isSupportedScalarType(parameter.typeName())) {
             return new BoundMethodParameter(
