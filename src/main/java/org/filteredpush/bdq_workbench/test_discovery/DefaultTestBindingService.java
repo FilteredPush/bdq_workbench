@@ -613,10 +613,8 @@ public class DefaultTestBindingService implements TestBindingService {
             CandidateAssessment right,
             boolean hasUserParameters) {
         Comparator<CandidateAssessment> comparator = Comparator
-                .comparing(CandidateAssessment::fullyCompatible)
-                .reversed()
-                .thenComparingInt(CandidateAssessment::exactMatchedParameterCount)
-                .reversed()
+                .comparing(CandidateAssessment::fullyCompatible, Comparator.reverseOrder())
+                .thenComparing(CandidateAssessment::exactMatchedParameterCount, Comparator.reverseOrder())
                 .thenComparingInt(CandidateAssessment::requiredMissingParameterCount)
                 .thenComparingInt(CandidateAssessment::unmatchedRdfParameterCount)
                 .thenComparingInt(CandidateAssessment::defaultedParameterCount);

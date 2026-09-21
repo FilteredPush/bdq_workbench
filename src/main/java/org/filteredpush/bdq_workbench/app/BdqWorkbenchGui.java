@@ -2549,9 +2549,9 @@ final class BdqWorkbenchGui {
                 preparedRun == null ? "pending" : "completed",
                 runnable + " runnable, " + unresolved + " unresolved",
                 preparedRun == null ? 0 : 100));
-        stages.add(workflowStageStatusForPhase(Phase.PRE_AMENDMENT, activePhase, runCompleted, runFailed));
-        stages.add(workflowStageStatusForPhase(Phase.AMENDMENT, activePhase, runCompleted, runFailed));
-        stages.add(workflowStageStatusForPhase(Phase.POST_AMENDMENT, activePhase, runCompleted, runFailed));
+        stages.add(workflowStageStatusForPhase(Phase.PRE_AMENDMENT, activePhase, exportRunning, runCompleted, runFailed));
+        stages.add(workflowStageStatusForPhase(Phase.AMENDMENT, activePhase, exportRunning, runCompleted, runFailed));
+        stages.add(workflowStageStatusForPhase(Phase.POST_AMENDMENT, activePhase, exportRunning, runCompleted, runFailed));
         stages.add(new WorkflowStageStatus(
                 "Export reports",
                 runCompleted ? "completed" : exportRunning ? "running" : runFailed ? "failed" : "pending",
@@ -2565,6 +2565,7 @@ final class BdqWorkbenchGui {
      *
      * @param phase the phase to render
      * @param activePhase the currently active phase, if any
+     * @param exportRunning whether stage 9 (report export/finalization) is in progress
      * @param runCompleted whether execution has completed
      * @param runFailed whether execution has failed
      * @return the formatted phase state for the workflow UI
@@ -2572,12 +2573,13 @@ final class BdqWorkbenchGui {
     private static WorkflowStageStatus workflowStageStatusForPhase(
             Phase phase,
             Phase activePhase,
+            boolean exportRunning,
             boolean runCompleted,
             boolean runFailed) {
         String state;
         String detail;
         int progressPercent;
-        if (runCompleted) {
+        if (runCompleted || exportRunning || (runFailed && activePhase == null)) {
             state = "completed";
             detail = "phase complete";
             progressPercent = 100;

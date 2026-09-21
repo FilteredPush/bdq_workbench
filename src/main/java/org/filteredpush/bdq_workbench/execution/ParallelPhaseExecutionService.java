@@ -351,8 +351,10 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
             ExecutorService executor) {
         List<RecordGroup> groups = groupsForBinding(binding, records, groupCache);
         List<DiscoveredImplementation> discoveredCandidates = discoveredByKey.getOrDefault(binding.legacyImplementationKey(), List.of());
-        DiscoveredImplementation implementation = resolveImplementation(binding, discoveredCandidates);
-        IllegalStateException resolutionError = implementation == null
+        DiscoveredImplementation implementation = discoveredCandidates.isEmpty()
+                ? null
+                : resolveImplementation(binding, discoveredCandidates);
+        IllegalStateException resolutionError = !discoveredCandidates.isEmpty() && implementation == null
                 ? new IllegalStateException(describeImplementationResolutionFailure(binding, discoveredCandidates))
                 : null;
         List<GroupInvocation> invocations = new ArrayList<>(groups.size());
