@@ -1000,9 +1000,11 @@ final class BdqWorkbenchGui {
         outputArea.setLineWrap(true);
         outputArea.setWrapStyleWord(true);
         installTextAreaClipboardSupport(outputArea);
-        boolean runnableInDialog = binding != null && !BuiltInMeasureSpec.isBuiltIn(binding);
+        boolean runnableInDialog = binding != null && binding.isRunnable() && !BuiltInMeasureSpec.isBuiltIn(binding);
         outputArea.setText(binding == null
                 ? "No runnable implementation is currently bound for this test.\n"
+                : !binding.isRunnable()
+                        ? "This test is mapped for diagnostics only and is not runnable with the current binding status.\n"
                 : BuiltInMeasureSpec.isBuiltIn(binding)
                         ? "This built-in multi-record measure is evaluated during the full run after matching validation responses are available.\n"
                         : "Use Run Test to execute this binding against each input record in isolation.\n");
@@ -1311,7 +1313,7 @@ final class BdqWorkbenchGui {
         int policyResolved = state.preparedRun().plan().tests().size();
         int policyUnresolved = state.preparedRun().plan().unresolvedTests().size();
         int bindingUnresolved = state.preparedRun().bindingResult().unresolved().size();
-        int runnable = state.preparedRun().bindingResult().bindings().size();
+        int runnable = state.preparedRun().bindingResult().runnableBindings().size();
         int policyTotal = policyResolved + policyUnresolved;
         RecordFilterSummary filterSummary = state.preparedRun().filterSummary();
 
@@ -1333,14 +1335,28 @@ final class BdqWorkbenchGui {
         state.preparedRun().plan().unresolvedTests().forEach(t -> labelsByTestId.put(t.id(), t.label()));
         state.preparedRun().bindingResult().unresolved().forEach(t -> labelsByTestId.put(t.id(), t.label()));
 
-        if (!state.preparedRun().bindingResult().bindings().isEmpty()) {
-            sb.append("Matched library mappings:\n");
-            state.preparedRun().bindingResult().bindings().forEach(b -> sb.append(" - ")
+        if (!state.preparedRun().bindingResult().runnableBindings().isEmpty()) {
+            sb.append("Runnable library mappings:\n");
+            state.preparedRun().bindingResult().runnableBindings().forEach(b -> sb.append(" - ")
                     .append(formatTestIdWithLabel(b.testId(), labelsByTestId.get(b.testId())))
                     .append(" -> ")
-                    .append(b.implementationClass())
-                    .append("#")
-                    .append(b.implementationMethod())
+                    .append(b.fullImplementationSignature())
+                    .append(" [")
+                    .append(b.bindingStatus())
+                    .append(", ")
+                    .append(b.methodSelection())
+                    .append("]")
+                    .append('\n'));
+        }
+        List<ImplementationBinding> diagnosticOnly = state.preparedRun().bindingResult().bindings().stream()
+                .filter(binding -> !binding.isRunnable())
+                .toList();
+        if (!diagnosticOnly.isEmpty()) {
+            sb.append("Mapped but not runnable (retained for diagnostics/unresolved reporting):\n");
+            diagnosticOnly.forEach(b -> sb.append(" - ")
+                    .append(formatTestIdWithLabel(b.testId(), labelsByTestId.get(b.testId())))
+                    .append(" -> ")
+                    .append(b.fullImplementationSignature())
                     .append(" [")
                     .append(b.bindingStatus())
                     .append(", ")
@@ -2194,10 +2210,19 @@ final class BdqWorkbenchGui {
     private static DiscoveredImplementation findImplementation(PreparedRun preparedRun, ImplementationBinding binding) {
         return preparedRun.discovered().stream()
                 .filter(discovered -> discovered.implementationClass().equals(binding.implementationClass())
-                        && discovered.implementationMethod().equals(binding.implementationMethod()))
+                        && discovered.implementationMethod().equals(binding.implementationMethod())
+                        && discovered.parameters().size() == binding.parameterBindings().size()
+                        && java.util.stream.IntStream.range(0, discovered.parameters().size()).allMatch(index -> {
+                            org.filteredpush.bdq_workbench.model.MethodParameter discoveredParameter = discovered.parameters().get(index);
+                            org.filteredpush.bdq_workbench.model.MethodParameter boundParameter = binding.parameterBindings().get(index).parameter();
+                            return discoveredParameter.index() == boundParameter.index()
+                                    && discoveredParameter.role() == boundParameter.role()
+                                    && java.util.Objects.equals(discoveredParameter.source(), boundParameter.source())
+                                    && java.util.Objects.equals(discoveredParameter.typeName(), boundParameter.typeName());
+                        }))
                 .findFirst()
                 .orElseThrow(() -> new AppException("No discovered implementation found for "
-                        + binding.implementationClass() + "#" + binding.implementationMethod()));
+                        + binding.fullImplementationSignature()));
     }
 
     private static java.util.Set<String> collectAvailableTerms(org.filteredpush.bdq_workbench.model.RecordDataset dataset) {
@@ -2323,7 +2348,7 @@ final class BdqWorkbenchGui {
         ExecutionPlan plan = preparedRun == null
                 ? new ExecutionPlan(new UseCase("", "", ""), new Policy("", List.of()), List.of(), List.of())
                 : preparedRun.plan();
-        int runnable = preparedRun == null ? 0 : preparedRun.bindingResult().bindings().size();
+        int runnable = preparedRun == null ? 0 : preparedRun.bindingResult().runnableBindings().size();
         int unresolved = preparedRun == null
                 ? 0
                 : preparedRun.plan().unresolvedTests().size() + preparedRun.bindingResult().unresolved().size();
@@ -2496,7 +2521,7 @@ final class BdqWorkbenchGui {
                 filterSummary.filteredRecordCount() + " kept, " + filterSummary.excludedRecordCount() + " excluded",
                 Color.decode("#1565c0")));
 
-        int runnable = preparedRun.bindingResult().bindings().size();
+        int runnable = preparedRun.bindingResult().runnableBindings().size();
         int unresolved = preparedRun.plan().unresolvedTests().size() + preparedRun.bindingResult().unresolved().size();
         panel.add(createVisualizationProgressRow(
                 "Runnable test bindings",
@@ -2868,7 +2893,7 @@ final class BdqWorkbenchGui {
         state[0] = new PreflightState(preparedRun);
         monitorHeader.setText(monitorHeaderText("Setup Tests", preparedRun));
         LOG.debug("Preflight mapping complete: {} runnable, {} unresolved",
-                state[0].preparedRun().bindingResult().bindings().size(),
+                state[0].preparedRun().bindingResult().runnableBindings().size(),
                 state[0].preparedRun().bindingResult().unresolved().size());
         setStatus(statusArea, renderPreflightMessage(state[0]));
         bindingGrid.setModel(new BindingReviewTableModel(state[0].preparedRun().bindingResult().reviews()));

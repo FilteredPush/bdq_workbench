@@ -20,14 +20,20 @@
 package org.filteredpush.bdq_workbench.execution;
 
 import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.security.CodeSource;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.StringJoiner;
 import org.filteredpush.bdq_workbench.model.BoundMethodParameter;
 import org.filteredpush.bdq_workbench.model.CanonicalRecord;
 import org.filteredpush.bdq_workbench.model.ImplementationBinding;
+import org.filteredpush.bdq_workbench.model.MethodParameter;
 import org.filteredpush.bdq_workbench.model.OutcomeStatus;
 import org.filteredpush.bdq_workbench.model.ParameterRole;
 import org.filteredpush.bdq_workbench.model.Response;
@@ -113,9 +119,7 @@ public class ReflectionExecutionAdapter implements ExecutionAdapter {
         if (implementation == null) {
             IllegalStateException error = new IllegalStateException(
                     "No discovered implementation metadata available for "
-                            + binding.implementationClass()
-                            + "#"
-                            + binding.implementationMethod());
+                            + binding.fullImplementationSignature());
             LOG.error("Unable to execute {}.{} for record {}: {}",
                     binding.implementationClass(), binding.implementationMethod(), record.id(), error.getMessage(), error);
             return new ExecutionTrace(
@@ -125,6 +129,7 @@ public class ReflectionExecutionAdapter implements ExecutionAdapter {
                     null);
         }
         try {
+            validateInvocation(binding, implementation);
             invocation = buildArguments(invocationTerms, binding);
             LOG.debug("Invoking {}.{} for record {} in phase {} with arguments {}",
                     binding.implementationClass(),
@@ -209,6 +214,104 @@ public class ReflectionExecutionAdapter implements ExecutionAdapter {
                     e.getClass().getName(),
                     e.toString());
         }
+    }
+
+    /**
+     * Validates that the binding still matches the discovered reflective method before invocation.
+     *
+     * @param binding the binding being invoked
+     * @param implementation the discovered implementation selected for it
+     * @throws IllegalStateException if the binding and discovered method disagree
+     */
+    private static void validateInvocation(
+            ImplementationBinding binding,
+            DiscoveredImplementation implementation) {
+        Method reflectedMethod = implementation.method();
+        List<BoundMethodParameter> boundParameters = binding.parameterBindings().stream()
+                .sorted(Comparator.comparingInt(parameter -> parameter.parameter().index()))
+                .toList();
+        List<MethodParameter> discoveredParameters = implementation.parameters().stream()
+                .sorted(Comparator.comparingInt(MethodParameter::index))
+                .toList();
+        List<String> validationIssues = new ArrayList<>();
+
+        if (!binding.implementationClass().equals(implementation.implementationClass())
+                || !binding.implementationMethod().equals(implementation.implementationMethod())) {
+            validationIssues.add("binding implementation "
+                    + binding.fullImplementationSignature()
+                    + " does not match discovered implementation "
+                    + implementation.fullImplementationSignature());
+        }
+        if (boundParameters.size() != reflectedMethod.getParameterCount()) {
+            validationIssues.add("binding argument count is "
+                    + boundParameters.size()
+                    + " but reflected method expects "
+                    + reflectedMethod.getParameterCount());
+        }
+        if (discoveredParameters.size() != reflectedMethod.getParameterCount()) {
+            validationIssues.add("discovered annotation metadata count is "
+                    + discoveredParameters.size()
+                    + " but reflected method expects "
+                    + reflectedMethod.getParameterCount());
+        }
+        boolean[] seenIndices = new boolean[Math.max(reflectedMethod.getParameterCount(), boundParameters.size())];
+        for (BoundMethodParameter boundParameter : boundParameters) {
+            int index = boundParameter.parameter().index();
+            if (index < 0 || index >= reflectedMethod.getParameterCount()) {
+                validationIssues.add("binding parameter index " + index + " is outside reflected method bounds");
+                continue;
+            }
+            if (seenIndices[index]) {
+                validationIssues.add("binding parameter index " + index + " is duplicated");
+            }
+            seenIndices[index] = true;
+        }
+        for (int index = 0; index < reflectedMethod.getParameterCount(); index++) {
+            if (index >= seenIndices.length || !seenIndices[index]) {
+                validationIssues.add("binding does not cover reflected method parameter index " + index);
+            }
+            if (index < discoveredParameters.size() && index < boundParameters.size()) {
+                MethodParameter discoveredParameter = discoveredParameters.get(index);
+                MethodParameter boundParameter = boundParameters.get(index).parameter();
+                if (discoveredParameter.index() != boundParameter.index()) {
+                    validationIssues.add("binding parameter index " + boundParameter.index()
+                            + " does not match discovered parameter index " + discoveredParameter.index());
+                }
+                if (!Objects.equals(discoveredParameter.typeName(), boundParameter.typeName())) {
+                    validationIssues.add("binding parameter type " + boundParameter.typeName()
+                            + " does not match discovered parameter type " + discoveredParameter.typeName()
+                            + " at index " + index);
+                }
+                if (discoveredParameter.role() != boundParameter.role()) {
+                    validationIssues.add("binding parameter role " + boundParameter.role()
+                            + " does not match discovered parameter role " + discoveredParameter.role()
+                            + " at index " + index);
+                }
+                if (!Objects.equals(discoveredParameter.source(), boundParameter.source())) {
+                    validationIssues.add("binding parameter source " + boundParameter.source()
+                            + " does not match discovered parameter source " + discoveredParameter.source()
+                            + " at index " + index);
+                }
+            }
+            if (index < discoveredParameters.size()) {
+                String reflectedType = reflectedMethod.getParameterTypes()[index].getName();
+                if (!Objects.equals(discoveredParameters.get(index).typeName(), reflectedType)) {
+                    validationIssues.add("discovered parameter type " + discoveredParameters.get(index).typeName()
+                            + " does not match reflected Java type " + reflectedType
+                            + " at index " + index);
+                }
+            }
+        }
+        if (validationIssues.isEmpty()) {
+            return;
+        }
+        throw new IllegalStateException(buildInvocationValidationMessage(
+                binding,
+                implementation,
+                reflectedMethod,
+                boundParameters,
+                discoveredParameters,
+                validationIssues));
     }
 
     /**
@@ -538,6 +641,143 @@ public class ReflectionExecutionAdapter implements ExecutionAdapter {
                 ? cause.getClass().getName()
                 : cause.getClass().getSimpleName() + ": " + causeMessage;
         return description + " (caused by " + causeDescription + ")";
+    }
+
+    /**
+     * Builds a detailed diagnostic for a binding/reflection mismatch detected before invocation.
+     *
+     * @param binding the binding being executed
+     * @param implementation the discovered implementation selected for it
+     * @param reflectedMethod the reflective method handle being validated
+     * @param boundParameters the binding's ordered bound parameters
+     * @param discoveredParameters the discovered annotation parameters
+     * @param validationIssues the specific mismatches already detected
+     * @return the detailed diagnostic text
+     */
+    private static String buildInvocationValidationMessage(
+            ImplementationBinding binding,
+            DiscoveredImplementation implementation,
+            Method reflectedMethod,
+            List<BoundMethodParameter> boundParameters,
+            List<MethodParameter> discoveredParameters,
+            List<String> validationIssues) {
+        StringJoiner message = new StringJoiner("; ");
+        message.add("Invocation metadata mismatch for test " + binding.testId() + " in phase " + binding.phase());
+        message.add("binding=" + binding.fullImplementationSignature());
+        message.add("reflected=" + reflectedMethod.toGenericString());
+        message.add("binding argument count=" + boundParameters.size()
+                + ", reflected argument count=" + reflectedMethod.getParameterCount());
+        message.add("RDF/test parameters=" + formatRdfParameters(binding.parameters()));
+        message.add("bound parameters=" + formatBoundParameters(boundParameters));
+        message.add("discovered parameters=" + formatDiscoveredParameters(discoveredParameters));
+        message.add("code source=" + safeCodeSourceLocation(implementation));
+        validationIssues.forEach(message::add);
+        message.add("likely cause=" + likelyCause(binding, implementation, boundParameters, reflectedMethod));
+        return message.toString();
+    }
+
+    /**
+     * Formats the binding's RDF/test parameter map for diagnostics.
+     *
+     * @param parameters the binding parameter map
+     * @return a concise diagnostic rendering
+     */
+    private static String formatRdfParameters(Map<String, String> parameters) {
+        if (parameters == null || parameters.isEmpty()) {
+            return "[]";
+        }
+        return parameters.entrySet().stream()
+                .map(entry -> entry.getKey() + "=" + entry.getValue())
+                .sorted()
+                .collect(java.util.stream.Collectors.joining(", ", "[", "]"));
+    }
+
+    /**
+     * Formats bound method parameters for diagnostics.
+     *
+     * @param boundParameters the ordered bound parameters
+     * @return a concise diagnostic rendering
+     */
+    private static String formatBoundParameters(List<BoundMethodParameter> boundParameters) {
+        if (boundParameters.isEmpty()) {
+            return "[]";
+        }
+        return boundParameters.stream()
+                .map(parameter -> parameter.parameter().index()
+                        + ":"
+                        + parameter.parameter().role()
+                        + ":"
+                        + parameter.parameter().source()
+                        + ":"
+                        + parameter.parameter().typeName())
+                .collect(java.util.stream.Collectors.joining(", ", "[", "]"));
+    }
+
+    /**
+     * Formats discovered annotation parameters for diagnostics.
+     *
+     * @param discoveredParameters the ordered discovered parameters
+     * @return a concise diagnostic rendering
+     */
+    private static String formatDiscoveredParameters(List<MethodParameter> discoveredParameters) {
+        if (discoveredParameters.isEmpty()) {
+            return "[]";
+        }
+        return discoveredParameters.stream()
+                .map(parameter -> parameter.index()
+                        + ":"
+                        + parameter.role()
+                        + ":"
+                        + parameter.source()
+                        + ":"
+                        + parameter.typeName())
+                .collect(java.util.stream.Collectors.joining(", ", "[", "]"));
+    }
+
+    /**
+     * Safely resolves the code-source location of the implementation class.
+     *
+     * @param implementation the discovered implementation being executed
+     * @return the code-source location, or a fallback string if unavailable
+     */
+    private static String safeCodeSourceLocation(DiscoveredImplementation implementation) {
+        if (implementation == null || implementation.method() == null) {
+            return "<unknown>";
+        }
+        CodeSource codeSource = implementation.method().getDeclaringClass().getProtectionDomain() == null
+                ? null
+                : implementation.method().getDeclaringClass().getProtectionDomain().getCodeSource();
+        return codeSource == null || codeSource.getLocation() == null
+                ? "<unknown>"
+                : codeSource.getLocation().toString();
+    }
+
+    /**
+     * Infers the most likely root cause category for a binding/reflection mismatch.
+     *
+     * @param binding the binding being executed
+     * @param implementation the discovered implementation being validated
+     * @param boundParameters the ordered bound parameters
+     * @param reflectedMethod the reflective method being invoked
+     * @return a short likely-cause label
+     */
+    private static String likelyCause(
+            ImplementationBinding binding,
+            DiscoveredImplementation implementation,
+            List<BoundMethodParameter> boundParameters,
+            Method reflectedMethod) {
+        if (boundParameters.size() != reflectedMethod.getParameterCount()) {
+            return "overloaded method ambiguity or stale discovered metadata";
+        }
+        boolean parameterSourceMismatch = implementation.parameters().stream()
+                .sorted(Comparator.comparingInt(MethodParameter::index))
+                .limit(boundParameters.size())
+                .anyMatch(parameter -> boundParameters.stream()
+                        .filter(bound -> bound.parameter().index() == parameter.index())
+                        .anyMatch(bound -> !Objects.equals(bound.parameter().source(), parameter.source())));
+        return parameterSourceMismatch
+                ? "RDF/test parameter identifiers do not agree with implementation annotation metadata"
+                : "binding metadata no longer matches the reflective method signature";
     }
 
     /**

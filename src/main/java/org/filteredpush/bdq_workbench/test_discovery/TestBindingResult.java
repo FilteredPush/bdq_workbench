@@ -47,4 +47,19 @@ public record TestBindingResult(
         List<ImplementationBinding> bindings,
         List<TestDefinition> unresolved,
         List<BindingReview> reviews) {
+
+    /**
+     * Returns only the bindings that are actually executable.
+     *
+     * <p>{@link #bindings()} intentionally retains non-runnable bindings as first-class diagnostic
+     * outcomes so preflight review and unresolved reporting can still explain why they did not run.
+     * This helper exposes the subset that may safely be executed reflectively.
+     *
+     * @return the executable subset of {@link #bindings()}
+     */
+    public List<ImplementationBinding> runnableBindings() {
+        return bindings.stream()
+                .filter(ImplementationBinding::isRunnable)
+                .toList();
+    }
 }

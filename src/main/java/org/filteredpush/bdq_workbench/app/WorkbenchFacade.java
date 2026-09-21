@@ -201,12 +201,12 @@ public class WorkbenchFacade {
         TestBindingResult bindingResult = preparedRun.bindingResult();
 
         LOG.info("Executing {} tests with {} discovered implementations",
-                bindingResult.bindings().size(),
+                bindingResult.runnableBindings().size(),
                 discovered.size());
 
         List<Response> responses = new ArrayList<>(executionService.execute(
                 dataset,
-                bindingResult.bindings(),
+                bindingResult.runnableBindings(),
                 discovered));
 
         for (var unresolved : plan.unresolvedTests()) {

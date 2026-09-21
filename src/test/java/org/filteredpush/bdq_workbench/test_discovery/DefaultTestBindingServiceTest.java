@@ -330,6 +330,187 @@ class DefaultTestBindingServiceTest {
                 .containsEntry(BuiltInMeasureSpec.ACCEPTABLE_RESPONSE_STATUSES_KEY, "INTERNAL_PREREQUISITES_NOT_MET");
     }
 
+    @Test
+    void diagnosesNamespaceMismatchBetweenRdfAndImplementationParameters() throws Exception {
+        DefaultTestBindingService service = new DefaultTestBindingService();
+        DiscoveredImplementation discovered = new DiscoveredImplementation(
+                "urn:test:namespace",
+                null,
+                TestType.VALIDATION,
+                Phase.PRE_AMENDMENT,
+                Dummy.class.getName(),
+                "parameterized",
+                null,
+                List.of(
+                        parameter(0, ParameterRole.ACTED_UPON, "dwc:eventDate", String.class),
+                        parameter(1, ParameterRole.PARAMETER, "bdq:sourceAuthority", String.class)),
+                new Dummy(),
+                Dummy.class.getMethod("parameterizedWithSourceAuthority", String.class, String.class));
+
+        TestBindingResult result = service.bind(
+                List.of(new TestDefinition(
+                        "urn:test:namespace",
+                        "Test",
+                        TestType.VALIDATION,
+                        Phase.PRE_AMENDMENT,
+                        Map.of("bdqval:sourceAuthority", "ISO"))),
+                List.of(discovered),
+                Map.of(),
+                Set.of("dwc:eventDate"));
+
+        assertThat(result.bindings()).singleElement().satisfies(binding -> {
+            assertThat(binding.bindingStatus()).isEqualTo(BindingStatus.UNBOUND);
+            assertThat(binding.diagnostics()).anyMatch(message -> message.contains("RDF parameter bdqval:sourceAuthority")
+                    && message.contains("bdq:sourceAuthority"));
+            assertThat(binding.diagnostics()).anyMatch(message -> message.contains("PARAMETER NAMESPACE MISMATCH"));
+        });
+        assertThat(result.unresolved()).extracting(TestDefinition::id).containsExactly("urn:test:namespace");
+    }
+
+    @Test
+    void prefersCandidateWithFullRdfParameterCoverage() throws Exception {
+        DefaultTestBindingService service = new DefaultTestBindingService();
+        DiscoveredImplementation partialCoverage = new DiscoveredImplementation(
+                "urn:test:coverage",
+                null,
+                TestType.VALIDATION,
+                Phase.PRE_AMENDMENT,
+                Dummy.class.getName(),
+                "parameterized",
+                null,
+                List.of(
+                        parameter(0, ParameterRole.ACTED_UPON, "dwc:eventDate", String.class),
+                        parameter(1, ParameterRole.PARAMETER, "bdq:latestValidDate", Integer.class)),
+                new Dummy(),
+                Dummy.class.getMethod("parameterized", String.class, Integer.class));
+        DiscoveredImplementation fullCoverage = new DiscoveredImplementation(
+                "urn:test:coverage",
+                null,
+                TestType.VALIDATION,
+                Phase.PRE_AMENDMENT,
+                Dummy.class.getName(),
+                "parameterizedFull",
+                null,
+                List.of(
+                        parameter(0, ParameterRole.ACTED_UPON, "dwc:eventDate", String.class),
+                        parameter(1, ParameterRole.PARAMETER, "bdq:earliestValidDate", Integer.class),
+                        parameter(2, ParameterRole.PARAMETER, "bdq:latestValidDate", Integer.class)),
+                new Dummy(),
+                Dummy.class.getMethod("parameterizedFull", String.class, Integer.class, Integer.class));
+
+        TestBindingResult result = service.bind(
+                List.of(new TestDefinition(
+                        "urn:test:coverage",
+                        "Test",
+                        TestType.VALIDATION,
+                        Phase.PRE_AMENDMENT,
+                        Map.of(
+                                "bdq:earliestValidDate", "1900",
+                                "bdq:latestValidDate", "2026"))),
+                List.of(partialCoverage, fullCoverage),
+                Map.of(),
+                Set.of("dwc:eventDate"));
+
+        assertThat(result.bindings()).singleElement().satisfies(binding -> {
+            assertThat(binding.implementationMethod()).isEqualTo("parameterizedFull");
+            assertThat(binding.bindingStatus()).isEqualTo(BindingStatus.BOUND);
+        });
+    }
+
+    @Test
+    void marksEquallyCompatibleCandidatesAmbiguousAndNonRunnable() throws Exception {
+        DefaultTestBindingService service = new DefaultTestBindingService();
+        DiscoveredImplementation first = new DiscoveredImplementation(
+                "urn:test:ambiguous",
+                null,
+                TestType.VALIDATION,
+                Phase.PRE_AMENDMENT,
+                Dummy.class.getName(),
+                "parameterized",
+                null,
+                List.of(
+                        parameter(0, ParameterRole.ACTED_UPON, "dwc:eventDate", String.class),
+                        parameter(1, ParameterRole.PARAMETER, "bdq:latestValidDate", Integer.class)),
+                new Dummy(),
+                Dummy.class.getMethod("parameterized", String.class, Integer.class));
+        DiscoveredImplementation second = new DiscoveredImplementation(
+                "urn:test:ambiguous",
+                null,
+                TestType.VALIDATION,
+                Phase.PRE_AMENDMENT,
+                Dummy.class.getName(),
+                "parameterizedDuplicate",
+                null,
+                List.of(
+                        parameter(0, ParameterRole.ACTED_UPON, "dwc:eventDate", String.class),
+                        parameter(1, ParameterRole.PARAMETER, "bdq:latestValidDate", Integer.class)),
+                new Dummy(),
+                Dummy.class.getMethod("parameterizedDuplicate", String.class, Integer.class));
+
+        TestBindingResult result = service.bind(
+                List.of(new TestDefinition(
+                        "urn:test:ambiguous",
+                        "Test",
+                        TestType.VALIDATION,
+                        Phase.PRE_AMENDMENT,
+                        Map.of("bdq:latestValidDate", "2026"))),
+                List.of(first, second),
+                Map.of(),
+                Set.of("dwc:eventDate"));
+
+        assertThat(result.bindings()).singleElement().satisfies(binding -> {
+            assertThat(binding.bindingStatus()).isEqualTo(BindingStatus.UNBOUND);
+            assertThat(binding.diagnostics()).anyMatch(message -> message.contains("AMBIGUOUS"));
+        });
+        assertThat(result.reviews()).singleElement().satisfies(review ->
+                assertThat(review.implementationStatus()).isEqualTo(ImplementationStatus.AMBIGUOUS));
+    }
+
+    @Test
+    void builtInMeasureIsRetainedForDiagnosticsWhenTargetBindingIsNotRunnable() throws Exception {
+        DefaultTestBindingService service = new DefaultTestBindingService();
+        DiscoveredImplementation validationImplementation = new DiscoveredImplementation(
+                "urn:test:validation",
+                null,
+                TestType.VALIDATION,
+                Phase.PRE_AMENDMENT,
+                Dummy.class.getName(),
+                "validate",
+                null,
+                List.of(parameter(0, ParameterRole.ACTED_UPON, "dwc:eventDate", String.class)),
+                new Dummy(),
+                Dummy.class.getMethod("validate"));
+        TestDefinition validation = new TestDefinition(
+                "urn:test:validation",
+                "VALIDATION_BASISOFRECORD_NOTEMPTY",
+                TestType.VALIDATION,
+                Phase.PRE_AMENDMENT,
+                Map.of());
+        TestDefinition measure = new TestDefinition(
+                "urn:test:measure",
+                "MULTIRECORD_MEASURE_QA_BASISOFRECORD_NOTEMPTY",
+                TestType.MEASURE,
+                Phase.PRE_AMENDMENT,
+                Map.of());
+
+        TestBindingResult result = service.bind(
+                List.of(validation, measure),
+                List.of(validationImplementation),
+                Map.of(),
+                Set.of("dwc:scientificName"));
+
+        assertThat(result.bindings().stream()
+                .filter(binding -> binding.testId().equals("urn:test:measure"))
+                .findFirst()
+                .orElseThrow())
+                .satisfies(binding -> {
+                    assertThat(binding.bindingStatus()).isEqualTo(BindingStatus.UNBOUND);
+                    assertThat(binding.diagnostics()).anyMatch(message -> message.contains("retained for diagnostics only"));
+                });
+        assertThat(result.unresolved()).extracting(TestDefinition::id)
+                .contains("urn:test:validation", "urn:test:measure");
+    }
+
     private static MethodParameter parameter(int index, ParameterRole role, String source, Class<?> type) {
         return new MethodParameter(index, "p" + index, role, source, type.getName(), true);
     }
@@ -347,8 +528,20 @@ class DefaultTestBindingServiceTest {
             return value != null && latestValidDate != null;
         }
 
+        public boolean parameterizedFull(String value, Integer earliestValidDate, Integer latestValidDate) {
+            return value != null && earliestValidDate != null && latestValidDate != null;
+        }
+
         public boolean parameterizedStringDefaults(String value, String earliestValidDate, String latestValidDate) {
             return value != null;
+        }
+
+        public boolean parameterizedWithSourceAuthority(String value, String sourceAuthority) {
+            return value != null && sourceAuthority != null;
+        }
+
+        public boolean parameterizedDuplicate(String value, Integer latestValidDate) {
+            return value != null && latestValidDate != null;
         }
     }
 }

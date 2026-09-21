@@ -313,13 +313,20 @@ public record BuiltInMeasureSpec(
     /**
      * Checks whether a response satisfies this QA measure's passing criteria.
      *
+     * <p>Responses whose status/result is absent, or which are themselves {@code null}, do not
+     * satisfy the QA condition. This keeps built-in measures fail-soft when target executions
+     * return errors or partial metadata.
+     *
      * @param response the response to evaluate
      * @return {@code true} if {@code response}'s result or status is among this spec's
      *     {@link #acceptableResponseResults()} or {@link #acceptableResponseStatuses()}
      */
     public boolean matchesQaCondition(Response response) {
-        return acceptableResponseResults.contains(response.responseResult())
-                || acceptableResponseStatuses.contains(response.responseStatus());
+        return response != null
+                && ((response.responseResult() != null
+                        && acceptableResponseResults.contains(response.responseResult()))
+                    || (response.responseStatus() != null
+                        && acceptableResponseStatuses.contains(response.responseStatus())));
     }
 
     /**

@@ -15,6 +15,7 @@ import org.filteredpush.bdq_workbench.model.BindingStatus;
 import org.filteredpush.bdq_workbench.model.CanonicalRecord;
 import org.filteredpush.bdq_workbench.model.ExecutionPlan;
 import org.filteredpush.bdq_workbench.model.ImplementationStatus;
+import org.filteredpush.bdq_workbench.model.ImplementationBinding;
 import org.filteredpush.bdq_workbench.model.ParameterizationCapability;
 import org.filteredpush.bdq_workbench.model.Phase;
 import org.filteredpush.bdq_workbench.model.Policy;
@@ -203,5 +204,92 @@ class WorkbenchFacadeTest {
         assertThat(summary.metadata().filteredSingleRecordCount()).isEqualTo(2);
         assertThat(summary.metadata().filledInValueCounts()).containsEntry("dwc:countryCode=RU", 1L);
         assertThat(summary.metadata().amendedValuePairCounts()).containsEntry("dwc:countryCode: SU -> RU", 1L);
+    }
+
+    @Test
+    void runPreparedExecutesOnlyRunnableBindingsAndSynthesizesNonRunnableOutcomes() {
+        TestDefinition runnableTest =
+                new TestDefinition("urn:test:runnable", "Runnable", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of());
+        TestDefinition nonRunnableTest =
+                new TestDefinition("urn:test:non-runnable", "Non Runnable", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of());
+        ImplementationBinding runnableBinding = new ImplementationBinding(
+                runnableTest.id(),
+                runnableTest.type(),
+                "example.Impl",
+                "run",
+                runnableTest.phase(),
+                Map.of(),
+                BindingStatus.BOUND,
+                ParameterizationCapability.DEFAULT_ONLY,
+                "selected",
+                true,
+                List.of(),
+                List.of("BOUND: all parameters compatible"));
+        ImplementationBinding nonRunnableBinding = new ImplementationBinding(
+                nonRunnableTest.id(),
+                nonRunnableTest.type(),
+                "example.Impl",
+                "skip",
+                nonRunnableTest.phase(),
+                Map.of(),
+                BindingStatus.UNBOUND,
+                ParameterizationCapability.DEFAULT_ONLY,
+                "selected",
+                true,
+                List.of(),
+                List.of("Missing parameter value for bdq:sourceAuthority"));
+        PreparedRun preparedRun = new PreparedRun(
+                new AppConfig(Path.of("usecase.xml"), List.of(), Path.of("dataset.zip"), "uc1", List.of("org.filteredpush"), 1, true),
+                new RecordDataset(List.of(new CanonicalRecord("r1", Map.of("dwc:eventDate", "2025-01-01")))),
+                new ExecutionPlan(
+                        new UseCase("uc1", "Use Case", "policy:1"),
+                        new Policy("policy:1", List.of(runnableTest.id(), nonRunnableTest.id())),
+                        List.of(runnableTest, nonRunnableTest),
+                        List.of()),
+                List.of(),
+                new TestBindingResult(
+                        List.of(runnableBinding, nonRunnableBinding),
+                        List.of(nonRunnableTest),
+                        List.of(
+                                new BindingReview(
+                                        runnableTest,
+                                        ImplementationStatus.FOUND,
+                                        BindingStatus.BOUND,
+                                        ParameterizationCapability.DEFAULT_ONLY,
+                                        "example.Impl#run()",
+                                        Map.of(),
+                                        true,
+                                        List.of("BOUND: all parameters compatible")),
+                                new BindingReview(
+                                        nonRunnableTest,
+                                        ImplementationStatus.FOUND,
+                                        BindingStatus.UNBOUND,
+                                        ParameterizationCapability.DEFAULT_ONLY,
+                                        "example.Impl#skip()",
+                                        Map.of(),
+                                        true,
+                                        List.of("Missing parameter value for bdq:sourceAuthority")))));
+
+        AtomicReference<List<ImplementationBinding>> executedBindings = new AtomicReference<>(List.of());
+        TestExecutionService executionService = (dataset, bindings, discovered) -> {
+            executedBindings.set(List.copyOf(bindings));
+            return List.of();
+        };
+        WorkbenchFacade facade = new WorkbenchFacade(
+                null,
+                null,
+                null,
+                null,
+                executionService,
+                new ReportingService(List.of()));
+
+        ExecutionSummary summary = facade.runPrepared(preparedRun);
+
+        assertThat(executedBindings.get()).extracting(ImplementationBinding::testId).containsExactly("urn:test:runnable");
+        assertThat(summary.responses()).extracting(Response::testId, Response::responseStatus, Response::responseResult)
+                .contains(org.assertj.core.groups.Tuple.tuple(
+                        "urn:test:non-runnable",
+                        "UNABLE_TO_RUN",
+                        "UNABLE_TO_RUN"));
     }
 }

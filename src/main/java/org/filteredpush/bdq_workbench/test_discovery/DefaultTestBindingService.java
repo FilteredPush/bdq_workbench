@@ -142,11 +142,7 @@ public class DefaultTestBindingService implements TestBindingService {
         Map<String, List<DiscoveredImplementation>> byVersion = discovered.stream()
                 .filter(d -> d.providedVersion() != null && !d.providedVersion().isBlank())
                 .collect(Collectors.groupingBy(d -> normalize(d.providedVersion())));
-        Map<String, DiscoveredImplementation> byMethodKey = discovered.stream()
-                .collect(Collectors.toMap(
-                        d -> d.implementationClass() + "#" + d.implementationMethod(),
-                        Function.identity(),
-                        (a, b) -> a));
+        Map<String, List<DiscoveredImplementation>> byMethodKey = indexByMethodKey(discovered);
 
         Map<String, List<String>> availableTermsByAlias = DarwinCoreTermResolver.indexAvailableTerms(availableTerms);
         List<ImplementationBinding> bindings = new ArrayList<>();
@@ -237,12 +233,11 @@ public class DefaultTestBindingService implements TestBindingService {
 
             CandidateEvaluation evaluation = evaluateCandidate(
                     test,
-                    selection.chosen(),
+                    selection,
                     capability,
-                    selection.selectionReason(),
                     availableTermsByAlias);
             bindings.add(evaluation.binding());
-            if (evaluation.binding().bindingStatus() != BindingStatus.BOUND) {
+            if (!evaluation.binding().isRunnable()) {
                 unresolved.add(test);
             }
             diagnostics.addAll(evaluation.binding().diagnostics());
@@ -251,12 +246,13 @@ public class DefaultTestBindingService implements TestBindingService {
                     implementationStatus,
                     evaluation.binding().bindingStatus(),
                     capability,
-                    evaluation.binding().implementationClass() + "#" + evaluation.binding().implementationMethod(),
+                    evaluation.binding().fullImplementationSignature(),
                     evaluation.binding().parameters(),
                     evaluation.binding().usingDefaultParameters(),
                     List.copyOf(diagnostics)));
         }
 
+        adjustBuiltInMeasureRunnability(bindings, unresolved, reviews);
         return new TestBindingResult(List.copyOf(bindings), List.copyOf(unresolved), List.copyOf(reviews));
     }
 
@@ -280,12 +276,12 @@ public class DefaultTestBindingService implements TestBindingService {
      */
     private CandidateEvaluation evaluateCandidate(
             TestDefinition test,
-            DiscoveredImplementation chosen,
+            Selection selection,
             ParameterizationCapability capability,
-            String selectionReason,
             Map<String, List<String>> availableTermsByAlias) {
+        DiscoveredImplementation chosen = selection.chosen();
         List<BoundMethodParameter> boundParameters = new ArrayList<>();
-        List<String> diagnostics = new ArrayList<>();
+        List<String> diagnostics = new ArrayList<>(selection.chosenAssessment().diagnostics());
         BindingStatus status = BindingStatus.BOUND;
         Map<String, String> parameterValues = new LinkedHashMap<>();
 
@@ -307,6 +303,16 @@ public class DefaultTestBindingService implements TestBindingService {
                 }
             }
         }
+        if (!selection.chosenAssessment().fullyCompatible()) {
+            status = BindingStatus.UNBOUND;
+        }
+        if (selection.ambiguous()) {
+            status = BindingStatus.UNBOUND;
+            diagnostics.add("AMBIGUOUS: Multiple candidates remain equally suitable; "
+                    + "use an explicit full-signature mapping such as "
+                    + selection.chosen().fullImplementationSignature()
+                    + " to disambiguate.");
+        }
         if (status == BindingStatus.BOUND) {
             diagnostics.add("BOUND: all parameters compatible");
         }
@@ -320,7 +326,7 @@ public class DefaultTestBindingService implements TestBindingService {
                 Map.copyOf(parameterValues),
                 status,
                 capability,
-                selectionReason,
+                selection.selectionReason(),
                 parameterValues.isEmpty(),
                 List.copyOf(boundParameters),
                 List.copyOf(diagnostics));
@@ -352,6 +358,19 @@ public class DefaultTestBindingService implements TestBindingService {
         if (parameter.role() == ParameterRole.PARAMETER) {
             String providedValue = resolveParameterValue(test.parameters(), parameter.source());
             if (providedValue == null) {
+                List<String> localNameMatches = findLocalNameParameterMatches(test.parameters(), parameter.source());
+                if (!localNameMatches.isEmpty()) {
+                    return new BoundMethodParameter(
+                            parameter,
+                            parameter.source(),
+                            null,
+                            false,
+                            "PARAMETER NAMESPACE MISMATCH: Implementation parameter "
+                                    + parameter.source()
+                                    + " only near-matched RDF parameter(s) "
+                                    + String.join(", ", localNameMatches)
+                                    + " by local name; not treating them as equivalent");
+                }
                 if (canUseImplementationDefault(parameter)) {
                     return new BoundMethodParameter(
                             parameter,
@@ -417,12 +436,8 @@ public class DefaultTestBindingService implements TestBindingService {
      * @return the matching value, or {@code null} if no key matches even after normalization
      */
     private static String resolveParameterValue(Map<String, String> parameters, String parameterName) {
-        if (parameters.containsKey(parameterName)) {
-            return parameters.get(parameterName);
-        }
-        String normalized = DarwinCoreTermResolver.normalizeTerm(parameterName);
         for (Map.Entry<String, String> entry : parameters.entrySet()) {
-            if (DarwinCoreTermResolver.normalizeTerm(entry.getKey()).equals(normalized)) {
+            if (normalizeIdentifier(entry.getKey()).equals(normalizeIdentifier(parameterName))) {
                 return entry.getValue();
             }
         }
@@ -452,62 +467,90 @@ public class DefaultTestBindingService implements TestBindingService {
     private static Selection selectCandidate(
             TestDefinition test,
             Map<String, String> explicitMapping,
-            Map<String, DiscoveredImplementation> byMethodKey,
+            Map<String, List<DiscoveredImplementation>> byMethodKey,
             Map<String, List<DiscoveredImplementation>> byProvided,
             Map<String, List<DiscoveredImplementation>> byVersion) {
         List<String> diagnostics = new ArrayList<>();
-        List<DiscoveredImplementation> candidates = lookupCandidates(test, byProvided, byVersion, diagnostics);
-
         String mappedMethod = explicitMapping.get(test.id());
-        if (mappedMethod != null && byMethodKey.containsKey(mappedMethod)) {
-            diagnostics.add("Explicit mapping selected " + mappedMethod);
-            return new Selection(
-                    List.of(byMethodKey.get(mappedMethod)),
-                    byMethodKey.get(mappedMethod),
-                    "explicit mapping",
-                    diagnostics,
-                    false);
+        if (mappedMethod != null) {
+            List<DiscoveredImplementation> explicitCandidates = byMethodKey.getOrDefault(mappedMethod, List.of());
+            if (explicitCandidates.isEmpty()) {
+                diagnostics.add("Explicit mapping requested " + mappedMethod
+                        + " but no discovered implementation matched that key");
+                return new Selection(List.of(), null, "explicit mapping missing", diagnostics, false, null);
+            }
+            diagnostics.add("Explicit mapping requested " + mappedMethod);
+            return selectAmongCandidates(test, explicitCandidates, diagnostics, true);
         }
+
+        List<DiscoveredImplementation> candidates = lookupCandidates(test, byProvided, byVersion, diagnostics);
         if (candidates.isEmpty()) {
-            return new Selection(List.of(), null, "no match", diagnostics, false);
+            return new Selection(List.of(), null, "no match", diagnostics, false, null);
         }
+        return selectAmongCandidates(test, candidates, diagnostics, false);
+    }
 
-        List<DiscoveredImplementation> defaultCandidates = candidates.stream()
-                .filter(candidate -> !candidate.isParameterized())
-                .sorted(implementationComparator())
-                .toList();
-        List<DiscoveredImplementation> parameterizedCandidates = candidates.stream()
-                .filter(DiscoveredImplementation::isParameterized)
-                .sorted(implementationComparator())
-                .toList();
+    /**
+     * Chooses the most suitable candidate from a fixed candidate set, comparing exact RDF
+     * parameter coverage before falling back to default-vs-parameterized preference.
+     *
+     * @param test the policy test being bound
+     * @param candidates the already-matched discovered implementations to choose from
+     * @param diagnostics mutable diagnostics to append selection explanations to
+     * @param explicitMapping whether these candidates came from an explicit mapping key
+     * @return the selection result for this candidate set
+     */
+    private static Selection selectAmongCandidates(
+            TestDefinition test,
+            List<DiscoveredImplementation> candidates,
+            List<String> diagnostics,
+            boolean explicitMapping) {
         boolean hasUserParameters = !test.parameters().isEmpty();
-        boolean parameterizedVersionAvailable = !defaultCandidates.isEmpty() && !parameterizedCandidates.isEmpty();
+        List<CandidateAssessment> assessments = candidates.stream()
+                .sorted(implementationComparator())
+                .map(candidate -> assessCandidateCompatibility(test, candidate))
+                .sorted((left, right) -> compareAssessments(left, right, hasUserParameters))
+                .toList();
+        assessments.forEach(assessment -> diagnostics.add(assessment.summary()));
 
-        DiscoveredImplementation chosen;
-        String reason;
-        if (hasUserParameters && !parameterizedCandidates.isEmpty()) {
-            chosen = parameterizedCandidates.get(0);
-            reason = "parameterized method selected because parameter values were provided";
-        } else if (!hasUserParameters && !defaultCandidates.isEmpty()) {
-            chosen = defaultCandidates.get(0);
-            reason = "default method selected because no parameter values were provided";
-        } else if (!parameterizedCandidates.isEmpty()) {
-            chosen = parameterizedCandidates.get(0);
-            reason = "parameterized-only implementation available";
-        } else {
-            chosen = defaultCandidates.get(0);
-            reason = "default-only implementation available";
-        }
-
-        boolean ambiguous = candidates.size() > 1 && !parameterizedVariantPair(defaultCandidates, parameterizedCandidates);
+        CandidateAssessment chosenAssessment = assessments.get(0);
+        List<CandidateAssessment> equallyRanked = assessments.stream()
+                .filter(assessment -> sameRank(chosenAssessment, assessment, hasUserParameters))
+                .toList();
+        boolean hasDefault = candidates.stream().anyMatch(candidate -> !candidate.isParameterized());
+        boolean hasParameterized = candidates.stream().anyMatch(DiscoveredImplementation::isParameterized);
+        boolean parameterizedVersionAvailable = hasDefault && hasParameterized;
         if (parameterizedVersionAvailable) {
             diagnostics.add("Parameterized version available");
         }
+
+        boolean ambiguous = equallyRanked.size() > 1 && !parameterizedVariantPair(
+                equallyRanked.stream().map(CandidateAssessment::candidate).filter(candidate -> !candidate.isParameterized()).toList(),
+                equallyRanked.stream().map(CandidateAssessment::candidate).filter(DiscoveredImplementation::isParameterized).toList());
+        String reason;
+        if (hasUserParameters) {
+            reason = chosenAssessment.fullyCompatible()
+                    ? "selected candidate with the strongest exact RDF parameter coverage"
+                    : "selected best-coverage candidate for diagnostics only because no candidate exactly covered the supplied RDF parameters";
+        } else if (!chosenAssessment.candidate().isParameterized()) {
+            reason = "default method selected because no parameter values were provided";
+        } else {
+            reason = "parameterized-only implementation available";
+        }
+        if (explicitMapping) {
+            diagnostics.add("Explicit mapping resolved to " + chosenAssessment.candidate().fullImplementationSignature());
+        }
         if (ambiguous) {
-            diagnostics.add("Ambiguous candidates resolved deterministically by class and method ordering");
+            diagnostics.add("Ambiguous candidate set: multiple candidates have equivalent parameter coverage");
         }
         diagnostics.add(reason);
-        return new Selection(candidates, chosen, reason, diagnostics, ambiguous);
+        return new Selection(
+                candidates,
+                chosenAssessment.candidate(),
+                reason,
+                diagnostics,
+                ambiguous,
+                chosenAssessment);
     }
 
     /**
@@ -554,7 +597,50 @@ public class DefaultTestBindingService implements TestBindingService {
      */
     private static Comparator<DiscoveredImplementation> implementationComparator() {
         return Comparator.comparing(DiscoveredImplementation::implementationClass)
-                .thenComparing(DiscoveredImplementation::implementationMethod);
+                .thenComparing(DiscoveredImplementation::fullImplementationSignature);
+    }
+
+    /**
+     * Orders assessed candidates by actual supplied-parameter compatibility.
+     *
+     * @param left one candidate assessment
+     * @param right another candidate assessment
+     * @param hasUserParameters whether the test supplied RDF parameter values
+     * @return comparator-style ordering for the two assessments
+     */
+    private static int compareAssessments(
+            CandidateAssessment left,
+            CandidateAssessment right,
+            boolean hasUserParameters) {
+        Comparator<CandidateAssessment> comparator = Comparator
+                .comparing(CandidateAssessment::fullyCompatible)
+                .reversed()
+                .thenComparingInt(CandidateAssessment::exactMatchedParameterCount)
+                .reversed()
+                .thenComparingInt(CandidateAssessment::requiredMissingParameterCount)
+                .thenComparingInt(CandidateAssessment::unmatchedRdfParameterCount)
+                .thenComparingInt(CandidateAssessment::defaultedParameterCount);
+        if (!hasUserParameters) {
+            comparator = Comparator
+                    .comparing((CandidateAssessment assessment) -> assessment.candidate().isParameterized())
+                    .thenComparing(comparator);
+        }
+        return comparator.compare(left, right);
+    }
+
+    /**
+     * Reports whether two candidate assessments tie under {@link #compareAssessments}.
+     *
+     * @param left one assessment
+     * @param right the other assessment
+     * @param hasUserParameters whether the test supplied RDF parameter values
+     * @return {@code true} if both assessments have equal rank
+     */
+    private static boolean sameRank(
+            CandidateAssessment left,
+            CandidateAssessment right,
+            boolean hasUserParameters) {
+        return compareAssessments(left, right, hasUserParameters) == 0;
     }
 
     /**
@@ -588,6 +674,79 @@ public class DefaultTestBindingService implements TestBindingService {
             List<DiscoveredImplementation> defaultCandidates,
             List<DiscoveredImplementation> parameterizedCandidates) {
         return defaultCandidates.size() == 1 && parameterizedCandidates.size() == 1;
+    }
+
+    /**
+     * Assesses how well one candidate's {@code @Parameter} annotations match the RDF parameters
+     * supplied on the policy test.
+     *
+     * @param test the policy test being bound
+     * @param candidate the discovered implementation candidate
+     * @return a compatibility assessment for candidate selection and diagnostics
+     */
+    private static CandidateAssessment assessCandidateCompatibility(TestDefinition test, DiscoveredImplementation candidate) {
+        List<String> diagnostics = new ArrayList<>();
+        int exactMatched = 0;
+        int unmatchedRdf = 0;
+        int requiredMissing = 0;
+        int defaulted = 0;
+
+        List<MethodParameter> implementationParameters = candidate.parameters().stream()
+                .filter(parameter -> parameter.role() == ParameterRole.PARAMETER)
+                .sorted(Comparator.comparingInt(MethodParameter::index))
+                .toList();
+        List<String> implementationParameterNames = implementationParameters.stream()
+                .map(MethodParameter::source)
+                .toList();
+        for (String rdfParameter : test.parameters().keySet()) {
+            if (hasExactParameterMatch(implementationParameterNames, rdfParameter)) {
+                exactMatched++;
+                continue;
+            }
+            List<String> nearMatches = findLocalNameMatches(implementationParameterNames, rdfParameter);
+            unmatchedRdf++;
+            if (!nearMatches.isEmpty()) {
+                diagnostics.add("RDF parameter " + rdfParameter + " does not exactly match implementation parameter(s) "
+                        + String.join(", ", nearMatches)
+                        + "; local-name-only namespace/prefix mismatch retained as a warning");
+            } else {
+                diagnostics.add("RDF parameter " + rdfParameter + " does not match any implementation @Parameter");
+            }
+        }
+
+        for (MethodParameter implementationParameter : implementationParameters) {
+            String exactValue = resolveParameterValue(test.parameters(), implementationParameter.source());
+            if (exactValue != null) {
+                continue;
+            }
+            List<String> nearMatches = findLocalNameParameterMatches(test.parameters(), implementationParameter.source());
+            if (!nearMatches.isEmpty()) {
+                requiredMissing++;
+                diagnostics.add("Implementation parameter " + implementationParameter.source()
+                        + " only near-matched RDF parameter(s) "
+                        + String.join(", ", nearMatches)
+                        + "; local-name-only namespace/prefix mismatch retained as a warning");
+                continue;
+            }
+            if (canUseImplementationDefault(implementationParameter)) {
+                defaulted++;
+                diagnostics.add("Implementation parameter " + implementationParameter.source()
+                        + " will use the implementation default (null)");
+            } else {
+                requiredMissing++;
+                diagnostics.add("Implementation parameter " + implementationParameter.source()
+                        + " is missing from the RDF test definition");
+            }
+        }
+        boolean fullyCompatible = unmatchedRdf == 0 && requiredMissing == 0;
+        return new CandidateAssessment(
+                candidate,
+                exactMatched,
+                unmatchedRdf,
+                requiredMissing,
+                defaulted,
+                fullyCompatible,
+                List.copyOf(diagnostics));
     }
 
     /**
@@ -627,6 +786,46 @@ public class DefaultTestBindingService implements TestBindingService {
     }
 
     /**
+     * Finds user-supplied RDF parameters whose local name matches an implementation parameter,
+     * without requiring the full namespace/prefix identifier to match.
+     *
+     * @param parameters the RDF-supplied parameter map
+     * @param parameterName the implementation parameter name being searched for
+     * @return every local-name-only near match, in encounter order
+     */
+    private static List<String> findLocalNameParameterMatches(Map<String, String> parameters, String parameterName) {
+        return findLocalNameMatches(parameters.keySet(), parameterName);
+    }
+
+    /**
+     * Reports whether the given candidate names contain an exact parameter-name match.
+     *
+     * @param candidates candidate parameter identifiers
+     * @param requested the RDF parameter identifier to match
+     * @return {@code true} if an exact normalized identifier match exists
+     */
+    private static boolean hasExactParameterMatch(Collection<String> candidates, String requested) {
+        return candidates.stream().anyMatch(candidate -> normalizeIdentifier(candidate).equals(normalizeIdentifier(requested)));
+    }
+
+    /**
+     * Finds identifiers whose local name matches but whose full normalized identifier differs.
+     *
+     * @param candidates candidate identifiers to search
+     * @param requested the identifier being compared
+     * @return every local-name-only near match, in encounter order
+     */
+    private static List<String> findLocalNameMatches(Collection<String> candidates, String requested) {
+        String requestedFull = normalizeIdentifier(requested);
+        String requestedLocal = normalizeIdentifier(DarwinCoreTermResolver.localName(requested));
+        return candidates.stream()
+                .filter(candidate -> !normalizeIdentifier(candidate).equals(requestedFull))
+                .filter(candidate -> normalizeIdentifier(DarwinCoreTermResolver.localName(candidate)).equals(requestedLocal))
+                .sorted()
+                .toList();
+    }
+
+    /**
      * Reports whether an unbound parameter's binding failure was specifically due to a missing
      * acted-upon or consulted term in the dataset, as opposed to some other binding failure.
      *
@@ -653,6 +852,18 @@ public class DefaultTestBindingService implements TestBindingService {
                 || typeName.equals("double")
                 || typeName.equals("boolean")
                 || typeName.equals("float");
+    }
+
+    /**
+     * Normalizes a parameter or implementation identifier for exact comparison without collapsing
+     * namespace/prefix differences.
+     *
+     * @param value the raw identifier
+     * @return the trimmed, lower-cased identifier, with a trailing slash removed
+     */
+    private static String normalizeIdentifier(String value) {
+        String normalized = normalize(value);
+        return normalized == null ? "" : normalized.toLowerCase();
     }
 
     /**
@@ -686,6 +897,165 @@ public class DefaultTestBindingService implements TestBindingService {
             return trimmed.substring(0, trimmed.length() - 1);
         }
         return trimmed;
+    }
+
+    /**
+     * Indexes discovered implementations under both the legacy {@code class#method} key and the
+     * overload-safe full-signature key.
+     *
+     * @param discovered the discovered implementations to index
+     * @return the indexed candidates for explicit mapping lookup
+     */
+    private static Map<String, List<DiscoveredImplementation>> indexByMethodKey(List<DiscoveredImplementation> discovered) {
+        Map<String, List<DiscoveredImplementation>> indexed = new LinkedHashMap<>();
+        for (DiscoveredImplementation implementation : discovered) {
+            indexed.computeIfAbsent(implementation.legacyImplementationKey(), key -> new ArrayList<>()).add(implementation);
+            indexed.computeIfAbsent(implementation.fullImplementationSignature(), key -> new ArrayList<>()).add(implementation);
+        }
+        indexed.replaceAll((key, value) -> List.copyOf(value.stream().sorted(implementationComparator()).toList()));
+        return Map.copyOf(indexed);
+    }
+
+    /**
+     * Marks built-in measure bindings non-runnable when their target test has no runnable binding
+     * in the same effective phase.
+     *
+     * @param bindings mutable bindings list to update in place
+     * @param unresolved mutable unresolved test list to augment
+     * @param reviews mutable binding-review list to update in place
+     */
+    private static void adjustBuiltInMeasureRunnability(
+            List<ImplementationBinding> bindings,
+            List<TestDefinition> unresolved,
+            List<BindingReview> reviews) {
+        Set<String> unresolvedIds = unresolved.stream().map(TestDefinition::id).collect(Collectors.toCollection(LinkedHashSet::new));
+        Set<String> explicitPostTestIds = bindings.stream()
+                .filter(binding -> binding.phase() == org.filteredpush.bdq_workbench.model.Phase.POST_AMENDMENT)
+                .map(ImplementationBinding::testId)
+                .collect(Collectors.toSet());
+        for (int index = 0; index < bindings.size(); index++) {
+            ImplementationBinding binding = bindings.get(index);
+            if (!BuiltInMeasureSpec.isBuiltIn(binding)) {
+                continue;
+            }
+            BuiltInMeasureSpec spec = BuiltInMeasureSpec.from(binding).orElse(null);
+            if (spec == null || hasRunnableTargetBinding(binding, spec, bindings, explicitPostTestIds)) {
+                continue;
+            }
+            String diagnostic = "Built-in multi-record measure retained for diagnostics only: target test "
+                    + spec.targetTestId()
+                    + " has no runnable direct binding in phase "
+                    + binding.phase();
+            bindings.set(index, copyBindingWithStatus(binding, BindingStatus.UNBOUND, diagnostic));
+            for (int reviewIndex = 0; reviewIndex < reviews.size(); reviewIndex++) {
+                BindingReview review = reviews.get(reviewIndex);
+                if (review.test().id().equals(binding.testId())) {
+                    reviews.set(reviewIndex, copyReviewWithStatus(review, BindingStatus.UNBOUND, diagnostic));
+                    if (unresolvedIds.add(review.test().id())) {
+                        unresolved.add(review.test());
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    /**
+     * Reports whether a built-in measure's target test has a runnable binding in the same
+     * effective phase that execution will use.
+     *
+     * @param measureBinding the built-in measure binding
+     * @param spec the built-in measure specification recovered from the binding
+     * @param bindings all bindings for the run
+     * @param explicitPostTestIds tests that already have an explicit POST_AMENDMENT binding
+     * @return {@code true} if the target will execute in the measure's phase
+     */
+    private static boolean hasRunnableTargetBinding(
+            ImplementationBinding measureBinding,
+            BuiltInMeasureSpec spec,
+            List<ImplementationBinding> bindings,
+            Set<String> explicitPostTestIds) {
+        return bindings.stream()
+                .filter(binding -> !BuiltInMeasureSpec.isBuiltIn(binding))
+                .filter(ImplementationBinding::isRunnable)
+                .anyMatch(binding -> spec.targetTestId().equals(binding.testId())
+                        && effectiveInPhase(binding, measureBinding.phase(), explicitPostTestIds));
+    }
+
+    /**
+     * Reports whether a direct binding executes in the given phase, mirroring the execution
+     * service's PRE-to-POST validation rebind behavior.
+     *
+     * @param binding the direct binding to inspect
+     * @param phase the phase being checked
+     * @param explicitPostTestIds tests that already have an explicit POST_AMENDMENT binding
+     * @return {@code true} if {@code binding} will execute in {@code phase}
+     */
+    private static boolean effectiveInPhase(
+            ImplementationBinding binding,
+            org.filteredpush.bdq_workbench.model.Phase phase,
+            Set<String> explicitPostTestIds) {
+        if (binding.phase() == phase) {
+            return true;
+        }
+        return phase == org.filteredpush.bdq_workbench.model.Phase.POST_AMENDMENT
+                && binding.phase() == org.filteredpush.bdq_workbench.model.Phase.PRE_AMENDMENT
+                && binding.testType() != TestType.AMENDMENT
+                && !explicitPostTestIds.contains(binding.testId());
+    }
+
+    /**
+     * Copies a binding with a new status and one extra diagnostic message.
+     *
+     * @param binding the binding to copy
+     * @param status the new binding status
+     * @param diagnostic the diagnostic message to append
+     * @return the copied binding
+     */
+    private static ImplementationBinding copyBindingWithStatus(
+            ImplementationBinding binding,
+            BindingStatus status,
+            String diagnostic) {
+        List<String> diagnostics = new ArrayList<>(binding.diagnostics());
+        diagnostics.add(diagnostic);
+        return new ImplementationBinding(
+                binding.testId(),
+                binding.testType(),
+                binding.implementationClass(),
+                binding.implementationMethod(),
+                binding.phase(),
+                binding.parameters(),
+                status,
+                binding.parameterizationCapability(),
+                binding.methodSelection(),
+                binding.usingDefaultParameters(),
+                binding.parameterBindings(),
+                List.copyOf(diagnostics));
+    }
+
+    /**
+     * Copies a review with a new binding status and one extra diagnostic message.
+     *
+     * @param review the review to copy
+     * @param status the new binding status
+     * @param diagnostic the diagnostic message to append
+     * @return the copied review
+     */
+    private static BindingReview copyReviewWithStatus(
+            BindingReview review,
+            BindingStatus status,
+            String diagnostic) {
+        List<String> diagnostics = new ArrayList<>(review.diagnostics());
+        diagnostics.add(diagnostic);
+        return new BindingReview(
+                review.test(),
+                review.implementationStatus(),
+                status,
+                review.parameterizationCapability(),
+                review.chosenImplementationMethod(),
+                review.parameterValues(),
+                review.usingDefaultParameters(),
+                List.copyOf(diagnostics));
     }
 
     /**
@@ -729,7 +1099,8 @@ public class DefaultTestBindingService implements TestBindingService {
             DiscoveredImplementation chosen,
             String selectionReason,
             List<String> diagnostics,
-            boolean ambiguous) {
+            boolean ambiguous,
+            CandidateAssessment chosenAssessment) {
     }
 
     /**
@@ -739,5 +1110,50 @@ public class DefaultTestBindingService implements TestBindingService {
      * @param binding the resulting binding, including its parameter bindings and diagnostics
      */
     private record CandidateEvaluation(ImplementationBinding binding) {
+    }
+
+    /**
+     * Compatibility assessment for one candidate implementation against the RDF parameters
+     * supplied on a test definition.
+     *
+     * @param candidate the candidate being assessed
+     * @param exactMatchedParameterCount how many supplied RDF parameters exactly matched a Java
+     *     {@code @Parameter}
+     * @param unmatchedRdfParameterCount how many supplied RDF parameters matched no Java
+     *     {@code @Parameter}
+     * @param requiredMissingParameterCount how many Java {@code @Parameter}s remained unresolved
+     *     after exact matching/default handling
+     * @param defaultedParameterCount how many Java {@code @Parameter}s would rely on null/default
+     *     invocation
+     * @param fullyCompatible whether the candidate exactly covers the supplied RDF parameters and
+     *     leaves no unresolved Java {@code @Parameter}
+     * @param diagnostics detailed compatibility diagnostics for this candidate
+     */
+    private record CandidateAssessment(
+            DiscoveredImplementation candidate,
+            int exactMatchedParameterCount,
+            int unmatchedRdfParameterCount,
+            int requiredMissingParameterCount,
+            int defaultedParameterCount,
+            boolean fullyCompatible,
+            List<String> diagnostics) {
+
+        /**
+         * Builds a concise summary line for preflight diagnostics.
+         *
+         * @return a one-line coverage summary for this candidate
+         */
+        private String summary() {
+            return "Candidate "
+                    + candidate.fullImplementationSignature()
+                    + " coverage: exact RDF parameters="
+                    + exactMatchedParameterCount
+                    + ", unmatched RDF parameters="
+                    + unmatchedRdfParameterCount
+                    + ", unresolved Java @Parameter inputs="
+                    + requiredMissingParameterCount
+                    + ", defaulted Java @Parameter inputs="
+                    + defaultedParameterCount;
+        }
     }
 }

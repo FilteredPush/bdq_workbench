@@ -262,6 +262,82 @@ class BdqWorkbenchGuiTest {
     }
 
     @Test
+    void preflightSummaryCountsOnlyRunnableBindings() throws Exception {
+        PreparedRun preparedRun = new PreparedRun(
+                new AppConfig(Path.of("usecase.xml"), List.of(), Path.of("dataset.zip"), "uc1", List.of("org.filteredpush"), 1, true),
+                new RecordDataset(List.of(new CanonicalRecord("r1", Map.of("dwc:eventDate", "2025-01-01")))),
+                new ExecutionPlan(
+                        new UseCase("uc1", "Use Case", "policy:1"),
+                        new Policy("policy:1", List.of("urn:test:runnable", "urn:test:non-runnable")),
+                        List.of(
+                                new TestDefinition("urn:test:runnable", "Runnable", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of()),
+                                new TestDefinition("urn:test:non-runnable", "Non Runnable", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of())),
+                        List.of()),
+                List.of(),
+                new TestBindingResult(
+                        List.of(
+                                new ImplementationBinding(
+                                        "urn:test:runnable",
+                                        TestType.VALIDATION,
+                                        "example.Impl",
+                                        "run",
+                                        Phase.PRE_AMENDMENT,
+                                        Map.of(),
+                                        BindingStatus.BOUND,
+                                        ParameterizationCapability.DEFAULT_ONLY,
+                                        "selected",
+                                        true,
+                                        List.of(),
+                                        List.of("BOUND: all parameters compatible")),
+                                new ImplementationBinding(
+                                        "urn:test:non-runnable",
+                                        TestType.VALIDATION,
+                                        "example.Impl",
+                                        "skip",
+                                        Phase.PRE_AMENDMENT,
+                                        Map.of(),
+                                        BindingStatus.UNBOUND,
+                                        ParameterizationCapability.DEFAULT_ONLY,
+                                        "selected",
+                                        true,
+                                        List.of(),
+                                        List.of("Missing parameter value for bdq:sourceAuthority"))),
+                        List.of(new TestDefinition("urn:test:non-runnable", "Non Runnable", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of())),
+                        List.of(
+                                new BindingReview(
+                                        new TestDefinition("urn:test:runnable", "Runnable", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of()),
+                                        ImplementationStatus.FOUND,
+                                        BindingStatus.BOUND,
+                                        ParameterizationCapability.DEFAULT_ONLY,
+                                        "example.Impl#run()",
+                                        Map.of(),
+                                        true,
+                                        List.of("BOUND: all parameters compatible")),
+                                new BindingReview(
+                                        new TestDefinition("urn:test:non-runnable", "Non Runnable", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of()),
+                                        ImplementationStatus.FOUND,
+                                        BindingStatus.UNBOUND,
+                                        ParameterizationCapability.DEFAULT_ONLY,
+                                        "example.Impl#skip()",
+                                        Map.of(),
+                                        true,
+                                        List.of("Missing parameter value for bdq:sourceAuthority")))),
+                RecordFilterSummary.unfiltered(new RecordDataset(List.of(new CanonicalRecord("r1", Map.of("dwc:eventDate", "2025-01-01"))))));
+
+        Class<?> preflightStateClass = Class.forName("org.filteredpush.bdq_workbench.app.BdqWorkbenchGui$PreflightState");
+        java.lang.reflect.Constructor<?> constructor = preflightStateClass.getDeclaredConstructor(PreparedRun.class);
+        constructor.setAccessible(true);
+        Object preflightState = constructor.newInstance(preparedRun);
+        Method renderPreflightMessage = BdqWorkbenchGui.class.getDeclaredMethod("renderPreflightMessage", preflightStateClass);
+        renderPreflightMessage.setAccessible(true);
+
+        String summary = (String) renderPreflightMessage.invoke(null, preflightState);
+
+        assertThat(summary).contains("Runnable mapped tests: 1");
+        assertThat(summary).contains("Mapped but not runnable");
+    }
+
+    @Test
     void resultSummaryUsesReadableMultiLineSections() throws Exception {
         Method renderSummary = BdqWorkbenchGui.class.getDeclaredMethod("renderResultSummary", ExecutionSummary.class);
         renderSummary.setAccessible(true);

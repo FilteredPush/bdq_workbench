@@ -196,6 +196,60 @@ class ReflectionExecutionAdapterTest {
         assertThat(trace.argumentTraces().get(1).reason()).contains("Failed to convert value");
     }
 
+    @Test
+    void returnsControlledErrorWhenBindingMetadataDoesNotMatchReflectedMethod() throws Exception {
+        ReflectionExecutionAdapter adapter = new ReflectionExecutionAdapter();
+        Method method = Impl.class.getMethod("validateFour", String.class, String.class, String.class, String.class);
+        MethodParameter latitude = new MethodParameter(0, "p0", ParameterRole.ACTED_UPON, "decimalLatitude", String.class.getName(), true);
+        MethodParameter longitude = new MethodParameter(1, "p1", ParameterRole.ACTED_UPON, "decimalLongitude", String.class.getName(), true);
+        MethodParameter countryCode = new MethodParameter(2, "p2", ParameterRole.ACTED_UPON, "countryCode", String.class.getName(), true);
+        MethodParameter sourceAuthority = new MethodParameter(3, "p3", ParameterRole.PARAMETER, "bdq:sourceAuthority", String.class.getName(), true);
+        ImplementationBinding binding = new ImplementationBinding(
+                "urn:test:mismatch",
+                TestType.VALIDATION,
+                Impl.class.getName(),
+                "validateFour",
+                Phase.PRE_AMENDMENT,
+                Map.of(),
+                BindingStatus.BOUND,
+                ParameterizationCapability.PARAMETERIZED_ONLY,
+                "overloaded",
+                true,
+                List.of(
+                        new BoundMethodParameter(latitude, "decimalLatitude", null, true, "Mapped"),
+                        new BoundMethodParameter(longitude, "decimalLongitude", null, true, "Mapped"),
+                        new BoundMethodParameter(countryCode, "countryCode", null, true, "Mapped")),
+                List.of());
+        DiscoveredImplementation implementation = new DiscoveredImplementation(
+                "urn:test:mismatch",
+                null,
+                TestType.VALIDATION,
+                Phase.PRE_AMENDMENT,
+                Impl.class.getName(),
+                "validateFour",
+                null,
+                List.of(latitude, longitude, countryCode, sourceAuthority),
+                new Impl(),
+                method);
+
+        ReflectionExecutionAdapter.ExecutionTrace trace = adapter.executeWithTrace(
+                new CanonicalRecord(
+                        "r1",
+                        Map.of(
+                                "decimalLatitude", "1",
+                                "decimalLongitude", "2",
+                                "countryCode", "FR")),
+                binding,
+                implementation);
+
+        assertThat(trace.response().status()).isEqualTo(OutcomeStatus.ERROR);
+        assertThat(trace.response().responseStatus()).isEqualTo("ERROR");
+        assertThat(trace.response().message())
+                .contains("Invocation metadata mismatch")
+                .contains("binding argument count=3, reflected argument count=4")
+                .contains("likely cause=overloaded method ambiguity or stale discovered metadata");
+    }
+
     static class Impl {
         public StubDQResponse validate(String eventDate, Integer latestValidDate) {
             return new StubDQResponse("RUN_HAS_RESULT", "COMPLIANT", "checked");
@@ -203,6 +257,10 @@ class ReflectionExecutionAdapterTest {
 
         public StubDQResponse.StubDQResponseWithoutValue prerequisiteOnly(String eventDate) {
             return new StubDQResponse.StubDQResponseWithoutValue("INTERNAL_PREREQUISITES_NOT_MET", "{}", null);
+        }
+
+        public StubDQResponse validateFour(String decimalLatitude, String decimalLongitude, String countryCode, String sourceAuthority) {
+            return new StubDQResponse("RUN_HAS_RESULT", "COMPLIANT", sourceAuthority);
         }
     }
 
