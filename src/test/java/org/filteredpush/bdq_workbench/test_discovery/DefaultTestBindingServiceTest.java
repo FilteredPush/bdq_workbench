@@ -467,6 +467,39 @@ class DefaultTestBindingServiceTest {
     }
 
     @Test
+    void stillBindsUnqualifiedLocalNameParameterAliases() throws Exception {
+        DefaultTestBindingService service = new DefaultTestBindingService();
+        DiscoveredImplementation discovered = new DiscoveredImplementation(
+                "urn:test:alias",
+                null,
+                TestType.VALIDATION,
+                Phase.PRE_AMENDMENT,
+                Dummy.class.getName(),
+                "parameterized",
+                null,
+                List.of(
+                        parameter(0, ParameterRole.ACTED_UPON, "dwc:eventDate", String.class),
+                        parameter(1, ParameterRole.PARAMETER, "bdq:latestValidDate", Integer.class)),
+                new Dummy(),
+                Dummy.class.getMethod("parameterized", String.class, Integer.class));
+
+        TestBindingResult result = service.bind(
+                List.of(new TestDefinition(
+                        "urn:test:alias",
+                        "Test",
+                        TestType.VALIDATION,
+                        Phase.PRE_AMENDMENT,
+                        Map.of("latestValidDate", "2026"))),
+                List.of(discovered),
+                Map.of(),
+                Set.of("dwc:eventDate"));
+
+        assertThat(result.bindings()).singleElement().satisfies(binding ->
+                assertThat(binding.bindingStatus()).isEqualTo(BindingStatus.BOUND));
+        assertThat(result.unresolved()).isEmpty();
+    }
+
+    @Test
     void builtInMeasureIsRetainedForDiagnosticsWhenTargetBindingIsNotRunnable() throws Exception {
         DefaultTestBindingService service = new DefaultTestBindingService();
         DiscoveredImplementation validationImplementation = new DiscoveredImplementation(

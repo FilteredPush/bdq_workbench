@@ -437,7 +437,7 @@ public class DefaultTestBindingService implements TestBindingService {
      */
     private static String resolveParameterValue(Map<String, String> parameters, String parameterName) {
         for (Map.Entry<String, String> entry : parameters.entrySet()) {
-            if (normalizeIdentifier(entry.getKey()).equals(normalizeIdentifier(parameterName))) {
+            if (parameterIdentifiersMatch(entry.getKey(), parameterName)) {
                 return entry.getValue();
             }
         }
@@ -805,7 +805,7 @@ public class DefaultTestBindingService implements TestBindingService {
      * @return {@code true} if an exact normalized identifier match exists
      */
     private static boolean hasExactParameterMatch(Collection<String> candidates, String requested) {
-        return candidates.stream().anyMatch(candidate -> normalizeIdentifier(candidate).equals(normalizeIdentifier(requested)));
+        return candidates.stream().anyMatch(candidate -> parameterIdentifiersMatch(candidate, requested));
     }
 
     /**
@@ -819,10 +819,46 @@ public class DefaultTestBindingService implements TestBindingService {
         String requestedFull = normalizeIdentifier(requested);
         String requestedLocal = normalizeIdentifier(DarwinCoreTermResolver.localName(requested));
         return candidates.stream()
+                .filter(candidate -> !parameterIdentifiersMatch(candidate, requested))
                 .filter(candidate -> !normalizeIdentifier(candidate).equals(requestedFull))
                 .filter(candidate -> normalizeIdentifier(DarwinCoreTermResolver.localName(candidate)).equals(requestedLocal))
                 .sorted()
                 .toList();
+    }
+
+    /**
+     * Reports whether two RDF/annotation parameter identifiers match exactly or via the historical
+     * local-name alias rule.
+     *
+     * <p>Unqualified local names (for example {@code sourceAuthority}) still match their qualified
+     * form (for example {@code bdq:sourceAuthority}) for backwards compatibility. Two different
+     * qualified identifiers with the same local name do not match and are instead surfaced via the
+     * namespace-mismatch diagnostics added elsewhere in this class.
+     *
+     * @param left one identifier to compare
+     * @param right the other identifier to compare
+     * @return {@code true} if the identifiers should bind to each other
+     */
+    private static boolean parameterIdentifiersMatch(String left, String right) {
+        String normalizedLeft = normalizeIdentifier(left);
+        String normalizedRight = normalizeIdentifier(right);
+        if (normalizedLeft.equals(normalizedRight)) {
+            return true;
+        }
+        return normalizeIdentifier(DarwinCoreTermResolver.localName(left))
+                        .equals(normalizeIdentifier(DarwinCoreTermResolver.localName(right)))
+                && (isLocalNameOnly(left) || isLocalNameOnly(right));
+    }
+
+    /**
+     * Reports whether an identifier is already in its unqualified local-name form.
+     *
+     * @param value the identifier to inspect
+     * @return {@code true} if {@code value} contains no namespace/prefix qualifier
+     */
+    private static boolean isLocalNameOnly(String value) {
+        return normalize(value) != null
+                && DarwinCoreTermResolver.localName(value).equals(value.trim());
     }
 
     /**
