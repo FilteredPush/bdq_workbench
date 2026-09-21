@@ -2720,7 +2720,7 @@ final class BdqWorkbenchGui {
         JLabel stagesLabel = new JLabel("Process stages");
         stagesLabel.setBorder(BorderFactory.createEmptyBorder(8, 0, 4, 0));
         panel.add(stagesLabel);
-        workflowStageStatuses(preparedRun, null, true, false).forEach(stage ->
+        workflowStageStatuses(preparedRun, null, false, true, false).forEach(stage ->
                 panel.add(createVisualizationProgressRow(
                         stage.name(),
                         stage.progressPercent(),
