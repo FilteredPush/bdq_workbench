@@ -1543,6 +1543,13 @@ final class BdqWorkbenchGui {
                     .append(formatTestIdWithLabel(t.id(), t.label()))
                     .append('\n'));
         }
+        if (Files.exists(WorkbenchFacade.bindingDiagnosticsPath())) {
+            sb.append("Binding diagnostics file: ")
+                    .append(WorkbenchFacade.OUTPUT_DIRECTORY)
+                    .append('/')
+                    .append(WorkbenchFacade.BINDING_DIAGNOSTICS_FILE)
+                    .append('\n');
+        }
 
         sb.append("\nNote: COUNT-based multi-record measures are synthesized from validation response streams; other multi-record measures still need explicit implementation.\n");
         if (!state.isFullyResolved()) {

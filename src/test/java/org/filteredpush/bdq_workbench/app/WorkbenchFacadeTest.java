@@ -2,6 +2,7 @@ package org.filteredpush.bdq_workbench.app;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
@@ -32,6 +33,7 @@ import org.filteredpush.bdq_workbench.test_discovery.DiscoveredImplementation;
 import org.filteredpush.bdq_workbench.test_discovery.TestBindingResult;
 import org.filteredpush.bdq_workbench.test_discovery.TestBindingService;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 class WorkbenchFacadeTest {
 
@@ -88,6 +90,126 @@ class WorkbenchFacadeTest {
         assertThat(prepared.filterSummary().originalRecordCount()).isEqualTo(2);
         assertThat(prepared.filterSummary().filteredRecordCount()).isEqualTo(1);
         assertThat(availableTermsSeen.get()).containsExactlyInAnyOrder("dwc:country", "dwc:genus");
+    }
+
+    @Test
+    void prepareWritesBindingDiagnosticsFileForIncompleteBindings(@TempDir Path tempDir) throws Exception {
+        String originalUserDir = System.getProperty("user.dir");
+        try {
+            System.setProperty("user.dir", tempDir.toString());
+            RecordDataset ingested = new RecordDataset(List.of(
+                    new CanonicalRecord("r1", Map.of("dwc:eventDate", "2025-01-01"))));
+            TestDefinition missingImplementation =
+                    new TestDefinition("urn:test:missing", "Missing impl", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of());
+            TestDefinition missingTerm =
+                    new TestDefinition("urn:test:term", "Missing term", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of());
+            TestBindingResult bindingResult = new TestBindingResult(
+                    List.of(),
+                    List.of(missingImplementation, missingTerm),
+                    List.of(
+                            new BindingReview(
+                                    missingImplementation,
+                                    ImplementationStatus.MISSING,
+                                    BindingStatus.UNBOUND,
+                                    ParameterizationCapability.DEFAULT_ONLY,
+                                    "",
+                                    Map.of(),
+                                    true,
+                                    List.of("No implementation discovered for urn:test:missing")),
+                            new BindingReview(
+                                    missingTerm,
+                                    ImplementationStatus.FOUND,
+                                    BindingStatus.TERM_MISSING,
+                                    ParameterizationCapability.DEFAULT_ONLY,
+                                    "example.Impl#term()",
+                                    Map.of(),
+                                    true,
+                                    List.of("TERM MISSING: Term acted_upon/consulted absent in input data: dwc:countryCode"))));
+            WorkbenchFacade facade = new WorkbenchFacade(
+                    inputPath -> ingested,
+                    useCaseId -> new ExecutionPlan(
+                            new UseCase("uc1", "Use Case", "policy:1"),
+                            new Policy("policy:1", List.of(missingImplementation.id(), missingTerm.id())),
+                            List.of(missingImplementation, missingTerm),
+                            List.of()),
+                    () -> List.of(),
+                    (tests, discovered, explicitMapping, availableTerms) -> bindingResult,
+                    (dataset, bindings, discovered) -> List.of(),
+                    new ReportingService(List.of()),
+                    new DefaultRecordFilterService());
+
+            facade.prepare(new AppConfig(
+                    Path.of("usecase.xml"),
+                    List.of(),
+                    Path.of("dataset.zip"),
+                    "uc1",
+                    List.of("org.filteredpush"),
+                    1,
+                    true));
+
+            Path diagnosticsPath = WorkbenchFacade.bindingDiagnosticsPath();
+            assertThat(Files.exists(diagnosticsPath)).isTrue();
+            String diagnostics = Files.readString(diagnosticsPath);
+            assertThat(diagnostics).contains("BDQ Workbench binding diagnostics");
+            assertThat(diagnostics).contains("Binding/configuration errors");
+            assertThat(diagnostics).contains("Missing input term problems");
+            assertThat(diagnostics).contains("No discovered implementation matched this policy test");
+            assertThat(diagnostics).contains("The selected implementation requires one or more Darwin Core terms");
+            assertThat(diagnostics.indexOf("urn:test:missing")).isLessThan(diagnostics.indexOf("urn:test:term"));
+        } finally {
+            System.setProperty("user.dir", originalUserDir);
+        }
+    }
+
+    @Test
+    void prepareDeletesStaleBindingDiagnosticsFileWhenEverythingIsBound(@TempDir Path tempDir) throws Exception {
+        String originalUserDir = System.getProperty("user.dir");
+        try {
+            System.setProperty("user.dir", tempDir.toString());
+            Path diagnosticsPath = WorkbenchFacade.bindingDiagnosticsPath();
+            Files.createDirectories(diagnosticsPath.getParent());
+            Files.writeString(diagnosticsPath, "stale");
+            RecordDataset ingested = new RecordDataset(List.of(
+                    new CanonicalRecord("r1", Map.of("dwc:eventDate", "2025-01-01"))));
+            TestDefinition test = new TestDefinition("urn:test:ok", "Bound", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of());
+            TestBindingResult bindingResult = new TestBindingResult(
+                    List.of(),
+                    List.of(),
+                    List.of(new BindingReview(
+                            test,
+                            ImplementationStatus.FOUND,
+                            BindingStatus.BOUND,
+                            ParameterizationCapability.DEFAULT_ONLY,
+                            "example.Impl#ok()",
+                            Map.of(),
+                            true,
+                            List.of("BOUND: all parameters compatible"))));
+            WorkbenchFacade facade = new WorkbenchFacade(
+                    inputPath -> ingested,
+                    useCaseId -> new ExecutionPlan(
+                            new UseCase("uc1", "Use Case", "policy:1"),
+                            new Policy("policy:1", List.of(test.id())),
+                            List.of(test),
+                            List.of()),
+                    () -> List.of(),
+                    (tests, discovered, explicitMapping, availableTerms) -> bindingResult,
+                    (dataset, bindings, discovered) -> List.of(),
+                    new ReportingService(List.of()),
+                    new DefaultRecordFilterService());
+
+            facade.prepare(new AppConfig(
+                    Path.of("usecase.xml"),
+                    List.of(),
+                    Path.of("dataset.zip"),
+                    "uc1",
+                    List.of("org.filteredpush"),
+                    1,
+                    true));
+
+            assertThat(Files.exists(diagnosticsPath)).isFalse();
+        } finally {
+            System.setProperty("user.dir", originalUserDir);
+        }
     }
 
     @Test

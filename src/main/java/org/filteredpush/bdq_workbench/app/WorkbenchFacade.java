@@ -19,17 +19,25 @@
  */
 package org.filteredpush.bdq_workbench.app;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import org.filteredpush.bdq_workbench.filtering.DefaultRecordFilterService;
 import org.filteredpush.bdq_workbench.filtering.RecordFilterService;
 import org.filteredpush.bdq_workbench.execution.TestExecutionService;
+import org.filteredpush.bdq_workbench.model.BindingReview;
+import org.filteredpush.bdq_workbench.model.BindingStatus;
 import org.filteredpush.bdq_workbench.ingest.IngestService;
 import org.filteredpush.bdq_workbench.model.ExecutionPlan;
 import org.filteredpush.bdq_workbench.model.ExecutionSummary;
 import org.filteredpush.bdq_workbench.model.ExecutionSummaryMetadata;
+import org.filteredpush.bdq_workbench.model.ImplementationStatus;
 import org.filteredpush.bdq_workbench.model.OutcomeStatus;
 import org.filteredpush.bdq_workbench.model.PreparedRun;
 import org.filteredpush.bdq_workbench.model.RecordFilterSummary;
@@ -66,6 +74,8 @@ import org.slf4j.LoggerFactory;
 public class WorkbenchFacade {
 
 	private static final Logger LOG = LoggerFactory.getLogger(WorkbenchFacade.class);
+    static final String OUTPUT_DIRECTORY = "reports";
+    static final String BINDING_DIAGNOSTICS_FILE = "bdq-binding-diagnostics.txt";
 
     private final IngestService ingestService;
     private final PolicyResolverService policyResolverService;
@@ -158,7 +168,160 @@ public class WorkbenchFacade {
                 discovered,
                 java.util.Map.of(),
                 collectAvailableTerms(dataset));
+        writeBindingDiagnosticsFile(plan, bindingResult);
         return new PreparedRun(config, dataset, plan, List.copyOf(discovered), bindingResult, filterSummary);
+    }
+
+    /**
+     * Writes a developer-oriented binding diagnostics report when setup/preflight finds tests that
+     * were not fully bound, and deletes any stale report when every binding is fully bound.
+     *
+     * @param plan the resolved execution plan for the current setup run
+     * @param bindingResult the binding outcome produced during setup
+     */
+    private static void writeBindingDiagnosticsFile(ExecutionPlan plan, TestBindingResult bindingResult) {
+        Path diagnosticsPath = bindingDiagnosticsPath();
+        List<BindingReview> diagnosticReviews = bindingResult.reviews().stream()
+                .filter(WorkbenchFacade::shouldWriteBindingDiagnostic)
+                .sorted(bindingDiagnosticComparator())
+                .toList();
+        try {
+            if (diagnosticReviews.isEmpty()) {
+                Files.deleteIfExists(diagnosticsPath);
+                return;
+            }
+            Files.createDirectories(diagnosticsPath.getParent());
+            Files.writeString(
+                    diagnosticsPath,
+                    renderBindingDiagnostics(plan, diagnosticReviews),
+                    StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new AppException("Unable to write binding diagnostics", e);
+        }
+    }
+
+    /**
+     * Reports whether one binding review should appear in the developer diagnostics report.
+     *
+     * @param review one binding review
+     * @return {@code true} when the review reflects an incomplete or failed binding
+     */
+    private static boolean shouldWriteBindingDiagnostic(BindingReview review) {
+        return review.implementationStatus() != ImplementationStatus.FOUND
+                || review.bindingStatus() != BindingStatus.BOUND;
+    }
+
+    /**
+     * Orders diagnostics with binding/configuration errors first and missing-input-term problems
+     * afterward, preserving a stable developer-friendly grouping.
+     *
+     * @return comparator for binding-diagnostics report rows
+     */
+    private static Comparator<BindingReview> bindingDiagnosticComparator() {
+        return Comparator
+                .comparingInt((BindingReview review) -> review.bindingStatus() == BindingStatus.TERM_MISSING ? 1 : 0)
+                .thenComparing((BindingReview review) -> review.test().phase())
+                .thenComparing(review -> review.test().id());
+    }
+
+    /**
+     * Renders the plain-text binding diagnostics report written after setup/preflight.
+     *
+     * @param plan the execution plan whose tests were bound
+     * @param diagnosticReviews the binding reviews to describe, already sorted
+     * @return the diagnostics report text
+     */
+    private static String renderBindingDiagnostics(
+            ExecutionPlan plan,
+            List<BindingReview> diagnosticReviews) {
+        StringBuilder builder = new StringBuilder();
+        builder.append("BDQ Workbench binding diagnostics\n");
+        builder.append("Use case: ").append(plan.useCase().id()).append(" (").append(plan.useCase().label()).append(")\n");
+        builder.append("Entries are ordered with binding/configuration errors first, followed by missing-input-term problems.\n\n");
+        appendBindingDiagnosticSection(builder, "Binding/configuration errors", diagnosticReviews, false);
+        appendBindingDiagnosticSection(builder, "Missing input term problems", diagnosticReviews, true);
+        return builder.toString();
+    }
+
+    /**
+     * Appends one binding-diagnostics section.
+     *
+     * @param builder report buffer under construction
+     * @param title section title
+     * @param reviews all candidate reviews
+     * @param termMissingSection whether to append the missing-term section ({@code true}) or the
+     *     non-term error section ({@code false})
+     */
+    private static void appendBindingDiagnosticSection(
+            StringBuilder builder,
+            String title,
+            List<BindingReview> reviews,
+            boolean termMissingSection) {
+        List<BindingReview> sectionReviews = reviews.stream()
+                .filter(review -> (review.bindingStatus() == BindingStatus.TERM_MISSING) == termMissingSection)
+                .toList();
+        if (sectionReviews.isEmpty()) {
+            return;
+        }
+        builder.append(title).append('\n');
+        for (BindingReview review : sectionReviews) {
+            builder.append(" - Test: ")
+                    .append(review.test().id())
+                    .append(" [")
+                    .append(review.test().phase())
+                    .append(", ")
+                    .append(review.test().type())
+                    .append("]\n");
+            if (review.test().label() != null && !review.test().label().isBlank()) {
+                builder.append("   Label: ").append(review.test().label()).append('\n');
+            }
+            if (review.chosenImplementationMethod() != null && !review.chosenImplementationMethod().isBlank()) {
+                builder.append("   Candidate: ").append(review.chosenImplementationMethod()).append('\n');
+            }
+            builder.append("   Implementation status: ").append(review.implementationStatus()).append('\n');
+            builder.append("   Binding status: ").append(review.bindingStatus()).append('\n');
+            builder.append("   Developer explanation: ").append(bindingDeveloperExplanation(review)).append('\n');
+            if (!review.parameterValues().isEmpty()) {
+                builder.append("   Parameter values: ").append(review.parameterValues()).append('\n');
+            }
+            builder.append("   Diagnostics:\n");
+            review.diagnostics().forEach(diagnostic -> builder.append("    * ").append(diagnostic).append('\n'));
+        }
+        builder.append('\n');
+    }
+
+    /**
+     * Summarizes the likely cause of one incomplete binding in developer-facing terms.
+     *
+     * @param review the binding review to explain
+     * @return one concise developer-oriented explanation
+     */
+    private static String bindingDeveloperExplanation(BindingReview review) {
+        if (review.bindingStatus() == BindingStatus.TERM_MISSING) {
+            return "The selected implementation requires one or more Darwin Core terms that were not present in the filtered dataset. Check the dataset table selection, record filters, ingest mapping, or whether this test expects fields that only exist in another table.";
+        }
+        if (review.implementationStatus() == ImplementationStatus.MISSING) {
+            return "No discovered implementation matched this policy test. Verify the dependency is on the classpath, the discovery package includes it, and its @Provides/@ProvidesVersion identifiers match the RDF test definition.";
+        }
+        if (review.implementationStatus() == ImplementationStatus.AMBIGUOUS) {
+            return "More than one discovered implementation remained viable for this test. Compare the candidate signatures and annotations, then either fix the conflicting metadata or supply an explicit full-signature mapping.";
+        }
+        if (review.bindingStatus() == BindingStatus.UNBOUND) {
+            return "A candidate implementation was discovered but could not be bound safely. Review the parameter diagnostics for missing RDF parameters, namespace mismatches, overload ambiguity, or stale implementation metadata.";
+        }
+        if (review.bindingStatus() == BindingStatus.PARTIAL) {
+            return "This binding is only partial: execution may still be possible, but at least one optional/defaultable input could not be matched exactly. Review the diagnostics to confirm the implementation defaults and parameter mapping are intentional.";
+        }
+        return "Review the diagnostics below for the exact binding mismatch.";
+    }
+
+    /**
+     * Returns the setup-phase binding diagnostics output path.
+     *
+     * @return the binding diagnostics file under the standard output directory
+     */
+    static Path bindingDiagnosticsPath() {
+        return Path.of(System.getProperty("user.dir"), OUTPUT_DIRECTORY, BINDING_DIAGNOSTICS_FILE);
     }
 
     /**
