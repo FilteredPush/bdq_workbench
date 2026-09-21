@@ -21,11 +21,13 @@
 package org.filteredpush.bdq_workbench.app;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import javax.swing.table.AbstractTableModel;
 import org.filteredpush.bdq_workbench.model.BindingReview;
+import org.filteredpush.bdq_workbench.model.TestType;
 
 /**
  * Table model for preflight binding review and parameter edits.
@@ -257,6 +259,8 @@ public class BindingReviewTableModel extends AbstractTableModel {
      */
     public void applyExecutionOutputs(Map<String, PhaseExecutionOutput> outputs) {
         Map<String, PhaseExecutionOutput> safeOutputs = outputs == null ? Map.of() : outputs;
+        List<RowState> previousOrder = List.copyOf(rows);
+        boolean changed = false;
         for (int index = 0; index < rows.size(); index++) {
             RowState row = rows.get(index);
             PhaseExecutionOutput next = safeOutputs.getOrDefault(row.review.test().id(), new PhaseExecutionOutput("", ""));
@@ -264,8 +268,14 @@ public class BindingReviewTableModel extends AbstractTableModel {
                     || !next.postAmendment().equals(row.postAmendmentOutput)) {
                 row.preAmendmentOutput = next.preAmendment();
                 row.postAmendmentOutput = next.postAmendment();
-                fireTableRowsUpdated(index, index);
+                changed = true;
             }
+        }
+        rows.sort(Comparator
+                .comparingInt(RowState::executionDisplayGroup)
+                .thenComparing(RowState::displayLabel, String.CASE_INSENSITIVE_ORDER));
+        if (changed || !rows.equals(previousOrder)) {
+            fireTableDataChanged();
         }
     }
 
@@ -379,6 +389,39 @@ public class BindingReviewTableModel extends AbstractTableModel {
          */
         private boolean supportsParameterEditing() {
             return review.parameterizationCapability() != org.filteredpush.bdq_workbench.model.ParameterizationCapability.DEFAULT_ONLY;
+        }
+
+        /**
+         * Returns the post-run grouping order for this row in the binding table.
+         *
+         * @return 0 for multi-record measures with results, 1 for multi-record measures without
+         *     results, 2 for all single-record tests
+         */
+        private int executionDisplayGroup() {
+            if (review.test().type() != TestType.MEASURE) {
+                return 2;
+            }
+            return hasExecutionResult() ? 0 : 1;
+        }
+
+        /**
+         * Reports whether this row has any execution output to show after a run.
+         *
+         * @return {@code true} if either phase-output column is non-blank
+         */
+        private boolean hasExecutionResult() {
+            return !(preAmendmentOutput == null || preAmendmentOutput.isBlank())
+                    || !(postAmendmentOutput == null || postAmendmentOutput.isBlank());
+        }
+
+        /**
+         * Returns the human-readable label used for alphabetical ordering within one display group.
+         *
+         * @return the test label when present, otherwise the test identifier
+         */
+        private String displayLabel() {
+            String label = review.test().label();
+            return label == null || label.isBlank() ? review.test().id() : label;
         }
     }
 }

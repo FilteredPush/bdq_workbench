@@ -291,6 +291,9 @@ public class DefaultTestBindingService implements TestBindingService {
             if (bound.suppliedValue() != null && parameter.role() == ParameterRole.PARAMETER) {
                 parameterValues.put(parameter.source(), bound.suppliedValue());
             }
+            if (isMissingInputTermWarning(bound)) {
+                diagnostics.add(bound.reason());
+            }
             if (!bound.bound()) {
                 diagnostics.add(bound.reason());
                 if (isTermMissing(bound)) {
@@ -882,6 +885,21 @@ public class DefaultTestBindingService implements TestBindingService {
         return (parameter.parameter().role() == ParameterRole.ACTED_UPON
                         || parameter.parameter().role() == ParameterRole.CONSULTED)
                 && parameter.reason().startsWith("TERM MISSING:");
+    }
+
+    /**
+     * Reports whether a bound parameter still carries a warning that its Darwin Core information
+     * element was absent from the dataset and will therefore execute as an empty string.
+     *
+     * @param parameter the bound parameter to inspect
+     * @return {@code true} if the parameter is an acted-upon/consulted field bound with the
+     *     empty-string fallback diagnostic
+     */
+    private static boolean isMissingInputTermWarning(BoundMethodParameter parameter) {
+        return parameter.bound()
+                && (parameter.parameter().role() == ParameterRole.ACTED_UPON
+                        || parameter.parameter().role() == ParameterRole.CONSULTED)
+                && parameter.reason().startsWith("Term acted_upon/consulted absent in input data:");
     }
 
     /**

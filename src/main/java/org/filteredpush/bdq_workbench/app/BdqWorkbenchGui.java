@@ -1551,6 +1551,7 @@ final class BdqWorkbenchGui {
                     .append('\n');
         }
 
+        sb.append("Hint: right-click a single test row in the table to inspect it or run that test in isolation.\n");
         sb.append("\nNote: COUNT-based multi-record measures are synthesized from validation response streams; other multi-record measures still need explicit implementation.\n");
         if (!state.isFullyResolved()) {
             sb.append("You can continue with available tests.\n");
@@ -3095,7 +3096,7 @@ final class BdqWorkbenchGui {
         bindingGrid.setModel(new BindingReviewTableModel(state[0].preparedRun().bindingResult().reviews()));
         configureBindingGrid(bindingGrid);
         resultSummaryArea.setText(renderStageOverview(preparedRun, null, false, false, false)
-                + "\nParameter review ready. Edit parameter values, use the row popup, or save/load settings before starting the run.\n");
+                + "\nParameter review ready. Edit parameter values, right-click a single test row to inspect it or run it in isolation, or save/load settings before starting the run.\n");
         boolean complete = state[0].isFullyResolved();
         if (!complete && !runWithAvailableOnly.isSelected()) {
             appendStatus(statusArea, "\nRun is blocked until unresolved tests are handled.\n");

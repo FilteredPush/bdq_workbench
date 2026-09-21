@@ -335,6 +335,7 @@ class BdqWorkbenchGuiTest {
 
         assertThat(summary).contains("Runnable mapped tests: 1");
         assertThat(summary).contains("Mapped but not runnable");
+        assertThat(summary).contains("right-click a single test row");
     }
 
     @Test
@@ -541,6 +542,46 @@ class BdqWorkbenchGuiTest {
                 .isEqualTo("1 (50.0%)");
         assertThat(model.getValueAt(0, 9))
                 .isEqualTo("2 (100.0%)");
+    }
+
+    @Test
+    void bindingReviewTableModelSortsMeasuresAheadOfSingleRecordTestsAfterRun() {
+        BindingReviewTableModel model = new BindingReviewTableModel(List.of(
+                new BindingReview(
+                        new TestDefinition("urn:test:validation", "Zebra validation", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of()),
+                        ImplementationStatus.FOUND,
+                        BindingStatus.BOUND,
+                        ParameterizationCapability.DEFAULT_ONLY,
+                        "example#validation",
+                        Map.of(),
+                        true,
+                        List.of()),
+                new BindingReview(
+                        new TestDefinition("urn:test:measure-without", "Bravo measure", TestType.MEASURE, Phase.PRE_AMENDMENT, Map.of()),
+                        ImplementationStatus.FOUND,
+                        BindingStatus.BOUND,
+                        ParameterizationCapability.DEFAULT_ONLY,
+                        "built-in",
+                        Map.of(),
+                        true,
+                        List.of()),
+                new BindingReview(
+                        new TestDefinition("urn:test:measure-with", "Alpha measure", TestType.MEASURE, Phase.PRE_AMENDMENT, Map.of()),
+                        ImplementationStatus.FOUND,
+                        BindingStatus.BOUND,
+                        ParameterizationCapability.DEFAULT_ONLY,
+                        "built-in",
+                        Map.of(),
+                        true,
+                        List.of())));
+
+        model.applyExecutionOutputs(Map.of(
+                "urn:test:measure-with",
+                new BindingReviewTableModel.PhaseExecutionOutput("1 (50.0%)", "")));
+
+        assertThat(model.reviewAt(0).test().label()).isEqualTo("Alpha measure");
+        assertThat(model.reviewAt(1).test().label()).isEqualTo("Bravo measure");
+        assertThat(model.reviewAt(2).test().label()).isEqualTo("Zebra validation");
     }
 
     @Test

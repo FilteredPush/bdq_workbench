@@ -511,11 +511,13 @@ class DefaultTestBindingServiceTest {
                 TestType.VALIDATION,
                 Phase.PRE_AMENDMENT,
                 Dummy.class.getName(),
-                "validate",
+                "parameterized",
                 null,
-                List.of(parameter(0, ParameterRole.ACTED_UPON, "dwc:eventDate", String.class)),
+                List.of(
+                        parameter(0, ParameterRole.ACTED_UPON, "dwc:eventDate", String.class),
+                        parameter(1, ParameterRole.PARAMETER, "bdq:latestValidDate", Integer.class)),
                 new Dummy(),
-                Dummy.class.getMethod("validate"));
+                Dummy.class.getMethod("parameterized", String.class, Integer.class));
         TestDefinition validation = new TestDefinition(
                 "urn:test:validation",
                 "VALIDATION_BASISOFRECORD_NOTEMPTY",

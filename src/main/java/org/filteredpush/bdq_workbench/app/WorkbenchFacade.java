@@ -209,7 +209,8 @@ public class WorkbenchFacade {
      */
     private static boolean shouldWriteBindingDiagnostic(BindingReview review) {
         return review.implementationStatus() != ImplementationStatus.FOUND
-                || review.bindingStatus() != BindingStatus.BOUND;
+                || review.bindingStatus() != BindingStatus.BOUND
+                || hasMissingInputTermDiagnostic(review);
     }
 
     /**
@@ -329,7 +330,7 @@ public class WorkbenchFacade {
      *     measure downstream problems, 3 for missing-input-term problems
      */
     private static int bindingDiagnosticCategory(BindingReview review) {
-        if (review.bindingStatus() == BindingStatus.TERM_MISSING) {
+        if (review.bindingStatus() == BindingStatus.TERM_MISSING || hasMissingInputTermDiagnostic(review)) {
             return 3;
         }
         if (isMultiRecordMeasure(review)) {
@@ -353,14 +354,26 @@ public class WorkbenchFacade {
     }
 
     /**
+     * Reports whether a review carries a warning that one of its information-element terms was
+     * absent from the dataset and therefore bound as an empty string.
+     *
+     * @param review the binding review to inspect
+     * @return {@code true} if the review diagnostics include the empty-string missing-term warning
+     */
+    private static boolean hasMissingInputTermDiagnostic(BindingReview review) {
+        return review.diagnostics().stream()
+                .anyMatch(diagnostic -> diagnostic.startsWith("Term acted_upon/consulted absent in input data:"));
+    }
+
+    /**
      * Summarizes the likely cause of one incomplete binding in developer-facing terms.
      *
      * @param review the binding review to explain
      * @return one concise developer-oriented explanation
      */
     private static String bindingDeveloperExplanation(BindingReview review) {
-        if (review.bindingStatus() == BindingStatus.TERM_MISSING) {
-            return "The selected implementation requires one or more Darwin Core terms that were not present in the filtered dataset. Check the dataset table selection, record filters, ingest mapping, or whether this test expects fields that only exist in another table.";
+        if (review.bindingStatus() == BindingStatus.TERM_MISSING || hasMissingInputTermDiagnostic(review)) {
+            return "One or more Darwin Core information elements were absent from the filtered dataset. This binding will execute with empty-string values for those terms, so review the dataset table selection, record filters, ingest mapping, and whether the test expects fields carried only in another table.";
         }
         if (review.implementationStatus() == ImplementationStatus.MISSING) {
             return "No discovered implementation matched this policy test. Verify the dependency is on the classpath, the discovery package includes it, and its @Provides/@ProvidesVersion identifiers match the RDF test definition.";

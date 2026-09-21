@@ -141,12 +141,12 @@ class WorkbenchFacadeTest {
                             new BindingReview(
                                     missingTerm,
                                     ImplementationStatus.FOUND,
-                                    BindingStatus.TERM_MISSING,
+                                    BindingStatus.BOUND,
                                     ParameterizationCapability.DEFAULT_ONLY,
                                     "example.Impl#term()",
                                     Map.of(),
                                     true,
-                                    List.of("TERM MISSING: Term acted_upon/consulted absent in input data: dwc:countryCode"))));
+                                    List.of("Term acted_upon/consulted absent in input data: dwc:countryCode; binding as an empty string"))));
             WorkbenchFacade facade = new WorkbenchFacade(
                     inputPath -> ingested,
                     useCaseId -> new ExecutionPlan(
@@ -200,7 +200,7 @@ class WorkbenchFacadeTest {
             assertThat(diagnostics).contains("Multi-record measure downstream errors/binding problems");
             assertThat(diagnostics).contains("Missing input term problems");
             assertThat(diagnostics).contains("No discovered implementation matched this policy test");
-            assertThat(diagnostics).contains("The selected implementation requires one or more Darwin Core terms");
+            assertThat(diagnostics).contains("One or more Darwin Core information elements were absent from the filtered dataset");
             assertThat(diagnostics.indexOf("urn:test:missing")).isLessThan(diagnostics.indexOf("urn:test:binding"));
             assertThat(diagnostics.indexOf("urn:test:binding")).isLessThan(diagnostics.indexOf("urn:test:measure"));
             assertThat(diagnostics.indexOf("urn:test:measure")).isLessThan(diagnostics.indexOf("urn:test:term"));
