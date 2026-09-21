@@ -224,6 +224,8 @@ class DefaultTestBindingServiceTest {
                     "Term acted_upon/consulted absent in input data: dwc:eventDate"));
             assertThat(binding.parameterBindings()).singleElement().satisfies(parameter ->
                     assertThat(parameter.resolvedSource()).isEqualTo("dwc:eventDate"));
+            assertThat(binding.parameterBindings()).singleElement().satisfies(parameter ->
+                    assertThat(parameter.suppliedValue()).isEqualTo(""));
         });
         assertThat(result.unresolved()).isEmpty();
     }
@@ -511,13 +513,13 @@ class DefaultTestBindingServiceTest {
                 TestType.VALIDATION,
                 Phase.PRE_AMENDMENT,
                 Dummy.class.getName(),
-                "parameterized",
+                "parameterizedPrimitive",
                 null,
                 List.of(
                         parameter(0, ParameterRole.ACTED_UPON, "dwc:eventDate", String.class),
-                        parameter(1, ParameterRole.PARAMETER, "bdq:latestValidDate", Integer.class)),
+                        parameter(1, ParameterRole.PARAMETER, "bdq:latestValidDate", int.class)),
                 new Dummy(),
-                Dummy.class.getMethod("parameterized", String.class, Integer.class));
+                Dummy.class.getMethod("parameterizedPrimitive", String.class, int.class));
         TestDefinition validation = new TestDefinition(
                 "urn:test:validation",
                 "VALIDATION_BASISOFRECORD_NOTEMPTY",
@@ -564,6 +566,10 @@ class DefaultTestBindingServiceTest {
 
         public boolean parameterized(String value, Integer latestValidDate) {
             return value != null && latestValidDate != null;
+        }
+
+        public boolean parameterizedPrimitive(String value, int latestValidDate) {
+            return value != null && latestValidDate >= 0;
         }
 
         public boolean parameterizedFull(String value, Integer earliestValidDate, Integer latestValidDate) {
