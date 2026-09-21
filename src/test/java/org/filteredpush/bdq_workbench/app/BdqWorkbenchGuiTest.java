@@ -550,6 +550,7 @@ class BdqWorkbenchGuiTest {
                 PreparedRun.class,
                 Phase.class,
                 boolean.class,
+                boolean.class,
                 boolean.class);
         helper.setAccessible(true);
         PreparedRun preparedRun = new PreparedRun(
@@ -568,7 +569,7 @@ class BdqWorkbenchGuiTest {
                         Map.of("dwc:country", List.of("Canada")),
                         List.of("Record filter field country resolved to input field dwc:country")));
 
-        String overview = (String) helper.invoke(null, preparedRun, null, false, false);
+        String overview = (String) helper.invoke(null, preparedRun, null, false, false, false);
 
         assertThat(overview).contains("Workflow progress: 5/9 stages completed");
         assertThat(overview).contains("[completed] Load dataset - 3 records loaded");
@@ -584,6 +585,7 @@ class BdqWorkbenchGuiTest {
                 PreparedRun.class,
                 Phase.class,
                 boolean.class,
+                boolean.class,
                 boolean.class);
         helper.setAccessible(true);
         PreparedRun preparedRun = new PreparedRun(
@@ -595,13 +597,40 @@ class BdqWorkbenchGuiTest {
                 RecordFilterSummary.unfiltered(new RecordDataset(List.of(
                         new CanonicalRecord("r1", Map.of("dwc:country", "Canada"))))));
 
-        String overview = (String) helper.invoke(null, preparedRun, Phase.AMENDMENT, false, false);
+        String overview = (String) helper.invoke(null, preparedRun, Phase.AMENDMENT, false, false, false);
 
         assertThat(overview).contains("Workflow progress: 6/9 stages completed");
         assertThat(overview).contains("Current stage: AMENDMENT (stage 7/9)");
         assertThat(overview).contains("[completed] PRE_AMENDMENT - phase complete");
         assertThat(overview).contains("[running] AMENDMENT - phase in progress");
         assertThat(overview).contains("[pending] POST_AMENDMENT - phase not started");
+    }
+
+    @Test
+    void stageOverviewShowsExportStageWhileReportsAreWriting() throws Exception {
+        Method helper = BdqWorkbenchGui.class.getDeclaredMethod(
+		"renderStageOverview",
+		PreparedRun.class,
+		Phase.class,
+		boolean.class,
+		boolean.class,
+		boolean.class);
+        helper.setAccessible(true);
+        PreparedRun preparedRun = new PreparedRun(
+		null,
+		new RecordDataset(List.of(new CanonicalRecord("r1", Map.of("dwc:country", "Canada")))),
+		new ExecutionPlan(new UseCase("urn:usecase", "Use case", "urn:policy"), new Policy("urn:policy", List.of()), List.of(), List.of()),
+		List.of(),
+		new TestBindingResult(List.of(), List.of(), List.of()),
+		RecordFilterSummary.unfiltered(new RecordDataset(List.of(
+				new CanonicalRecord("r1", Map.of("dwc:country", "Canada"))))));
+
+        String overview = (String) helper.invoke(null, preparedRun, null, true, false, false);
+
+        assertThat(overview).contains("Workflow progress: 8/9 stages completed");
+        assertThat(overview).contains("Current stage: Export reports (stage 9/9)");
+        assertThat(overview).contains("[completed] POST_AMENDMENT - phase complete");
+        assertThat(overview).contains("[running] Export reports - reports in progress");
     }
 
     @Test

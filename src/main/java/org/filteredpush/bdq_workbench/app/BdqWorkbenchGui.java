@@ -122,6 +122,7 @@ import org.slf4j.LoggerFactory;
  */
 final class BdqWorkbenchGui {
     private static final Logger LOG = LoggerFactory.getLogger(BdqWorkbenchGui.class);
+    private static final int FINALIZATION_STAGE_STEP_COUNT = 5;
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     /** Frame width that fits the monitor card's full button row on one line. */
@@ -600,6 +601,8 @@ final class BdqWorkbenchGui {
             showTextSummary.run();
             toggleWorkflowView.setEnabled(false);
             final PreparedRun[] executedRun = new PreparedRun[1];
+            final int[] exportStageTotalSteps = {FINALIZATION_STAGE_STEP_COUNT};
+            final int[] completedExporters = {0};
 
             SwingWorker<ExecutionSummary, Void> worker = new SwingWorker<>() {
                 @Override
@@ -609,25 +612,42 @@ final class BdqWorkbenchGui {
                     PreparedRun editedRun = applyParameterEdits(state[0].preparedRun(), reviewModel);
                     executedRun[0] = editedRun;
                     ExecutionProgressTracker tracker = new ExecutionProgressTracker();
-                    return runWorkbench(editedRun, tracker, snapshot -> SwingUtilities.invokeLater(() -> {
-                        int max = Math.max(1, snapshot.total());
-                        progress.setMaximum(max);
-                        progress.setValue(snapshot.completed());
-                        int currentStageNumber = currentWorkflowStageNumber(editedRun, snapshot.phase(), false);
-                        progress.setString(String.format(
-                                "Workflow stage %d/%d • %s %s (%d active threads) queued=%d completed=%d/%d",
-                                currentStageNumber,
-                                totalWorkflowStageCount(),
-                                snapshot.phase(),
-                                snapshot.running() > 0 ? "running" : "idle",
-                                snapshot.running(),
-                                snapshot.queued(),
-                                snapshot.completed(),
-                                snapshot.total()));
-                        resultSummaryArea.setText(renderStageOverview(editedRun, snapshot.phase(), false, false)
-                                + "\n"
-                                + renderProgressSnapshot(snapshot));
-                    }));
+                    return runWorkbench(
+	editedRun,
+	tracker,
+	snapshot -> SwingUtilities.invokeLater(() -> {
+                                int max = Math.max(1, snapshot.total());
+                                progress.setMaximum(max);
+                                progress.setValue(snapshot.completed());
+                                int currentStageNumber = currentWorkflowStageNumber(editedRun, snapshot.phase(), false, false);
+                                progress.setString(String.format(
+		"Workflow stage %d/%d • %s %s (%d active threads) queued=%d completed=%d/%d",
+		currentStageNumber,
+		totalWorkflowStageCount(),
+		snapshot.phase(),
+		snapshot.running() > 0 ? "running" : "idle",
+		snapshot.running(),
+		snapshot.queued(),
+		snapshot.completed(),
+		snapshot.total()));
+                                resultSummaryArea.setText(renderStageOverview(editedRun, snapshot.phase(), false, false, false)
+		+ "\n"
+		+ renderProgressSnapshot(snapshot));
+	}),
+	(totalExports, completedExports, detail) -> SwingUtilities.invokeLater(() -> {
+                                exportStageTotalSteps[0] = Math.max(
+		FINALIZATION_STAGE_STEP_COUNT,
+		totalExports + FINALIZATION_STAGE_STEP_COUNT);
+                                completedExporters[0] = completedExports;
+                                updateFinalStageProgress(
+		editedRun,
+		progress,
+		resultSummaryArea,
+		completedExports,
+		exportStageTotalSteps[0],
+		detail,
+		true);
+	}));
                 }
 
                 @Override
@@ -636,28 +656,72 @@ final class BdqWorkbenchGui {
                         ExecutionSummary summary = get();
                         PreparedRun completedRun = executedRun[0] == null ? state[0].preparedRun() : executedRun[0];
                         LOG.info("BDQ Workbench execution complete: {} outcomes", summary.responses().size());
+                        int finalizationProgress = completedExporters[0];
                         monitorHeader.setText(monitorHeaderText("Test Results", completedRun));
+                        finalizationProgress++;
+                        updateFinalStageProgress(
+                                completedRun,
+                                progress,
+                                resultSummaryArea,
+                                finalizationProgress,
+                                exportStageTotalSteps[0],
+                                "Preparing result summary",
+                                true);
                         appendStatus(statusArea, "Completed: " + summary.responses().size() + " outcomes\n");
-                        resultSummaryArea.setText(renderStageOverview(completedRun, null, true, false)
-                                + "\n"
-                                + renderResultSummary(summary));
+                        finalizationProgress++;
+                        updateFinalStageProgress(
+                                completedRun,
+                                progress,
+                                resultSummaryArea,
+                                finalizationProgress,
+                                exportStageTotalSteps[0],
+                                "Updating workflow visualization",
+                                true);
                         updateWorkflowVisualizationPanel(workflowVisualizationPanel, completedRun, summary);
                         toggleWorkflowView.setEnabled(true);
                         showTextSummary.run();
+                        finalizationProgress++;
+                        updateFinalStageProgress(
+                                completedRun,
+                                progress,
+                                resultSummaryArea,
+                                finalizationProgress,
+                                exportStageTotalSteps[0],
+                                "Updating binding review outputs",
+                                true);
                         updateBindingGridExecutionOutputs(bindingGrid, summary);
+                        finalizationProgress++;
+                        updateFinalStageProgress(
+                                completedRun,
+                                progress,
+                                resultSummaryArea,
+                                finalizationProgress,
+                                exportStageTotalSteps[0],
+                                "Writing response log",
+                                true);
                         Iterator <Response> i = summary.responses().iterator();
                         while (i.hasNext()) {
-							Response r = i.next();
-                            String responseText = formatStructuredResponse(r);
+	Response r = i.next();
+	String responseText = formatStructuredResponse(r);
 							appendStatus(statusArea, String.format(
 									" - %s [%s/%s]: %s -> %s (%s)\n",
 									r.testId(),
-                                    r.phase(),
-                                    r.responseStatus(),
+			r.phase(),
+			r.responseStatus(),
 									r.recordId(),
 									responseText == null ? "(no structured response)" : responseText,
 									r.message()));
 						}
+                        finalizationProgress++;
+                        progress.setMaximum(Math.max(1, exportStageTotalSteps[0]));
+                        progress.setValue(Math.max(finalizationProgress, exportStageTotalSteps[0]));
+                        progress.setString(String.format(
+		"Workflow stage %d/%d • Export reports complete",
+		totalWorkflowStageCount(),
+		totalWorkflowStageCount()));
+                        resultSummaryArea.setText(renderStageOverview(completedRun, null, false, true, false)
+		+ "\n"
+		+ renderResultSummary(summary));
                     } catch (Exception ex) {
                         Throwable cause = ex.getCause() == null ? ex : ex.getCause();
                         LOG.error("BDQ Workbench execution failed", cause);
@@ -667,6 +731,11 @@ final class BdqWorkbenchGui {
                                 "BDQ Workbench failed: " + cause.getMessage(),
                                 "Execution failed",
                                 JOptionPane.ERROR_MESSAGE);
+                        PreparedRun failedRun = executedRun[0] == null ? state[0].preparedRun() : executedRun[0];
+                        resultSummaryArea.setText(renderStageOverview(failedRun, null, false, false, true)
+                                + "\nExecution failed: "
+                                + cause.getMessage()
+                                + "\n");
                         toggleWorkflowView.setEnabled(false);
                         showTextSummary.run();
                         resetWorkflowVisualizationPanel(workflowVisualizationPanel);
@@ -704,12 +773,15 @@ final class BdqWorkbenchGui {
      * @param preparedRun the dataset, plan, and bindings to execute
      * @param tracker accumulates progress events into a displayable {@link ExecutionProgressSnapshot}
      * @param progressConsumer callback invoked with the latest snapshot after each progress event
+     * @param exportProgressListener callback invoked as report exporters and finalization steps
+     *     advance workflow stage 9
      * @return the summary of the completed execution
      */
     private static ExecutionSummary runWorkbench(
             PreparedRun preparedRun,
             ExecutionProgressTracker tracker,
-            java.util.function.Consumer<ExecutionProgressSnapshot> progressConsumer) {
+            java.util.function.Consumer<ExecutionProgressSnapshot> progressConsumer,
+            ExportStageProgressListener exportProgressListener) {
         WorkbenchFacade facade = createFacade(preparedRun.config(), new ExecutionProgressListener() {
             @Override
             public void onPhaseStarted(org.filteredpush.bdq_workbench.model.Phase phase, int total) {
@@ -739,8 +811,83 @@ final class BdqWorkbenchGui {
             public void onPhaseCompleted(org.filteredpush.bdq_workbench.model.Phase phase, int completed, int total) {
                 progressConsumer.accept(tracker.snapshot());
             }
+        }, new ReportingService.ProgressListener() {
+            @Override
+            public void onExportStarted(int totalExports) {
+                exportProgressListener.onExportProgress(totalExports, 0, "Starting report export");
+            }
+
+            @Override
+            public void onExporterCompleted(String format, int completedExports, int totalExports) {
+                exportProgressListener.onExportProgress(
+		totalExports,
+		completedExports,
+		String.format("Wrote %s report (%d/%d)", format, completedExports, totalExports));
+            }
         });
         return facade.runPrepared(preparedRun);
+    }
+
+    /**
+     * Updates the monitor page to show progress through workflow stage 9 ("Export reports") and
+     * the final UI bookkeeping immediately afterward.
+     *
+     * @param preparedRun the run being executed
+     * @param progress the run progress bar
+     * @param resultSummaryArea the monitor summary area
+     * @param completedSteps completed steps within the final workflow stage
+     * @param totalSteps total steps within the final workflow stage
+     * @param detail human-readable detail about the current export/finalization sub-step
+     * @param exportRunning whether the export/finalization stage is still in progress
+     */
+    private static void updateFinalStageProgress(
+	PreparedRun preparedRun,
+	JProgressBar progress,
+	JTextArea resultSummaryArea,
+	int completedSteps,
+	int totalSteps,
+	String detail,
+	boolean exportRunning) {
+        progress.setMaximum(Math.max(1, totalSteps));
+        progress.setValue(Math.max(0, Math.min(completedSteps, totalSteps)));
+        progress.setString(String.format(
+		"Workflow stage %d/%d • Export reports %s (%d/%d)",
+		totalWorkflowStageCount(),
+		totalWorkflowStageCount(),
+		detail,
+		Math.max(0, Math.min(completedSteps, totalSteps)),
+		Math.max(1, totalSteps)));
+        resultSummaryArea.setText(renderStageOverview(preparedRun, null, exportRunning, false, false)
+		+ "\n"
+		+ "Export progress\n"
+		+ "Current stage: Export reports (stage "
+		+ totalWorkflowStageCount()
+		+ "/"
+		+ totalWorkflowStageCount()
+		+ ")\n"
+		+ "Completed sub-steps: "
+		+ Math.max(0, Math.min(completedSteps, totalSteps))
+		+ "/"
+		+ Math.max(1, totalSteps)
+		+ "\n"
+		+ "Current action: "
+		+ detail
+		+ "\n");
+    }
+
+    /**
+     * Listener that bridges background report-export progress back to the GUI.
+     */
+    @FunctionalInterface
+    private interface ExportStageProgressListener {
+        /**
+         * Reports progress within workflow stage 9 ("Export reports").
+         *
+         * @param totalExports the number of configured exporters
+         * @param completedExports how many exporters have completed so far
+         * @param detail detail about the current export step
+         */
+        void onExportProgress(int totalExports, int completedExports, String detail);
     }
 
     /**
@@ -1202,6 +1349,26 @@ final class BdqWorkbenchGui {
      * @return a facade ready to prepare and run {@code config}
      */
     private static WorkbenchFacade createFacade(AppConfig config, ExecutionProgressListener progressListener) {
+        return createFacade(config, progressListener, new ReportingService.ProgressListener() {
+        });
+    }
+
+    /**
+     * Builds a {@link WorkbenchFacade} wired with the standard set of services (ingest, RDF
+     * policy resolution, classpath test discovery, default test binding, parallel-phase
+     * execution, and the summary/detailed/xls-compatibility/rdf report exporters) for
+     * {@code config}.
+     *
+     * @param config application configuration specifying RDF sources, dataset, discovery
+     *     packages, and thread count
+     * @param progressListener notified of phase/response progress during execution
+     * @param reportingProgressListener notified as reports are exported after execution
+     * @return a facade ready to prepare and run {@code config}
+     */
+    private static WorkbenchFacade createFacade(
+	AppConfig config,
+	ExecutionProgressListener progressListener,
+	ReportingService.ProgressListener reportingProgressListener) {
         return new WorkbenchFacade(
                 new DefaultIngestService(),
                 new RdfPolicyResolverService(config.useCaseXml(), config.rdfDefinitions()),
@@ -1213,7 +1380,7 @@ final class BdqWorkbenchGui {
                         new DetailedResponseStreamExporter(),
                         new XlsxReportExporter(),
                         new UnresolvedResponsesExporter(),
-                        new RdfResponseExporter(config.rdfDefinitions()))));
+                        new RdfResponseExporter(config.rdfDefinitions())), reportingProgressListener));
     }
 
     /**
@@ -2266,6 +2433,7 @@ final class BdqWorkbenchGui {
      *
      * @param preparedRun the prepared run being reviewed or executed
      * @param activePhase the phase currently running, or {@code null} when no execution phase is active
+     * @param exportRunning whether stage 9 (report export/finalization) is in progress
      * @param runCompleted whether the run has finished successfully
      * @param runFailed whether the run has failed
      * @return a multi-line stage overview
@@ -2273,21 +2441,22 @@ final class BdqWorkbenchGui {
     private static String renderStageOverview(
             PreparedRun preparedRun,
             Phase activePhase,
+            boolean exportRunning,
             boolean runCompleted,
             boolean runFailed) {
-        int completedStages = completedWorkflowStageCount(preparedRun, activePhase, runCompleted);
-        List<WorkflowStageStatus> stages = workflowStageStatuses(preparedRun, activePhase, runCompleted, runFailed);
+        int completedStages = completedWorkflowStageCount(preparedRun, activePhase, exportRunning, runCompleted, runFailed);
+        List<WorkflowStageStatus> stages = workflowStageStatuses(preparedRun, activePhase, exportRunning, runCompleted, runFailed);
         StringBuilder builder = new StringBuilder("Process stages\n");
         builder.append("Workflow progress: ")
                 .append(completedStages)
                 .append("/")
                 .append(totalWorkflowStageCount())
                 .append(" stages completed\n");
-        if (preparedRun != null && activePhase != null && !runCompleted && !runFailed) {
+        if (preparedRun != null && (activePhase != null || exportRunning) && !runCompleted && !runFailed) {
             builder.append("Current stage: ")
-                    .append(activePhase)
+                    .append(exportRunning ? "Export reports" : activePhase)
                     .append(" (stage ")
-                    .append(currentWorkflowStageNumber(preparedRun, activePhase, false))
+                    .append(currentWorkflowStageNumber(preparedRun, activePhase, exportRunning, false))
                     .append("/")
                     .append(totalWorkflowStageCount())
                     .append(")\n");
@@ -2334,6 +2503,7 @@ final class BdqWorkbenchGui {
      *
      * @param preparedRun the run being reviewed or executed
      * @param activePhase the currently active phase, if any
+     * @param exportRunning whether stage 9 (report export/finalization) is in progress
      * @param runCompleted whether execution has completed
      * @param runFailed whether execution has failed
      * @return ordered stage statuses for the overall workflow
@@ -2341,6 +2511,7 @@ final class BdqWorkbenchGui {
     private static List<WorkflowStageStatus> workflowStageStatuses(
             PreparedRun preparedRun,
             Phase activePhase,
+            boolean exportRunning,
             boolean runCompleted,
             boolean runFailed) {
         RecordFilterSummary filterSummary = preparedRun == null ? RecordFilterSummary.unfiltered(new RecordDataset(List.of()))
@@ -2383,9 +2554,9 @@ final class BdqWorkbenchGui {
         stages.add(workflowStageStatusForPhase(Phase.POST_AMENDMENT, activePhase, runCompleted, runFailed));
         stages.add(new WorkflowStageStatus(
                 "Export reports",
-                runCompleted ? "completed" : runFailed ? "failed" : "pending",
-                runCompleted ? "reports written" : "reports not written yet",
-                runCompleted ? 100 : runFailed ? 25 : 0));
+                runCompleted ? "completed" : exportRunning ? "running" : runFailed ? "failed" : "pending",
+                runCompleted ? "reports written" : exportRunning ? "reports in progress" : "reports not written yet",
+                runCompleted ? 100 : exportRunning ? 50 : runFailed ? 25 : 0));
         return List.copyOf(stages);
     }
 
@@ -2444,10 +2615,17 @@ final class BdqWorkbenchGui {
      *
      * @param preparedRun the run being displayed
      * @param activePhase the currently running phase, if any
+     * @param exportRunning whether stage 9 (report export/finalization) is in progress
      * @param runCompleted whether the full run has completed
+     * @param runFailed whether the full run has failed after execution phases completed
      * @return the number of completed stages in the monitor view
      */
-    private static int completedWorkflowStageCount(PreparedRun preparedRun, Phase activePhase, boolean runCompleted) {
+    private static int completedWorkflowStageCount(
+            PreparedRun preparedRun,
+            Phase activePhase,
+            boolean exportRunning,
+            boolean runCompleted,
+            boolean runFailed) {
         if (preparedRun == null) {
             return 0;
         }
@@ -2457,6 +2635,10 @@ final class BdqWorkbenchGui {
         int completed = 5;
         if (activePhase != null) {
             completed += activePhase.ordinal();
+        } else if (exportRunning) {
+            completed = totalWorkflowStageCount() - 1;
+        } else if (runFailed) {
+            completed = totalWorkflowStageCount() - 1;
         }
         return completed;
     }
@@ -2466,11 +2648,16 @@ final class BdqWorkbenchGui {
      *
      * @param preparedRun the run being displayed
      * @param activePhase the currently running phase, if any
+     * @param exportRunning whether stage 9 (report export/finalization) is in progress
      * @param runCompleted whether the full run has completed
      * @return the one-based stage number currently in progress or just completed
      */
-    private static int currentWorkflowStageNumber(PreparedRun preparedRun, Phase activePhase, boolean runCompleted) {
-        int completed = completedWorkflowStageCount(preparedRun, activePhase, runCompleted);
+    private static int currentWorkflowStageNumber(
+            PreparedRun preparedRun,
+            Phase activePhase,
+            boolean exportRunning,
+            boolean runCompleted) {
+        int completed = completedWorkflowStageCount(preparedRun, activePhase, exportRunning, runCompleted, false);
         if (runCompleted || preparedRun == null) {
             return completed;
         }
@@ -2898,7 +3085,7 @@ final class BdqWorkbenchGui {
         setStatus(statusArea, renderPreflightMessage(state[0]));
         bindingGrid.setModel(new BindingReviewTableModel(state[0].preparedRun().bindingResult().reviews()));
         configureBindingGrid(bindingGrid);
-        resultSummaryArea.setText(renderStageOverview(preparedRun, null, false, false)
+        resultSummaryArea.setText(renderStageOverview(preparedRun, null, false, false, false)
                 + "\nParameter review ready. Edit parameter values, use the row popup, or save/load settings before starting the run.\n");
         boolean complete = state[0].isFullyResolved();
         if (!complete && !runWithAvailableOnly.isSelected()) {
