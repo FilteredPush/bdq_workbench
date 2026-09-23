@@ -858,18 +858,18 @@ class ParallelPhaseExecutionServiceTest {
             invocationCount.incrementAndGet();
             return new StubDQResponse("RUN_HAS_RESULT", "COMPLIANT", "ok", Map.of());
         }
+    }
 
-        static class StructuredCountingImpl {
-            final AtomicInteger invocationCount = new AtomicInteger();
+    static class StructuredCountingImpl {
+        final AtomicInteger invocationCount = new AtomicInteger();
 
-            public StubDQResponse validate(String scientificName) {
-                invocationCount.incrementAndGet();
-                return new StubDQResponse(
-                        "RUN_HAS_RESULT",
-                        scientificName.startsWith("Aus") ? "COMPLIANT" : scientificName,
-                        scientificName,
-                        Map.of());
-            }
+        public StubDQResponse validate(String scientificName) {
+            invocationCount.incrementAndGet();
+            return new StubDQResponse(
+                    "RUN_HAS_RESULT",
+                    scientificName.startsWith("Aus") ? "COMPLIANT" : scientificName,
+                    scientificName,
+                    Map.of());
         }
     }
 
