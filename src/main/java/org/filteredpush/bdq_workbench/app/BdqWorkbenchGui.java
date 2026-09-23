@@ -70,6 +70,7 @@ import org.filteredpush.bdq_workbench.execution.ParallelPhaseExecutionService;
 import org.filteredpush.bdq_workbench.execution.ReflectionExecutionAdapter;
 import org.filteredpush.bdq_workbench.ingest.DatasetViewIO;
 import org.filteredpush.bdq_workbench.ingest.DefaultIngestService;
+import org.filteredpush.bdq_workbench.ingest.DatasetSchemaInspector;
 import org.filteredpush.bdq_workbench.ingest.RelationalDatasetIngestor;
 import org.filteredpush.bdq_workbench.model.RecordFilterSummary;
 import org.filteredpush.bdq_workbench.model.BindingReview;
@@ -1898,6 +1899,15 @@ final class BdqWorkbenchGui {
 					"Dataset input not found: " + datasetPath,
 					"Dataset required",
 					JOptionPane.ERROR_MESSAGE);
+			return;
+		}
+		DatasetSchemaInspector.DatasetSchemaOverview overview = new DatasetSchemaInspector().inspect(path);
+		if (overview.tables().size() <= 1) {
+			JOptionPane.showMessageDialog(
+					frame,
+					overview.describeTables() + ".\nBuild Dataset View is only needed when the dataset has related tables.",
+					"Dataset view not needed",
+					JOptionPane.INFORMATION_MESSAGE);
 			return;
 		}
 		SwingWorker<DatasetViewPreview, Void> worker = new SwingWorker<>() {
