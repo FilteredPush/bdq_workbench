@@ -135,19 +135,6 @@ public class RelationalDatasetIngestor {
 							table.label()));
 				}
 			}
-
-			private String resolveReferencedTableLabel(List<CoreTableCandidate<DataPackageResourceMeta>> tables,
-					CoreTableCandidate<DataPackageResourceMeta> source,
-					DataPackageForeignKey key) {
-				if (key.referenceResource().isBlank()) {
-					return source.label();
-				}
-				return tables.stream()
-						.filter(candidate -> candidate.descriptor().name().equalsIgnoreCase(key.referenceResource()))
-						.map(CoreTableCandidate::label)
-						.findFirst()
-						.orElse(null);
-			}
 			return assembleResult(selected.label(), rowsByTable, tables.stream()
 					.map(table -> new TableSchema(
 							table.label(),
@@ -161,6 +148,19 @@ public class RelationalDatasetIngestor {
 		} catch (IOException e) {
 			throw new AppException("Failed relational ingest for Data Package " + inputPath, e);
 		}
+	}
+
+	private String resolveReferencedTableLabel(List<CoreTableCandidate<DataPackageResourceMeta>> tables,
+			CoreTableCandidate<DataPackageResourceMeta> source,
+			DataPackageForeignKey key) {
+		if (key.referenceResource().isBlank()) {
+			return source.label();
+		}
+		return tables.stream()
+				.filter(candidate -> candidate.descriptor().name().equalsIgnoreCase(key.referenceResource()))
+				.map(CoreTableCandidate::label)
+				.findFirst()
+				.orElse(null);
 	}
 
 	private RelationalIngestResult assembleResult(String coreTable, Map<String, List<CanonicalRecord>> rowsByTable,
