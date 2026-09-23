@@ -733,8 +733,8 @@ class BdqWorkbenchGuiTest {
 		String suggestions = (String) suggestionHelper.invoke(null, profile, "dwc:country", null);
 
 		assertThat(suggestions).contains(" - v1 (1)");
-		assertThat(suggestions).contains(" - v20 (1)");
-		assertThat(suggestions).doesNotContain(" - v21 (1)");
+		assertThat(suggestions).contains(" - v21 (1)");
+		assertThat(suggestions).doesNotContain(" - v9 (1)");
 		assertThat(suggestions).contains("... and 1 more distinct value(s)");
 	}
 
