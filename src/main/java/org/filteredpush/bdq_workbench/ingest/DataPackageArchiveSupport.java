@@ -22,6 +22,7 @@ package org.filteredpush.bdq_workbench.ingest;
 import java.io.IOException;
 import java.net.URI;
 import java.nio.file.FileSystem;
+import java.nio.file.FileSystemAlreadyExistsException;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -76,10 +77,22 @@ final class DataPackageArchiveSupport {
 			return reader.read(inputPath);
 		}
 		URI archiveUri = URI.create("jar:" + inputPath.toUri());
-		try (FileSystem zipFs = FileSystems.newFileSystem(archiveUri, Map.of())) {
+		FileSystem zipFs;
+		boolean shouldClose = false;
+		try {
+			zipFs = FileSystems.newFileSystem(archiveUri, Map.of());
+			shouldClose = true;
+		} catch (FileSystemAlreadyExistsException alreadyOpen) {
+			zipFs = FileSystems.getFileSystem(archiveUri);
+		}
+		try {
 			Path manifestPath = findManifestPath(zipFs)
 					.orElseThrow(() -> new IOException("Zip input contains no datapackage.json manifest: " + inputPath));
 			return reader.read(manifestPath);
+		} finally {
+			if (shouldClose) {
+				zipFs.close();
+			}
 		}
 	}
 
