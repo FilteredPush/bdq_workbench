@@ -68,10 +68,18 @@ import javax.swing.table.TableCellRenderer;
 import org.filteredpush.bdq_workbench.execution.ExecutionProgressListener;
 import org.filteredpush.bdq_workbench.execution.ParallelPhaseExecutionService;
 import org.filteredpush.bdq_workbench.execution.ReflectionExecutionAdapter;
+import org.filteredpush.bdq_workbench.ingest.DatasetViewIO;
 import org.filteredpush.bdq_workbench.ingest.DefaultIngestService;
+import org.filteredpush.bdq_workbench.ingest.DatasetSchemaInspector;
+import org.filteredpush.bdq_workbench.ingest.RelationalDatasetIngestor;
 import org.filteredpush.bdq_workbench.model.RecordFilterSummary;
 import org.filteredpush.bdq_workbench.model.BindingReview;
 import org.filteredpush.bdq_workbench.model.BuiltInMeasureSpec;
+import org.filteredpush.bdq_workbench.model.DatasetSchema;
+import org.filteredpush.bdq_workbench.model.DatasetView;
+import org.filteredpush.bdq_workbench.model.DatasetViewCardinalityPolicy;
+import org.filteredpush.bdq_workbench.model.DatasetViewJoin;
+import org.filteredpush.bdq_workbench.model.DatasetViewMapping;
 import org.filteredpush.bdq_workbench.model.ExecutionPlan;
 import org.filteredpush.bdq_workbench.model.ExecutionSummary;
 import org.filteredpush.bdq_workbench.model.ImplementationBinding;
@@ -122,6 +130,7 @@ import org.slf4j.LoggerFactory;
  */
 final class BdqWorkbenchGui {
     private static final Logger LOG = LoggerFactory.getLogger(BdqWorkbenchGui.class);
+    private static final int RECORD_FILTER_SUGGESTION_LIMIT = 20;
     private static final int FINALIZATION_STAGE_STEP_COUNT = 5;
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
@@ -305,6 +314,8 @@ final class BdqWorkbenchGui {
         form.add(setupHeaderRow);
 
         PickerField dataset = addPickerField(form, frame, "Dataset", defaults.datasetPath().toString());
+        PickerField datasetView = addPickerField(form, frame, "Dataset view (JSON)",
+                overrides.getOrDefault("bdq.dataset.view", defaults.datasetView()));
         String[] configuredRecordFilters = new String[] {defaults.recordFilter().toPropertyString()};
         JTextArea recordFilterSummary = new JTextArea(4, 40);
         recordFilterSummary.setEditable(false);
@@ -317,8 +328,13 @@ final class BdqWorkbenchGui {
         recordFilterRow.add(new JLabel("Record filters"), BorderLayout.WEST);
         JPanel recordFilterButtons = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
         JButton buildRecordFilters = new JButton("Build Record Filters...");
+        JButton buildDatasetView = new JButton("Build Dataset View...");
         JButton clearRecordFilters = new JButton("Clear Filters");
+        JButton clearDatasetView = new JButton("Clear View");
         clearRecordFilters.setEnabled(!configuredRecordFilters[0].isBlank());
+        clearDatasetView.setEnabled(!datasetView.field().getText().isBlank());
+        recordFilterButtons.add(buildDatasetView);
+        recordFilterButtons.add(clearDatasetView);
         recordFilterButtons.add(buildRecordFilters);
         recordFilterButtons.add(clearRecordFilters);
         recordFilterRow.add(recordFilterButtons, BorderLayout.CENTER);
@@ -485,6 +501,27 @@ final class BdqWorkbenchGui {
                 recordFilterSummary,
                 clearRecordFilters,
                 buildRecordFilters));
+        buildDatasetView.addActionListener(e -> loadDatasetViewDialog(frame, dataset.field().getText().trim(), datasetView.field()));
+        clearDatasetView.addActionListener(e -> {
+            datasetView.field().setText("");
+            clearDatasetView.setEnabled(false);
+        });
+        datasetView.field().getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+            @Override
+            public void insertUpdate(javax.swing.event.DocumentEvent e) {
+                clearDatasetView.setEnabled(!datasetView.field().getText().isBlank());
+            }
+
+            @Override
+            public void removeUpdate(javax.swing.event.DocumentEvent e) {
+                clearDatasetView.setEnabled(!datasetView.field().getText().isBlank());
+            }
+
+            @Override
+            public void changedUpdate(javax.swing.event.DocumentEvent e) {
+                clearDatasetView.setEnabled(!datasetView.field().getText().isBlank());
+            }
+        });
         clearRecordFilters.addActionListener(e -> {
             configuredRecordFilters[0] = "";
             updateRecordFilterSummary(recordFilterSummary, configuredRecordFilters[0]);
@@ -536,6 +573,7 @@ final class BdqWorkbenchGui {
                             selectedUseCaseId(useCaseChoice),
                             configuredRecordFilters[0],
                             datasetTable.getText().trim(),
+                            datasetView.field().getText().trim(),
                             useCaseSource.getText().trim(),
                             testDefinitionsSource.getText().trim(),
                             additionalTestDefinitions.getText().trim(),
@@ -1395,6 +1433,7 @@ final class BdqWorkbenchGui {
      *     form
      * @param datasetTable which of the dataset's tables to run against, named by location,
      *     resource name or Darwin Core row type; blank to let the ingestor choose
+     * @param datasetView optional dataset-view JSON file path
      * @param useCaseSource use case RDF file/URL field value
      * @param testDefinitionsSource primary test definitions file/URL field value
      * @param additionalTestDefinitions comma-separated extra test definition files/URLs
@@ -1411,6 +1450,7 @@ final class BdqWorkbenchGui {
             String selectedUseCaseId,
             String recordFilters,
             String datasetTable,
+            String datasetView,
             String useCaseSource,
             String testDefinitionsSource,
             String additionalTestDefinitions,
@@ -1446,8 +1486,60 @@ final class BdqWorkbenchGui {
                 parseThreads(threads),
                 dedupEnabled,
                 RecordFilterSpec.parse(recordFilters),
-                datasetTable);
+                datasetTable,
+                datasetView);
     }
+
+	/**
+	 * Backward-compatible build-config helper used by reflection-based tests.
+	 *
+	 * <p>Delegates to the dataset-view-aware overload with an empty dataset view path.
+	 *
+	 * @param dataset dataset file path field value
+	 * @param selectedUseCaseId ID of the use case chosen in the combo box
+	 * @param recordFilters record-filter field value
+	 * @param datasetTable selected dataset table name
+	 * @param useCaseSource use case RDF file/URL field value
+	 * @param testDefinitionsSource primary test definitions file/URL field value
+	 * @param additionalTestDefinitions comma-separated extra test definition files/URLs
+	 * @param ontologySource BDQ FFDQ ontology file/URL field value
+	 * @param discoveryPackages comma-separated implementation discovery packages
+	 * @param threads thread count field value
+	 * @param dedupEnabled whether distinct-value execution is enabled for this run
+	 * @param resolver resolves and caches remote/local resource paths
+	 * @param defaults fallback values used when a field is blank
+	 * @return the assembled configuration
+	 */
+	private static AppConfig buildConfig(
+			String dataset,
+			String selectedUseCaseId,
+			String recordFilters,
+			String datasetTable,
+			String useCaseSource,
+			String testDefinitionsSource,
+			String additionalTestDefinitions,
+			String ontologySource,
+			String discoveryPackages,
+			String threads,
+			boolean dedupEnabled,
+			CachedResourceResolver resolver,
+			AppConfig defaults) {
+		return buildConfig(
+				dataset,
+				selectedUseCaseId,
+				recordFilters,
+				datasetTable,
+				"",
+				useCaseSource,
+				testDefinitionsSource,
+				additionalTestDefinitions,
+				ontologySource,
+				discoveryPackages,
+				threads,
+				dedupEnabled,
+				resolver,
+				defaults);
+	}
 
     /**
      * Parses the thread-count field value, rejecting non-numeric or non-positive values.
@@ -1785,6 +1877,193 @@ final class BdqWorkbenchGui {
         worker.execute();
     }
 
+	/**
+	 * Loads relational schema metadata and helps the user create/save a dataset view file.
+	 *
+	 * @param frame owner frame
+	 * @param datasetPath selected dataset path
+	 * @param datasetViewField dataset-view path field to update
+	 */
+	private static void loadDatasetViewDialog(JFrame frame, String datasetPath, JTextField datasetViewField) {
+		if (datasetPath == null || datasetPath.isBlank()) {
+			JOptionPane.showMessageDialog(
+					frame,
+					"Select a dataset before building a dataset view.",
+					"Dataset required",
+					JOptionPane.WARNING_MESSAGE);
+			return;
+		}
+		Path path = Path.of(datasetPath);
+		if (!Files.exists(path)) {
+			JOptionPane.showMessageDialog(
+					frame,
+					"Dataset input not found: " + datasetPath,
+					"Dataset required",
+					JOptionPane.ERROR_MESSAGE);
+			return;
+		}
+		DatasetSchemaInspector.DatasetSchemaOverview overview = new DatasetSchemaInspector().inspect(path);
+		if (overview.tables().size() <= 1) {
+			JOptionPane.showMessageDialog(
+					frame,
+					overview.describeTables() + ".\nBuild Dataset View is only needed when the dataset has related tables.",
+					"Dataset view not needed",
+					JOptionPane.INFORMATION_MESSAGE);
+			return;
+		}
+		SwingWorker<DatasetViewPreview, Void> worker = new SwingWorker<>() {
+			@Override
+			protected DatasetViewPreview doInBackground() {
+				RelationalDatasetIngestor ingestor = new RelationalDatasetIngestor();
+				var relational = ingestor.ingest(path, "");
+				DatasetSchema schema = relational.schema();
+				DatasetView suggested = suggestDatasetView(schema);
+				var preview = new org.filteredpush.bdq_workbench.ingest.ViewFlattener().flatten(relational, suggested);
+				return new DatasetViewPreview(schema, suggested, preview);
+			}
+
+			@Override
+			protected void done() {
+				try {
+					openDatasetViewDialog(frame, datasetViewField, get());
+				} catch (Exception e) {
+					Throwable cause = e.getCause() == null ? e : e.getCause();
+					JOptionPane.showMessageDialog(
+							frame,
+							"Unable to inspect dataset for dataset views: " + cause.getMessage(),
+							"Dataset view setup failed",
+							JOptionPane.ERROR_MESSAGE);
+				}
+			}
+		};
+		worker.execute();
+	}
+
+	private static void openDatasetViewDialog(JFrame frame, JTextField datasetViewField, DatasetViewPreview previewData) {
+		DatasetViewIO io = new DatasetViewIO();
+		DatasetSchema schema = previewData.schema();
+		DatasetView suggested = previewData.suggested();
+		var preview = previewData.preview();
+		JTextArea details = new JTextArea(18, 80);
+		details.setEditable(false);
+		details.setLineWrap(true);
+		details.setWrapStyleWord(true);
+		StringBuilder builder = new StringBuilder();
+		builder.append("Schema fingerprint: ").append(schema.schemaFingerprint()).append('\n');
+		builder.append("Tables:\n");
+		schema.tables().forEach(table -> builder.append(" - ")
+				.append(table.name())
+				.append(" [")
+				.append(table.rowType())
+				.append("] columns=")
+				.append(table.columns().size())
+				.append('\n'));
+		builder.append("Relationships:\n");
+		schema.relationships().forEach(relationship -> builder.append(" - ")
+				.append(relationship.fromTable())
+				.append('.')
+				.append(relationship.fromColumn())
+				.append(" -> ")
+				.append(relationship.toTable())
+				.append('.')
+				.append(relationship.toColumn())
+				.append('\n'));
+		builder.append("Suggested mappings:\n");
+		suggested.mappings().forEach(mapping -> builder.append(" - ")
+				.append(mapping.term())
+				.append(" <- ")
+				.append(mapping.sourceTable())
+				.append('.')
+				.append(mapping.sourceColumn())
+				.append('\n'));
+		builder.append("Preview rows: ").append(Math.min(5, preview.dataset().records().size())).append('\n');
+		preview.dataset().records().stream().limit(5).forEach(row -> builder.append(" - ")
+				.append(row.id())
+				.append(" => ")
+				.append(row.terms())
+				.append('\n'));
+		if (!preview.diagnostics().isEmpty()) {
+			builder.append("Cardinality warnings:\n");
+			preview.diagnostics().forEach(message -> builder.append(" - ").append(message).append('\n'));
+		}
+		details.setText(builder.toString());
+		JButton save = new JButton("Save View...");
+		JButton load = new JButton("Load View...");
+		JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+		buttons.add(load);
+		buttons.add(save);
+		JPanel panel = new JPanel(new BorderLayout(8, 8));
+		panel.add(new JScrollPane(details), BorderLayout.CENTER);
+		panel.add(buttons, BorderLayout.SOUTH);
+		JDialog dialog = new JDialog(frame, "Build Dataset View", true);
+		dialog.setContentPane(panel);
+		dialog.pack();
+		dialog.setLocationRelativeTo(frame);
+
+		load.addActionListener(e -> {
+			String selected = chooseFile(frame, "Select dataset view JSON");
+			if (selected == null) {
+				return;
+			}
+			try {
+				DatasetView view = io.load(Path.of(selected));
+				io.validateCompatibility(view, schema);
+				datasetViewField.setText(selected);
+				dialog.dispose();
+			} catch (AppException ex) {
+				JOptionPane.showMessageDialog(
+						frame,
+						"Unable to load dataset view: " + ex.getMessage(),
+						"Dataset view load failed",
+						JOptionPane.ERROR_MESSAGE);
+			}
+		});
+		save.addActionListener(e -> {
+			String selected = chooseSaveFile(frame, "Save dataset view JSON", "bdq-dataset-view.json");
+			if (selected == null) {
+				return;
+			}
+			io.save(Path.of(selected), suggested);
+			datasetViewField.setText(selected);
+			dialog.dispose();
+		});
+		dialog.setVisible(true);
+	}
+
+	/**
+	 * Creates a simple direct-mapping view suggestion from discovered schema.
+	 */
+	private static DatasetView suggestDatasetView(DatasetSchema schema) {
+		String grain = schema.tables().stream()
+				.filter(table -> "OCCURRENCE".equalsIgnoreCase(table.rowType()))
+				.findFirst()
+				.map(table -> table.name())
+				.orElse(schema.tables().isEmpty() ? "core" : schema.tables().get(0).name());
+		List<DatasetViewJoin> joins = schema.relationships().stream()
+				.filter(relationship -> relationship.toTable().equals(grain))
+				.map(relationship -> new DatasetViewJoin(
+						relationship.relationName(),
+						relationship.fromTable(),
+						DatasetViewCardinalityPolicy.REJECT))
+				.toList();
+		java.util.Set<String> allowedTables = new java.util.LinkedHashSet<>();
+		allowedTables.add(grain);
+		joins.forEach(join -> allowedTables.add(join.sourceTable()));
+		List<String> requestedTerms = List.of(
+				"occurrenceID", "scientificName", "eventDate", "decimalLatitude", "decimalLongitude");
+		List<DatasetViewMapping> mappings = new ArrayList<>();
+		for (String term : requestedTerms) {
+			String sourceTable = schema.tables().stream()
+					.filter(table -> allowedTables.contains(table.name()))
+					.filter(table -> table.columns().contains(term))
+					.findFirst()
+					.map(table -> table.name())
+					.orElse(grain);
+			mappings.add(new DatasetViewMapping(term, sourceTable, term));
+		}
+		return new DatasetView(grain, schema.schemaFingerprint(), joins, mappings);
+	}
+
     /**
      * Opens the interactive record-filter dialog for one already-profiled dataset.
      *
@@ -1910,14 +2189,17 @@ final class BdqWorkbenchGui {
         }
         JTextField values = new JTextField(initialValues == null ? "" : initialValues);
         forceSingleLineControlHeight(fieldChoice, values.getPreferredSize().height);
-        JTextArea suggestionArea = new JTextArea(3, 30);
+        forceSingleLineControlHeight(values, values.getPreferredSize().height);
+        JTextArea suggestionArea = new JTextArea(8, 30);
         suggestionArea.setEditable(false);
         suggestionArea.setLineWrap(true);
         suggestionArea.setWrapStyleWord(true);
         suggestionArea.setBorder(BorderFactory.createEtchedBorder());
-        lockTextAreaHeight(suggestionArea);
         installTextAreaClipboardSupport(suggestionArea);
+        JScrollPane suggestionScroll = new JScrollPane(suggestionArea);
+        lockTextAreaHeight(suggestionScroll, suggestionArea.getPreferredSize().height + 60);
         JButton remove = new JButton("Remove");
+        forceSingleLineControlHeight(remove, values.getPreferredSize().height);
         remove.addActionListener(e -> {
 	rowsPanel.remove(row);
 	rowsPanel.revalidate();
@@ -1944,10 +2226,11 @@ final class BdqWorkbenchGui {
         stacked.setLayout(new BoxLayout(stacked, BoxLayout.Y_AXIS));
         stacked.add(inputRow);
         stacked.add(valuesRow);
-        stacked.add(suggestionArea);
+        stacked.add(suggestionScroll);
 
         row.add(stacked, BorderLayout.CENTER);
         row.setBorder(BorderFactory.createEmptyBorder(4, 0, 4, 0));
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, row.getPreferredSize().height));
         rowsPanel.add(row);
         return new RecordFilterRowWidgets(row, fieldChoice, values, unresolvedField, unresolvedMessage);
     }
@@ -1977,7 +2260,7 @@ final class BdqWorkbenchGui {
 	.thenComparing(Map.Entry::getKey, String.CASE_INSENSITIVE_ORDER));
 	distinctValueCounts.put(term, entries.size());
 	topValuesByTerm.put(term, entries.stream()
-	.limit(8)
+	.limit(RECORD_FILTER_SUGGESTION_LIMIT)
 	.map(entry -> new RecordFilterValueOption(entry.getKey(), entry.getValue()))
 	.toList());
         });
@@ -2250,17 +2533,46 @@ final class BdqWorkbenchGui {
     }
 
     /**
-     * Fixes a text area's preferred/minimum/maximum height so dynamic wrapped text does not cause
+     * Forces a text field to keep a single-line control height.
+     *
+     * @param textField the text field to normalize
+     * @param targetHeight the desired control height in pixels
+     */
+    private static void forceSingleLineControlHeight(JTextField textField, int targetHeight) {
+        Dimension preferred = textField.getPreferredSize();
+        Dimension normalized = new Dimension(preferred.width, targetHeight);
+        textField.setPreferredSize(normalized);
+        textField.setMinimumSize(normalized);
+        textField.setMaximumSize(new Dimension(Integer.MAX_VALUE, targetHeight));
+    }
+
+    /**
+     * Forces a button to keep a single-line control height.
+     *
+     * @param button the button to normalize
+     * @param targetHeight the desired control height in pixels
+     */
+    private static void forceSingleLineControlHeight(JButton button, int targetHeight) {
+        Dimension preferred = button.getPreferredSize();
+        Dimension normalized = new Dimension(preferred.width, targetHeight);
+        button.setPreferredSize(normalized);
+        button.setMinimumSize(normalized);
+        button.setMaximumSize(normalized);
+    }
+
+    /**
+     * Fixes a scroll pane's preferred/minimum/maximum height so dynamic wrapped text does not cause
      * surrounding filter rows to resize and scroll the selected controls out of view.
      *
-     * @param textArea the text area whose height should remain stable
+     * @param scrollPane the scroll pane whose height should remain stable
+     * @param targetHeight the desired control height in pixels
      */
-    private static void lockTextAreaHeight(JTextArea textArea) {
-        Dimension preferred = textArea.getPreferredSize();
-        Dimension normalized = new Dimension(Math.max(preferred.width, 320), preferred.height);
-        textArea.setPreferredSize(normalized);
-        textArea.setMinimumSize(normalized);
-        textArea.setMaximumSize(new Dimension(Integer.MAX_VALUE, normalized.height));
+    private static void lockTextAreaHeight(JScrollPane scrollPane, int targetHeight) {
+        Dimension preferred = scrollPane.getPreferredSize();
+        Dimension normalized = new Dimension(Math.max(preferred.width, 320), targetHeight);
+        scrollPane.setPreferredSize(normalized);
+        scrollPane.setMinimumSize(normalized);
+        scrollPane.setMaximumSize(new Dimension(Integer.MAX_VALUE, normalized.height));
     }
 
     /**
@@ -3398,6 +3710,13 @@ final class BdqWorkbenchGui {
     /** One profiled value suggestion for a dataset term in the record-filter dialog. */
     private record RecordFilterValueOption(String value, long count) {
     }
+
+	/** Prepared schema/view/preview tuple for the dataset-view builder dialog. */
+	private record DatasetViewPreview(
+			DatasetSchema schema,
+			DatasetView suggested,
+			org.filteredpush.bdq_workbench.ingest.ViewFlattenResult preview) {
+	}
 
     /** Dataset-derived terms and value counts used to build record filters interactively. */
     private record RecordFilterDatasetProfile(

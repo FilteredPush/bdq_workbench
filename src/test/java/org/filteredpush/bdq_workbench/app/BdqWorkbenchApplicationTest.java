@@ -131,7 +131,7 @@ class BdqWorkbenchApplicationTest {
         int exitCode = BdqWorkbenchApplication.run(new String[] {"--help"}, printStream(out), printStream(err));
 
         assertThat(exitCode).isZero();
-        assertThat(out.toString()).contains("--gui").contains("--dataset-table <name>");
+        assertThat(out.toString()).contains("--gui").contains("--dataset-table <name>").contains("--dataset-view <path>");
     }
 
     /**

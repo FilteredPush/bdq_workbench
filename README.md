@@ -51,6 +51,14 @@ Configuration defaults are in `src/main/resources/application.properties` and ca
 java -jar target/bdq_workbench-0.1.0-SNAPSHOT.jar --dataset path/to/dataset.zip
 ```
 
+Reusable relational flattening views can be supplied with `--dataset-view` (`bdq.dataset.view` in config):
+
+```bash
+java -jar target/bdq_workbench-0.1.0-SNAPSHOT.jar \
+  --dataset path/to/datapackage.json \
+  --dataset-view path/to/bdq-dataset-view.json
+```
+
 Configuration precedence is:
 
 1. command-line or GUI-supplied overrides
@@ -76,7 +84,7 @@ Dataset input
    |
    +--> Load DwC-A zip / Data Package CSV
    |
-   +--> [optional] Build record filters from dataset terms/values (GUI)
+   +--> [optional] Build dataset view and/or record filters from dataset terms/values (GUI)
    |
    +--> [optional] Apply record filters
    |

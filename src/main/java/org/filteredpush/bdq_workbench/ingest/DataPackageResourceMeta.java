@@ -48,6 +48,7 @@ import java.util.List;
  * @param columnNames column names from the resource's table schema, empty when it declares none
  * @param idColumn the single-column primary key the resource's table schema declares, or
  *     {@code ""} when it declares none or declares a composite one
+ * @param foreignKeys single-column foreign keys the table schema declares
  */
 public record DataPackageResourceMeta(
 		String name,
@@ -62,7 +63,8 @@ public record DataPackageResourceMeta(
 		boolean skipInitialSpace,
 		int headerLines,
 		List<String> columnNames,
-		String idColumn) {
+		String idColumn,
+		List<DataPackageForeignKey> foreignKeys) {
 
 	/**
 	 * Canonical constructor; copies the collection components defensively.
@@ -73,6 +75,7 @@ public record DataPackageResourceMeta(
 		paths = List.copyOf(paths);
 		columnNames = List.copyOf(columnNames);
 		idColumn = idColumn == null ? "" : idColumn;
+		foreignKeys = List.copyOf(foreignKeys);
 	}
 
 	/**

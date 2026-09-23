@@ -183,7 +183,8 @@ final class DataPackageDialectParser {
 				dialect.path("skipInitialSpace").asBoolean(false),
 				resolveHeaderLines(dialect),
 				columnNames,
-				readPrimaryKey(resource.path("schema")));
+				readPrimaryKey(resource.path("schema")),
+				readForeignKeys(resource.path("schema")));
 		LOG.debug("Parsed data package resource '{}': paths={}, encoding={}, delimiter={}, quoteChar={},"
 						+ " escapeChar={}, headerLines={}, schemaColumns={}",
 				meta.label(), meta.paths(), meta.encoding(), describe(meta.delimiter()), describe(meta.quoteChar()),
@@ -327,6 +328,50 @@ final class DataPackageDialectParser {
 			names.add(name.trim());
 		}
 		return names;
+	}
+
+	/**
+	 * Reads single-column foreign-key declarations from a resource schema.
+	 *
+	 * @param schema the resource's {@code schema} property
+	 * @return declared single-column foreign keys
+	 */
+	private static List<DataPackageForeignKey> readForeignKeys(JsonNode schema) {
+		List<DataPackageForeignKey> keys = new ArrayList<>();
+		JsonNode foreignKeys = schema.path("foreignKeys");
+		if (!foreignKeys.isArray()) {
+			return keys;
+		}
+		for (JsonNode key : foreignKeys) {
+			String field = firstText(key.path("fields"));
+			JsonNode reference = key.path("reference");
+			String referenceField = firstText(reference.path("fields"));
+			if (field == null || referenceField == null) {
+				continue;
+			}
+			String referenceResource = text(reference, "resource");
+			keys.add(new DataPackageForeignKey(
+					field.trim(),
+					referenceResource == null ? "" : referenceResource.trim(),
+					referenceField.trim()));
+		}
+		return keys;
+	}
+
+	/**
+	 * Reads a string value from either a text node or a single-element text array.
+	 *
+	 * @param node node to inspect
+	 * @return extracted text, or {@code null}
+	 */
+	private static String firstText(JsonNode node) {
+		if (node.isTextual()) {
+			return node.asText(null);
+		}
+		if (node.isArray() && node.size() == 1 && node.get(0).isTextual()) {
+			return node.get(0).asText(null);
+		}
+		return null;
 	}
 
 	/**

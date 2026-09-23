@@ -56,4 +56,16 @@ public interface IngestService {
     default RecordDataset ingest(Path inputPath, String requestedTable) {
         return ingest(inputPath);
     }
+
+    /**
+     * Ingests the dataset at the given input path, optionally applying a dataset-view definition.
+     *
+     * @param inputPath path to dataset input file
+     * @param requestedTable optional requested table name
+     * @param datasetView optional dataset view JSON path
+     * @return ingested (possibly view-flattened) dataset
+     */
+    default RecordDataset ingest(Path inputPath, String requestedTable, String datasetView) {
+        return ingest(inputPath, requestedTable);
+    }
 }

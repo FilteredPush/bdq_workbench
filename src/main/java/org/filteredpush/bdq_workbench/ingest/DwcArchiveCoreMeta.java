@@ -47,6 +47,8 @@ import java.util.Map;
  * @param columnNames column names by zero-based column index, with gaps filled by placeholders
  * @param idColumn the name of the column the archive declares as this table's record
  *     identifier, or {@code ""} when it declares none
+ * @param coreIdColumn the name of the extension column declaring the related core record
+ *     identifier, or {@code ""} when this table is a core or declares none
  * @param constantTerms term values declared in {@code meta.xml} as defaults for columns that are
  *     absent from the data files, applied to every record
  */
@@ -59,6 +61,7 @@ public record DwcArchiveCoreMeta(
 		int ignoreHeaderLines,
 		List<String> columnNames,
 		String idColumn,
+		String coreIdColumn,
 		Map<String, String> constantTerms) {
 
 	/**
@@ -69,6 +72,7 @@ public record DwcArchiveCoreMeta(
 		locations = List.copyOf(locations);
 		columnNames = List.copyOf(columnNames);
 		idColumn = idColumn == null ? "" : idColumn;
+		coreIdColumn = coreIdColumn == null ? "" : coreIdColumn;
 		constantTerms = Map.copyOf(new LinkedHashMap<>(constantTerms));
 	}
 }

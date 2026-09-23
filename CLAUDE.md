@@ -56,14 +56,15 @@ mistyped path fails fast and offline — keep that ordering, it is what keeps th
 touching the network.
 
 Configuration defaults live in `src/main/resources/application.properties`
-(`bdq.usecase.file`, `bdq.rdf.files`, `bdq.dataset`, `bdq.dataset.table`, `bdq.usecase.id`,
+(`bdq.usecase.file`, `bdq.rdf.files`, `bdq.dataset`, `bdq.dataset.table`, `bdq.dataset.view`, `bdq.usecase.id`,
 `bdq.discovery.packages`, `bdq.threads`, `bdq.execution.dedup`) and are merged with CLI/GUI
 overrides by `ConfigLoader`. `bdq.usecase.file` and `bdq.rdf.files` ship blank, which means "use
 the `WorkbenchDefaults` published sources"; set either to a local path or an HTTP URL to pin a
 run. `bdq.dataset.table` (CLI `--dataset-table`, GUI advanced options) names which table of a
 multi-table dataset to run against. Both entry points fetch and cache use-case/test-definition/
 ontology RDF from `bdq.tdwg.org` through `CachedResourceResolver`; RDF/XML, Turtle, and JSON-LD
-serializations are all supported. Logging is DEBUG-by-default to the
+serializations are all supported. `bdq.dataset.view` (CLI `--dataset-view`, GUI "Build Dataset View...")
+names a standalone JSON DatasetView used to flatten relational inputs before execution. Logging is DEBUG-by-default to the
 console via `src/main/resources/logback.xml`.
 
 ## Architecture

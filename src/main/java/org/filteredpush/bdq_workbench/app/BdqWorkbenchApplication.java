@@ -191,7 +191,8 @@ public final class BdqWorkbenchApplication {
                 config.threadCount(),
                 config.dedupEnabled(),
                 config.recordFilter(),
-                config.datasetTable());
+                config.datasetTable(),
+                config.datasetView());
     }
 
     /**
@@ -248,6 +249,7 @@ public final class BdqWorkbenchApplication {
             String key = switch (arg) {
                 case "--dataset" -> "bdq.dataset";
                 case "--dataset-table" -> "bdq.dataset.table";
+                case "--dataset-view" -> "bdq.dataset.view";
                 case "--usecase-file" -> "bdq.usecase.file";
                 case "--rdf-files" -> "bdq.rdf.files";
                 case "--usecase-id" -> "bdq.usecase.id";
@@ -290,6 +292,7 @@ public final class BdqWorkbenchApplication {
         out.println("  --dataset-table <name>         Which table of the dataset to run against, named by");
         out.println("                                 location, resource name or Darwin Core row type");
         out.println("                                 (default: the best-ranked table the dataset offers)");
+        out.println("  --dataset-view <path>          Standalone dataset view JSON file");
         out.println("  --usecase-file <path>          Use case XML file");
         out.println("  --rdf-files <paths>            Comma-separated RDF/OWL files");
         out.println("  --usecase-id <id>              Optional use case identifier");

@@ -3,10 +3,16 @@ package org.filteredpush.bdq_workbench.ingest;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 import org.filteredpush.bdq_workbench.app.AppException;
 import org.filteredpush.bdq_workbench.model.RecordDataset;
 import org.junit.jupiter.api.Test;
@@ -247,6 +253,123 @@ class DataPackageDialectIngestTest {
 				.hasMessageContaining("no resource with a readable data file path");
 	}
 
+	@Test
+	void schemaForeignKeysAreParsed(@TempDir Path tempDir) throws Exception {
+		writeFile(tempDir, "occurrence.csv", StandardCharsets.UTF_8, "occurrenceID\nocc-1\n");
+		writeFile(tempDir, "identification.csv", StandardCharsets.UTF_8, "identificationID,occurrenceID\nid-1,occ-1\n");
+		Path manifest = writeManifest(tempDir, """
+				{
+				  "resources": [
+				    {
+				      "name": "occurrence",
+				      "path": "occurrence.csv",
+				      "schema": { "fields": [ { "name": "occurrenceID" } ], "primaryKey": "occurrenceID" }
+				    },
+				    {
+				      "name": "identification",
+				      "path": "identification.csv",
+				      "schema": {
+				        "fields": [ { "name": "identificationID" }, { "name": "occurrenceID" } ],
+				        "foreignKeys": [
+				          { "fields": "occurrenceID", "reference": { "resource": "occurrence", "fields": "occurrenceID" } }
+				        ]
+				      }
+				    }
+				  ]
+				}
+				""");
+
+		var root = new ObjectMapper().readTree(Files.newBufferedReader(manifest));
+		List<CoreTableCandidate<DataPackageResourceMeta>> tables =
+				DataPackageDialectParser.parseResources(new ObjectMapper(), root, tempDir);
+
+		assertThat(tables).hasSize(2);
+		assertThat(tables.get(1).descriptor().foreignKeys())
+				.singleElement()
+				.satisfies(key -> {
+					assertThat(key.field()).isEqualTo("occurrenceID");
+					assertThat(key.referenceResource()).isEqualTo("occurrence");
+					assertThat(key.referenceField()).isEqualTo("occurrenceID");
+				});
+	}
+
+	@Test
+	void relationalIngestBuildsCoreGraphsFromForeignKeys(@TempDir Path tempDir) throws Exception {
+		writeFile(tempDir, "occurrence.csv", StandardCharsets.UTF_8,
+				"occurrenceID,eventDate\nocc-1,2020-01-01\n");
+		writeFile(tempDir, "identification.csv", StandardCharsets.UTF_8,
+				"identificationID,occurrenceID,scientificName\nid-1,occ-1,Abies balsamea\n");
+		Path manifest = writeManifest(tempDir, """
+				{
+				  "resources": [
+				    {
+				      "name": "occurrence",
+				      "path": "occurrence.csv",
+				      "schema": {
+				        "fields": [ { "name": "occurrenceID" }, { "name": "eventDate" } ],
+				        "primaryKey": "occurrenceID"
+				      }
+				    },
+				    {
+				      "name": "identification",
+				      "path": "identification.csv",
+				      "schema": {
+				        "fields": [ { "name": "identificationID" }, { "name": "occurrenceID" }, { "name": "scientificName" } ],
+				        "foreignKeys": [
+				          { "fields": "occurrenceID", "reference": { "resource": "occurrence", "fields": "occurrenceID" } }
+				        ]
+				      }
+				    }
+				  ]
+				}
+				""");
+
+		RelationalIngestResult relational = new RelationalDatasetIngestor().ingest(manifest, "occurrence");
+
+		assertThat(relational.graphs()).hasSize(1);
+		assertThat(relational.graphs().get(0).relatedByRelation()).containsKey("identification");
+		assertThat(relational.graphs().get(0).relatedByRelation().get("identification")).hasSize(1);
+	}
+
+	@Test
+	void defaultIngestServiceReadsZippedDataPackageWithMultipleTables(@TempDir Path tempDir) throws Exception {
+		Map<String, byte[]> entries = new LinkedHashMap<>();
+		entries.put("datapackage.json", """
+				{
+				  "resources": [
+				    {
+				      "name": "occurrence",
+				      "path": "occurrence.csv",
+				      "schema": {
+				        "fields": [ { "name": "occurrenceID" }, { "name": "eventDate" } ],
+				        "primaryKey": "occurrenceID"
+				      }
+				    },
+				    {
+				      "name": "identification",
+				      "path": "identification.csv",
+				      "schema": {
+				        "fields": [ { "name": "identificationID" }, { "name": "occurrenceID" }, { "name": "scientificName" } ],
+				        "foreignKeys": [
+				          { "fields": "occurrenceID", "reference": { "resource": "occurrence", "fields": "occurrenceID" } }
+				        ]
+				      }
+				    }
+				  ]
+				}
+				""".getBytes(StandardCharsets.UTF_8));
+		entries.put("occurrence.csv", "occurrenceID,eventDate\nocc-1,2020-01-01\n".getBytes(StandardCharsets.UTF_8));
+		entries.put("identification.csv",
+				"identificationID,occurrenceID,scientificName\nid-1,occ-1,Abies balsamea\n".getBytes(StandardCharsets.UTF_8));
+		Path archive = Files.createTempFile(tempDir, "datapackage", ".zip");
+		writeZipArchive(archive, entries);
+
+		RecordDataset dataset = new DefaultIngestService().ingest(archive, "");
+
+		assertThat(dataset.records()).hasSize(1);
+		assertThat(dataset.records().get(0).terms()).containsEntry("scientificName", "Abies balsamea");
+	}
+
 	/**
 	 * Writes a {@code datapackage.json} manifest into a directory.
 	 *
@@ -273,5 +396,22 @@ class DataPackageDialectIngestTest {
 		Path file = packageDir.resolve(fileName);
 		Files.writeString(file, content, encoding);
 		return file;
+	}
+
+	/**
+	 * Writes a zip archive from named byte entries.
+	 *
+	 * @param archivePath path of the zip file to create
+	 * @param entries ordered map of entry names to contents
+	 * @throws Exception if the archive cannot be written
+	 */
+	private void writeZipArchive(Path archivePath, Map<String, byte[]> entries) throws Exception {
+		try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(archivePath), StandardCharsets.UTF_8)) {
+			for (Map.Entry<String, byte[]> entry : entries.entrySet()) {
+				zip.putNextEntry(new ZipEntry(entry.getKey()));
+				zip.write(entry.getValue());
+				zip.closeEntry();
+			}
+		}
 	}
 }
