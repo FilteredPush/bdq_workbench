@@ -54,7 +54,7 @@ import org.slf4j.LoggerFactory;
 final class PhaseGroupCache {
     private static final Logger LOG = LoggerFactory.getLogger(PhaseGroupCache.class);
 
-    private final SubjectExpander subjectExpander;
+    private final RecordDataset dataset;
     private final Map<List<String>, SubjectExpander.SubjectExpansionResult> expansionCache = new HashMap<>();
     private final Map<List<String>, List<RecordGroup>> cache = new HashMap<>();
 
@@ -66,7 +66,7 @@ final class PhaseGroupCache {
      *     afterward
      */
     PhaseGroupCache(RecordDataset dataset) {
-        this.subjectExpander = new SubjectExpander(dataset);
+        this.dataset = dataset;
     }
 
     /**
@@ -78,7 +78,7 @@ final class PhaseGroupCache {
      * @return the structured-subject expansion for {@code fields}
      */
     SubjectExpander.SubjectExpansionResult expansionFor(List<String> fields) {
-        return expansionCache.computeIfAbsent(fields, subjectExpander::expand);
+        return expansionCache.computeIfAbsent(fields, f -> new SubjectExpander(dataset).expand(f));
     }
 
     /**

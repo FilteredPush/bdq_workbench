@@ -2066,8 +2066,10 @@ final class BdqWorkbenchGui {
 					.filter(table -> table.columns().contains(term))
 					.findFirst()
 					.map(table -> table.name())
-					.orElse(grain);
-			mappings.add(new DatasetViewMapping(term, sourceTable, term));
+					.orElse(null);
+			if (sourceTable != null) {
+				mappings.add(new DatasetViewMapping(term, sourceTable, term));
+			}
 		}
 		return new DatasetView(grain, schema.schemaFingerprint(), joins, mappings);
 	}
@@ -2182,6 +2184,14 @@ final class BdqWorkbenchGui {
 				.append('.')
 				.append(mapping.sourceColumn())
 				.append('\n'));
+		List<String> mappedTerms = view.mappings().stream().map(DatasetViewMapping::term).toList();
+		List<String> unresolvedTerms = requestedTerms.stream()
+				.filter(term -> !mappedTerms.contains(term))
+				.toList();
+		if (!unresolvedTerms.isEmpty()) {
+			builder.append("Unresolved requested terms:\n");
+			unresolvedTerms.forEach(term -> builder.append(" - ").append(term).append('\n'));
+		}
 		return builder.toString();
 	}
 

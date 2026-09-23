@@ -78,6 +78,23 @@ class DefaultRecordFilterServiceTest {
 		});
 	}
 
+	@Test
+	void filtersStructuredGraphsByRelatedRowFields() {
+		CanonicalRecord core1 = record("r1", "occurrence", Map.of("country", "Canada"));
+		CanonicalRecord core2 = record("r2", "occurrence", Map.of("country", "Mexico"));
+		RecordDataset dataset = new RecordDataset(
+				List.of(core1, core2),
+				List.of(
+						new RecordGraph(core1, Map.of("identification", List.of(
+								record("id1", "identification", Map.of("scientificName", "Aus bus"))))),
+						new RecordGraph(core2, Map.of("identification", List.of(
+								record("id2", "identification", Map.of("scientificName", "Cus dus")))))));
+
+		RecordFilterSummary summary = new DefaultRecordFilterService().apply(dataset, RecordFilterSpec.parse("scientificName=Aus bus"));
+
+		assertThat(summary.filteredDataset().records()).extracting(CanonicalRecord::id).containsExactly("r1");
+	}
+
 	private static CanonicalRecord record(String id, String table, Map<String, String> terms) {
 		Map<String, List<SourceCell>> provenance = new java.util.LinkedHashMap<>();
 		terms.keySet().forEach(term -> provenance.put(term, List.of(new SourceCell(table, table, id, term, term))));

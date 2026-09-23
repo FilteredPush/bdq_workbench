@@ -58,7 +58,7 @@ public final class CanonicalRecord {
 		this.terms = new HashMap<>(terms);
 		Map<String, List<SourceCell>> copy = new LinkedHashMap<>();
 		provenanceByTerm.forEach((term, cells) -> copy.put(term, List.copyOf(cells)));
-		this.provenanceByTerm = Map.copyOf(copy);
+		this.provenanceByTerm = new HashMap<>(copy);
 	}
 
     /**
@@ -82,7 +82,7 @@ public final class CanonicalRecord {
 	/**
 	 * Returns source provenance for this record's term values.
 	 *
-	 * @return immutable map of term name to one or more source cells
+	 * @return the mutable map of term name to one or more source cells backing this record
 	 */
 	public Map<String, List<SourceCell>> provenanceByTerm() {
 		return provenanceByTerm;

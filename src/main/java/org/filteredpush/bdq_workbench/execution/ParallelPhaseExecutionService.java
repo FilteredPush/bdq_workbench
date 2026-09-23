@@ -43,6 +43,7 @@ import org.filteredpush.bdq_workbench.model.RecordDataset;
 import org.filteredpush.bdq_workbench.model.Response;
 import org.filteredpush.bdq_workbench.model.SubjectRef;
 import org.filteredpush.bdq_workbench.model.TestType;
+import org.filteredpush.bdq_workbench.model.SourceCell;
 import org.filteredpush.bdq_workbench.test_discovery.DiscoveredImplementation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -1216,11 +1217,37 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
                     response.recordId(),
                     response.subjectRef() == null ? "<core>" : response.subjectRef().sortKey(),
                     response.amendments());
-            writes.forEach((record, updates) -> updates.forEach(record.terms()::put));
+            writes.forEach((record, updates) -> updates.forEach((term, value) -> {
+                record.terms().put(term, value);
+                ensureProvenance(record, term, subject);
+            }));
             return response;
         } catch (IllegalStateException e) {
             return amendmentWriteBackError(response, e.getMessage());
         }
+    }
+
+    private static void ensureProvenance(CanonicalRecord record, String term, EvaluationSubject subject) {
+        record.provenanceByTerm().computeIfAbsent(term, ignored -> List.of(provenanceCellFor(record, term, subject)));
+    }
+
+    private static SourceCell provenanceCellFor(CanonicalRecord record, String term, EvaluationSubject subject) {
+        SourceCell existing = record.provenanceByTerm().values().stream()
+                .flatMap(List::stream)
+                .findFirst()
+                .orElse(null);
+        if (existing != null) {
+            return new SourceCell(existing.table(), existing.sourceLocation(), existing.rowRef(), term, term);
+        }
+        if (subject.subjectRef() != null && record == subject.governingRecord()) {
+            return new SourceCell(
+                    subject.subjectRef().sourceTable(),
+                    subject.subjectRef().sourceLocation(),
+                    subject.subjectRef().rowRef(),
+                    term,
+                    term);
+        }
+        return new SourceCell("core", "core", record.id(), term, term);
     }
 
     private static Map<CanonicalRecord, Map<String, String>> resolveAmendmentTargets(
@@ -1249,6 +1276,9 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
         }
         List<org.filteredpush.bdq_workbench.model.SourceCell> cells = subject.effectiveRecord().provenanceByTerm()
                 .getOrDefault(term, List.of());
+        if (cells.isEmpty()) {
+            return subject.governingRecord();
+        }
         if (cells.size() != 1) {
             throw new IllegalStateException(
                     "Refusing to write back amended term " + term + " for subject "

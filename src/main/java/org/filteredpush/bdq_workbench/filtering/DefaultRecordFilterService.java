@@ -80,9 +80,14 @@ public class DefaultRecordFilterService implements RecordFilterService {
 		Map<String, List<String>> immutableCriteria = new LinkedHashMap<>();
 		resolvedCriteria.forEach((field, values) -> immutableCriteria.put(field, List.copyOf(values)));
 
-		List<CanonicalRecord> kept = safeDataset.records().stream()
-				.filter(record -> matches(record, immutableCriteria))
-				.toList();
+		List<CanonicalRecord> kept = safeDataset.hasStructuredGraphs()
+				? safeDataset.recordGraphs().stream()
+						.filter(graph -> matches(graph, immutableCriteria))
+						.map(org.filteredpush.bdq_workbench.model.RecordGraph::core)
+						.toList()
+				: safeDataset.records().stream()
+						.filter(record -> matches(record, immutableCriteria))
+						.toList();
 		Set<String> keptIds = kept.stream().map(CanonicalRecord::id).collect(java.util.stream.Collectors.toSet());
 		List<RecordGraph> keptGraphs = safeDataset.recordGraphs().stream()
 				.filter(graph -> keptIds.contains(graph.core().id()))
@@ -114,6 +119,52 @@ public class DefaultRecordFilterService implements RecordFilterService {
 	private static boolean matches(CanonicalRecord record, Map<String, List<String>> criteria) {
 		for (Map.Entry<String, List<String>> entry : criteria.entrySet()) {
 			String value = record.terms().get(entry.getKey());
+			if (value == null || value.isBlank() || !entry.getValue().contains(value)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Checks whether a structured record graph contains any effective subject whose values satisfy
+	 * every configured field criterion.
+	 *
+	 * @param graph the structured graph to inspect
+	 * @param criteria resolved field criteria keyed by actual dataset field name
+	 * @return {@code true} if the core record itself or any directly related row overlay matches
+	 *     all configured fields
+	 */
+	private static boolean matches(org.filteredpush.bdq_workbench.model.RecordGraph graph, Map<String, List<String>> criteria) {
+		if (matches(graph.core(), criteria)) {
+			return true;
+		}
+		for (List<CanonicalRecord> related : graph.relatedByRelation().values()) {
+			for (CanonicalRecord row : related) {
+				if (matchesOverlay(graph.core(), row, criteria)) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Checks one effective core+related overlay against the configured criteria.
+	 *
+	 * @param core the core row for the graph
+	 * @param related the related row being overlaid onto the core
+	 * @param criteria resolved field criteria keyed by actual dataset field name
+	 * @return {@code true} if the overlaid effective subject matches all configured fields
+	 */
+	private static boolean matchesOverlay(
+			CanonicalRecord core,
+			CanonicalRecord related,
+			Map<String, List<String>> criteria) {
+		for (Map.Entry<String, List<String>> entry : criteria.entrySet()) {
+			String value = related.terms().containsKey(entry.getKey())
+					? related.terms().get(entry.getKey())
+					: core.terms().get(entry.getKey());
 			if (value == null || value.isBlank() || !entry.getValue().contains(value)) {
 				return false;
 			}
