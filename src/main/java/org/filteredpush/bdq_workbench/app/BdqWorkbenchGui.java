@@ -1488,6 +1488,57 @@ final class BdqWorkbenchGui {
                 datasetView);
     }
 
+	/**
+	 * Backward-compatible build-config helper used by reflection-based tests.
+	 *
+	 * <p>Delegates to the dataset-view-aware overload with an empty dataset view path.
+	 *
+	 * @param dataset dataset file path field value
+	 * @param selectedUseCaseId ID of the use case chosen in the combo box
+	 * @param recordFilters record-filter field value
+	 * @param datasetTable selected dataset table name
+	 * @param useCaseSource use case RDF file/URL field value
+	 * @param testDefinitionsSource primary test definitions file/URL field value
+	 * @param additionalTestDefinitions comma-separated extra test definition files/URLs
+	 * @param ontologySource BDQ FFDQ ontology file/URL field value
+	 * @param discoveryPackages comma-separated implementation discovery packages
+	 * @param threads thread count field value
+	 * @param dedupEnabled whether distinct-value execution is enabled for this run
+	 * @param resolver resolves and caches remote/local resource paths
+	 * @param defaults fallback values used when a field is blank
+	 * @return the assembled configuration
+	 */
+	private static AppConfig buildConfig(
+			String dataset,
+			String selectedUseCaseId,
+			String recordFilters,
+			String datasetTable,
+			String useCaseSource,
+			String testDefinitionsSource,
+			String additionalTestDefinitions,
+			String ontologySource,
+			String discoveryPackages,
+			String threads,
+			boolean dedupEnabled,
+			CachedResourceResolver resolver,
+			AppConfig defaults) {
+		return buildConfig(
+				dataset,
+				selectedUseCaseId,
+				recordFilters,
+				datasetTable,
+				"",
+				useCaseSource,
+				testDefinitionsSource,
+				additionalTestDefinitions,
+				ontologySource,
+				discoveryPackages,
+				threads,
+				dedupEnabled,
+				resolver,
+				defaults);
+	}
+
     /**
      * Parses the thread-count field value, rejecting non-numeric or non-positive values.
      *
