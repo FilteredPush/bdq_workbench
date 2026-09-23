@@ -69,7 +69,8 @@ public class DataPackageIngestor {
 	/**
 	 * Ingests a Darwin Core Data Package into canonical records.
 	 *
-	 * @param dataPackagePath path to the {@code datapackage.json} manifest file
+	 * @param dataPackagePath path to the {@code datapackage.json} manifest file, or to a zip that
+	 *     contains one
 	 * @return the dataset parsed from the manifest's first resource
 	 * @throws AppException if the manifest has no resources, or the resource cannot be read
 	 */
@@ -81,7 +82,8 @@ public class DataPackageIngestor {
 	 * Ingests a Darwin Core Data Package into canonical records, optionally naming which of the
 	 * package's resources to read.
 	 *
-	 * @param dataPackagePath path to the {@code datapackage.json} manifest file
+	 * @param dataPackagePath path to the {@code datapackage.json} manifest file, or to a zip that
+	 *     contains one
 	 * @param requestedTable the name, file name or row type of the resource to read; blank to
 	 *     select one automatically
 	 * @return the dataset parsed from the selected resource
@@ -90,24 +92,39 @@ public class DataPackageIngestor {
 	 */
 	public RecordDataset ingest(Path dataPackagePath, String requestedTable) {
 		try {
-			JsonNode root = mapper.readTree(Files.newBufferedReader(dataPackagePath));
-			JsonNode resources = root.path("resources");
-			if (!resources.isArray() || resources.isEmpty()) {
-				throw new AppException("Data package does not include resources");
-			}
-			Path packageDir = dataPackagePath.toAbsolutePath().getParent();
-			List<CoreTableCandidate<DataPackageResourceMeta>> tables =
-					DataPackageDialectParser.parseResources(mapper, root, packageDir);
-			if (tables.isEmpty()) {
-				throw new AppException("Data package declares no resource with a readable data file path"
-						+ " (inline data and remote resource URLs are not supported): " + dataPackagePath);
-			}
-			CoreTableCandidate<DataPackageResourceMeta> selected =
-					CoreTableSelector.select(tables, requestedTable).selected();
-			return ingestResource(dataPackagePath, selected);
+			return DataPackageArchiveSupport.withManifestPath(dataPackagePath,
+					manifestPath -> ingestManifest(manifestPath, dataPackagePath, requestedTable));
 		} catch (IOException e) {
 			throw new AppException("Failed to ingest Darwin Core Data Package from " + dataPackagePath, e);
 		}
+	}
+
+	/**
+	 * Ingests a data package manifest already resolved to a readable filesystem path.
+	 *
+	 * @param manifestPath resolved path to {@code datapackage.json}
+	 * @param sourcePath original user-supplied dataset path, used in diagnostics
+	 * @param requestedTable the name, file name or row type of the resource to read; blank to
+	 *     select one automatically
+	 * @return the dataset parsed from the selected resource
+	 * @throws IOException if the manifest cannot be read
+	 */
+	private RecordDataset ingestManifest(Path manifestPath, Path sourcePath, String requestedTable) throws IOException {
+		JsonNode root = mapper.readTree(Files.newBufferedReader(manifestPath));
+		JsonNode resources = root.path("resources");
+		if (!resources.isArray() || resources.isEmpty()) {
+			throw new AppException("Data package does not include resources");
+		}
+		Path packageDir = manifestPath.toAbsolutePath().getParent();
+		List<CoreTableCandidate<DataPackageResourceMeta>> tables =
+				DataPackageDialectParser.parseResources(mapper, root, packageDir);
+		if (tables.isEmpty()) {
+			throw new AppException("Data package declares no resource with a readable data file path"
+					+ " (inline data and remote resource URLs are not supported): " + sourcePath);
+		}
+		CoreTableCandidate<DataPackageResourceMeta> selected =
+				CoreTableSelector.select(tables, requestedTable).selected();
+		return ingestResource(sourcePath, selected);
 	}
 
 	/**

@@ -55,6 +55,9 @@ public class RelationalDatasetIngestor {
 	public RelationalIngestResult ingest(Path inputPath, String requestedTable) {
 		String fileName = inputPath.getFileName().toString().toLowerCase();
 		if (fileName.endsWith(".zip")) {
+			if (DataPackageArchiveSupport.isDataPackageArchive(inputPath)) {
+				return ingestDataPackage(inputPath, requestedTable);
+			}
 			return ingestDwcArchive(inputPath, requestedTable);
 		}
 		if (fileName.endsWith(".json") || fileName.endsWith("datapackage")) {
@@ -105,49 +108,64 @@ public class RelationalDatasetIngestor {
 
 	private RelationalIngestResult ingestDataPackage(Path inputPath, String requestedTable) {
 		try {
-			JsonNode root = mapper.readTree(Files.newBufferedReader(inputPath));
-			Path packageDir = inputPath.toAbsolutePath().getParent();
-			List<CoreTableCandidate<DataPackageResourceMeta>> tables =
-					DataPackageDialectParser.parseResources(mapper, root, packageDir);
-			if (tables.isEmpty()) {
-				return new RelationalIngestResult(List.of(), new DatasetSchema(List.of(), List.of(), ""), List.of());
-			}
-			CoreTableCandidate<DataPackageResourceMeta> selected = CoreTableSelector.select(tables, requestedTable).selected();
-			Map<String, List<CanonicalRecord>> rowsByTable = new LinkedHashMap<>();
-			for (CoreTableCandidate<DataPackageResourceMeta> table : tables) {
-				List<CanonicalRecord> rows = dataPackageIngestor.ingest(inputPath, table.label()).records().stream()
-						.map(row -> withTableProvenance(row, table.label()))
-						.toList();
-				rowsByTable.put(table.label(), rows);
-			}
-			List<RelationshipSchema> relationships = new ArrayList<>();
-			for (CoreTableCandidate<DataPackageResourceMeta> table : tables) {
-				for (DataPackageForeignKey key : table.descriptor().foreignKeys()) {
-					String referencedTableLabel = resolveReferencedTableLabel(tables, table, key);
-					if (referencedTableLabel == null || !referencedTableLabel.equals(selected.label())) {
-						continue;
-					}
-					relationships.add(new RelationshipSchema(
-							table.label(),
-							key.field(),
-							referencedTableLabel,
-							key.referenceField(),
-							table.label()));
-				}
-			}
-			return assembleResult(selected.label(), rowsByTable, tables.stream()
-					.map(table -> new TableSchema(
-							table.label(),
-							table.label(),
-							table.rowType().name(),
-							table.descriptor().idColumn().isBlank()
-									? table.rowType().identifierTerm()
-									: table.descriptor().idColumn(),
-							table.descriptor().columnNames()))
-					.toList(), relationships);
+			return DataPackageArchiveSupport.withManifestPath(inputPath,
+					manifestPath -> relationalFromDataPackageManifest(manifestPath, inputPath, requestedTable));
 		} catch (IOException e) {
 			throw new AppException("Failed relational ingest for Data Package " + inputPath, e);
 		}
+	}
+
+	/**
+	 * Builds a relational ingest result from a resolved Data Package manifest.
+	 *
+	 * @param manifestPath resolved path to {@code datapackage.json}
+	 * @param sourcePath original user-supplied dataset path
+	 * @param requestedTable optional preferred core/grain table
+	 * @return relational ingest output
+	 * @throws IOException if the manifest cannot be read
+	 */
+	private RelationalIngestResult relationalFromDataPackageManifest(Path manifestPath, Path sourcePath,
+			String requestedTable) throws IOException {
+		JsonNode root = mapper.readTree(Files.newBufferedReader(manifestPath));
+		Path packageDir = manifestPath.toAbsolutePath().getParent();
+		List<CoreTableCandidate<DataPackageResourceMeta>> tables =
+				DataPackageDialectParser.parseResources(mapper, root, packageDir);
+		if (tables.isEmpty()) {
+			return new RelationalIngestResult(List.of(), new DatasetSchema(List.of(), List.of(), ""), List.of());
+		}
+		CoreTableCandidate<DataPackageResourceMeta> selected = CoreTableSelector.select(tables, requestedTable).selected();
+		Map<String, List<CanonicalRecord>> rowsByTable = new LinkedHashMap<>();
+		for (CoreTableCandidate<DataPackageResourceMeta> table : tables) {
+			List<CanonicalRecord> rows = dataPackageIngestor.ingest(sourcePath, table.label()).records().stream()
+					.map(row -> withTableProvenance(row, table.label()))
+					.toList();
+			rowsByTable.put(table.label(), rows);
+		}
+		List<RelationshipSchema> relationships = new ArrayList<>();
+		for (CoreTableCandidate<DataPackageResourceMeta> table : tables) {
+			for (DataPackageForeignKey key : table.descriptor().foreignKeys()) {
+				String referencedTableLabel = resolveReferencedTableLabel(tables, table, key);
+				if (referencedTableLabel == null || !referencedTableLabel.equals(selected.label())) {
+					continue;
+				}
+				relationships.add(new RelationshipSchema(
+						table.label(),
+						key.field(),
+						referencedTableLabel,
+						key.referenceField(),
+						table.label()));
+			}
+		}
+		return assembleResult(selected.label(), rowsByTable, tables.stream()
+				.map(table -> new TableSchema(
+						table.label(),
+						table.label(),
+						table.rowType().name(),
+						table.descriptor().idColumn().isBlank()
+								? table.rowType().identifierTerm()
+								: table.descriptor().idColumn(),
+						table.descriptor().columnNames()))
+				.toList(), relationships);
 	}
 
 	private String resolveReferencedTableLabel(List<CoreTableCandidate<DataPackageResourceMeta>> tables,

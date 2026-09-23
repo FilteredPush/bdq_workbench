@@ -32,9 +32,10 @@ import org.slf4j.LoggerFactory;
 /**
  * Dispatches ingestion based on source format.
  *
- * <p>Inspects the input path's file name and delegates to {@link DwcArchiveIngestor} for
- * {@code .zip} Darwin Core Archives or {@link DataPackageIngestor} for {@code .json}/
- * {@code datapackage} Darwin Core Data Packages.
+ * <p>Inspects the input path and delegates to {@link DwcArchiveIngestor} for Darwin Core
+ * Archives, and to {@link DataPackageIngestor} for data package manifests
+ * ({@code .json}/{@code datapackage}) and zipped data packages containing
+ * {@code datapackage.json}.
  */
 public class DefaultIngestService implements IngestService {
     private static final Logger LOG = LoggerFactory.getLogger(DefaultIngestService.class);
@@ -121,6 +122,9 @@ public class DefaultIngestService implements IngestService {
     private RecordDataset ingestFlat(Path inputPath, String requestedTable) {
         String fileName = inputPath.getFileName().toString().toLowerCase();
         if (fileName.endsWith(".zip")) {
+            if (DataPackageArchiveSupport.isDataPackageArchive(inputPath)) {
+                return dataPackageIngestor.ingest(inputPath, requestedTable);
+            }
             return dwcArchiveIngestor.ingest(inputPath, requestedTable);
         }
         if (fileName.endsWith(".json") || fileName.endsWith("datapackage")) {

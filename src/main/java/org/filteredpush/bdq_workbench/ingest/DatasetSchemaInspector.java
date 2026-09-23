@@ -44,6 +44,9 @@ public class DatasetSchemaInspector {
 	public DatasetSchemaOverview inspect(Path inputPath) {
 		String fileName = inputPath.getFileName().toString().toLowerCase();
 		if (fileName.endsWith(".zip")) {
+			if (DataPackageArchiveSupport.isDataPackageArchive(inputPath)) {
+				return inspectDataPackage(inputPath);
+			}
 			return inspectDwcArchive(inputPath);
 		}
 		if (fileName.endsWith(".json") || fileName.endsWith("datapackage")) {
@@ -76,17 +79,19 @@ public class DatasetSchemaInspector {
 
 	private DatasetSchemaOverview inspectDataPackage(Path inputPath) {
 		try {
-			JsonNode root = mapper.readTree(Files.newBufferedReader(inputPath));
-			Path packageDir = inputPath.toAbsolutePath().getParent();
-			List<CoreTableCandidate<DataPackageResourceMeta>> tables =
-					DataPackageDialectParser.parseResources(mapper, root, packageDir);
-			return new DatasetSchemaOverview(tables.stream()
-					.map(table -> new DatasetTableSummary(
-							table.label(),
-							table.rowType(),
-							table.rowTypeEvidence(),
-							table.declaredCore()))
-					.toList());
+			return DataPackageArchiveSupport.withManifestPath(inputPath, manifestPath -> {
+				JsonNode root = mapper.readTree(Files.newBufferedReader(manifestPath));
+				Path packageDir = manifestPath.toAbsolutePath().getParent();
+				List<CoreTableCandidate<DataPackageResourceMeta>> tables =
+						DataPackageDialectParser.parseResources(mapper, root, packageDir);
+				return new DatasetSchemaOverview(tables.stream()
+						.map(table -> new DatasetTableSummary(
+								table.label(),
+								table.rowType(),
+								table.rowTypeEvidence(),
+								table.declaredCore()))
+						.toList());
+			});
 		} catch (IOException e) {
 			throw new AppException("Failed to inspect data package " + inputPath, e);
 		}
