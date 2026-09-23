@@ -209,8 +209,8 @@ class ParallelPhaseExecutionServiceTest {
         assertThat(impl.invocationCount.get()).isEqualTo(2);
         assertThat(responses).extracting(Response::recordId, Response::derived, Response::responseResult)
                 .containsExactly(
-                        org.assertj.core.groups.Tuple.tuple("occ-1", false, "Aus bus"),
-                        org.assertj.core.groups.Tuple.tuple("occ-1", false, "Aus bus"),
+                        org.assertj.core.groups.Tuple.tuple("occ-1", false, "COMPLIANT"),
+                        org.assertj.core.groups.Tuple.tuple("occ-1", false, "COMPLIANT"),
                         org.assertj.core.groups.Tuple.tuple("occ-1", true, "COMPLIANT"),
                         org.assertj.core.groups.Tuple.tuple("occ-2", false, "Cus dus"));
         assertThat(responses.get(0).subjectRef()).isNotNull();
