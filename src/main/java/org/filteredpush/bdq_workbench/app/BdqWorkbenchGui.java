@@ -506,6 +506,7 @@ final class BdqWorkbenchGui {
                 frame,
                 dataset.field().getText().trim(),
                 datasetView.field(),
+                datasetTable.getText().trim(),
                 selectedUseCaseId(useCaseChoice),
                 useCaseSource.getText().trim(),
                 testDefinitionsSource.getText().trim(),
@@ -1892,6 +1893,7 @@ final class BdqWorkbenchGui {
 	 * @param frame owner frame
 	 * @param datasetPath selected dataset path
 	 * @param datasetViewField dataset-view path field to update
+	 * @param datasetTable selected dataset table, if any
 	 * @param selectedUseCaseId selected use-case identifier, if any
 	 * @param useCaseSource configured use-case RDF source
 	 * @param testDefinitionsSource configured primary test-definition source
@@ -1902,6 +1904,7 @@ final class BdqWorkbenchGui {
 			JFrame frame,
 			String datasetPath,
 			JTextField datasetViewField,
+			String datasetTable,
 			String selectedUseCaseId,
 			String useCaseSource,
 			String testDefinitionsSource,
@@ -1937,7 +1940,7 @@ final class BdqWorkbenchGui {
 			@Override
 			protected DatasetViewPreview doInBackground() {
 				RelationalDatasetIngestor ingestor = new RelationalDatasetIngestor();
-				var relational = ingestor.ingest(path, "");
+				var relational = ingestor.ingest(path, datasetTable);
 				DatasetSchema schema = relational.schema();
 				List<String> requestedTerms = requestedDatasetViewTerms(
 						selectedUseCaseId,

@@ -31,6 +31,7 @@ import org.filteredpush.bdq_workbench.model.DarwinCoreTermResolver;
 import org.filteredpush.bdq_workbench.model.RecordDataset;
 import org.filteredpush.bdq_workbench.model.RecordFilterSpec;
 import org.filteredpush.bdq_workbench.model.RecordFilterSummary;
+import org.filteredpush.bdq_workbench.model.RecordGraph;
 
 /**
  * Applies pre-execution record filters to canonical datasets.
@@ -82,7 +83,13 @@ public class DefaultRecordFilterService implements RecordFilterService {
 		List<CanonicalRecord> kept = safeDataset.records().stream()
 				.filter(record -> matches(record, immutableCriteria))
 				.toList();
-		RecordDataset filteredDataset = new RecordDataset(kept);
+		Set<String> keptIds = kept.stream().map(CanonicalRecord::id).collect(java.util.stream.Collectors.toSet());
+		List<RecordGraph> keptGraphs = safeDataset.recordGraphs().stream()
+				.filter(graph -> keptIds.contains(graph.core().id()))
+				.toList();
+		RecordDataset filteredDataset = keptGraphs.isEmpty()
+				? new RecordDataset(kept)
+				: new RecordDataset(kept, keptGraphs);
 		if (kept.isEmpty()) {
 			diagnostics.add("No records matched the configured record filters");
 		}
@@ -123,6 +130,8 @@ public class DefaultRecordFilterService implements RecordFilterService {
 	private static Set<String> collectAvailableTerms(RecordDataset dataset) {
 		Set<String> terms = new java.util.LinkedHashSet<>();
 		dataset.records().forEach(record -> terms.addAll(record.terms().keySet()));
+		dataset.recordGraphs().forEach(graph -> graph.relatedByRelation().values().forEach(related ->
+				related.forEach(record -> terms.addAll(record.terms().keySet()))));
 		return terms;
 	}
 }

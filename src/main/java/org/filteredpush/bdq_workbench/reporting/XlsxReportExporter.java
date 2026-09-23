@@ -147,9 +147,6 @@ public class XlsxReportExporter implements ReportExporter {
             if (SENTINEL_RECORD_IDS.contains(response.recordId())) {
                 continue;
             }
-            if (response.subjectRef() != null && !response.derived()) {
-                continue;
-            }
             DataResource dataResource = dataResourcesByRecordId.get(response.recordId());
             if (dataResource == null) {
                 LOG.warn("No input record found for record id {}; skipping response for test {}",
