@@ -42,42 +42,86 @@ import org.slf4j.LoggerFactory;
 public class ReportingService {
 
 	private static final Logger LOG = LoggerFactory.getLogger(ReportingService.class);
+	private static final ProgressListener NO_OP_PROGRESS_LISTENER = new ProgressListener() {
+	};
 
-    private final List<ReportExporter> exporters;
+	private final List<ReportExporter> exporters;
+	private final ProgressListener progressListener;
 
-    /**
-     * Creates a reporting service that dispatches to the given exporters, in order.
-     *
-     * @param exporters the report exporters to invoke on each {@link #export(ExecutionSummary)}
-     *     call; copied defensively
-     */
-    public ReportingService(List<ReportExporter> exporters) {
-        this.exporters = List.copyOf(exporters);
-    }
+	/**
+	 * Creates a reporting service that dispatches to the given exporters, in order.
+	 *
+	 * @param exporters the report exporters to invoke on each {@link #export(ExecutionSummary)}
+	 *     call; copied defensively
+	 */
+	public ReportingService(List<ReportExporter> exporters) {
+		this(exporters, NO_OP_PROGRESS_LISTENER);
+	}
 
-    /**
-     * Renders the given execution summary with every configured {@link ReportExporter},
-     * writing each one's output to its own file under a {@code reports} directory (created if
-     * it does not already exist).
-     *
-     * @param summary the execution summary (responses and aggregated metadata) to export
-     * @throws AppException if the reports directory cannot be created, or a report file cannot
-     *     be written
-     */
-    public void export(ExecutionSummary summary) {
-    	// TODO: Make the report directory configurable via CLI or GUI
-        Path reportDir = Path.of("reports");
-        try {
-            Files.createDirectories(reportDir);
-            for (ReportExporter exporter : exporters) {
-                Path outputFile = reportDir.resolve("bdq-report-" + exporter.format() + "." + exporter.fileExtension());
-                try (OutputStream out = Files.newOutputStream(outputFile)) {
-                    exporter.export(summary, out);
-                }
-                LOG.info("Exported {} report to {}", exporter.format(), outputFile.toAbsolutePath());
-            }
-        } catch (IOException e) {
-            throw new AppException("Unable to export reports", e);
-        }
-    }
+	/**
+	 * Creates a reporting service that dispatches to the given exporters, in order, while also
+	 * reporting per-export progress.
+	 *
+	 * @param exporters the report exporters to invoke on each {@link #export(ExecutionSummary)}
+	 *     call; copied defensively
+	 * @param progressListener listener notified as export begins and as each exporter completes;
+	 *     null is treated as a no-op listener
+	 */
+	public ReportingService(List<ReportExporter> exporters, ProgressListener progressListener) {
+		this.exporters = List.copyOf(exporters);
+		this.progressListener = progressListener == null ? NO_OP_PROGRESS_LISTENER : progressListener;
+	}
+
+	/**
+	 * Renders the given execution summary with every configured {@link ReportExporter},
+	 * writing each one's output to its own file under a {@code reports} directory (created if
+	 * it does not already exist).
+	 *
+	 * @param summary the execution summary (responses and aggregated metadata) to export
+	 * @throws AppException if the reports directory cannot be created, or a report file cannot
+	 *     be written
+	 */
+	public void export(ExecutionSummary summary) {
+		// TODO: Make the report directory configurable via CLI or GUI
+		Path reportDir = Path.of("reports");
+		try {
+			Files.createDirectories(reportDir);
+			progressListener.onExportStarted(exporters.size());
+			int completed = 0;
+			for (ReportExporter exporter : exporters) {
+				Path outputFile = reportDir.resolve("bdq-report-" + exporter.format() + "." + exporter.fileExtension());
+				try (OutputStream out = Files.newOutputStream(outputFile)) {
+					exporter.export(summary, out);
+				}
+				LOG.info("Exported {} report to {}", exporter.format(), outputFile.toAbsolutePath());
+				completed++;
+				progressListener.onExporterCompleted(exporter.format(), completed, exporters.size());
+			}
+		} catch (IOException e) {
+			throw new AppException("Unable to export reports", e);
+		}
+	}
+
+	/**
+	 * Listener for coarse report-export progress.
+	 */
+	public interface ProgressListener {
+		/**
+		 * Called when report export begins.
+		 *
+		 * @param totalExports the number of configured exporters to run
+		 */
+		default void onExportStarted(int totalExports) {
+		}
+
+		/**
+		 * Called after one exporter has successfully completed.
+		 *
+		 * @param format the export format that completed
+		 * @param completedExports how many exporters have completed so far
+		 * @param totalExports the total number of configured exporters
+		 */
+		default void onExporterCompleted(String format, int completedExports, int totalExports) {
+		}
+	}
 }

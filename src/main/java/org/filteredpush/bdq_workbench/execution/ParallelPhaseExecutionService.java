@@ -197,8 +197,8 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
             RecordDataset dataset,
             List<ImplementationBinding> bindings,
             List<DiscoveredImplementation> discovered) {
-        Map<String, DiscoveredImplementation> discoveredByKey = new ConcurrentHashMap<>();
-        discovered.forEach(d -> discoveredByKey.put(d.implementationClass() + "#" + d.implementationMethod(), d));
+        Map<String, List<DiscoveredImplementation>> discoveredByKey = new ConcurrentHashMap<>();
+        discovered.forEach(d -> discoveredByKey.computeIfAbsent(d.legacyImplementationKey(), key -> new ArrayList<>()).add(d));
 
         List<Response> results = new ArrayList<>();
         RecordDataset immutableSource = dataset.copy();
@@ -244,15 +244,15 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
             Phase phase,
             RecordDataset dataset,
             List<ImplementationBinding> bindings,
-            Map<String, DiscoveredImplementation> discoveredByKey) {
+            Map<String, List<DiscoveredImplementation>> discoveredByKey) {
         List<ImplementationBinding> phaseBindings = bindings.stream()
                 .filter(binding -> !BuiltInMeasureSpec.isBuiltIn(binding))
+                .filter(ImplementationBinding::isRunnable)
                 .toList();
         List<ImplementationBinding> builtInMeasures = phase == Phase.AMENDMENT
                 ? List.of()
                 : bindings.stream()
                         .filter(BuiltInMeasureSpec::isBuiltIn)
-                        .filter(binding -> hasTargetBindingForPhase(binding, phaseBindings))
                         .toList();
         if (phaseBindings.isEmpty() && builtInMeasures.isEmpty()) {
             return List.of();
@@ -300,7 +300,12 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
             for (ImplementationBinding measureBinding : builtInMeasures) {
                 Response response;
                 try {
-                    response = synthesizeBuiltInMeasure(phase, dataset, measureBinding, responses);
+                    response = !measureBinding.isRunnable()
+                            ? unableToRunResponse(
+                                    "MULTIRECORD",
+                                    measureBinding,
+                                    "Built-in multi-record measure target is not runnable in phase " + phase)
+                            : synthesizeBuiltInMeasure(phase, dataset, measureBinding, responses);
                 } catch (RuntimeException e) {
                     LOG.error("Built-in measure execution failed in phase {} for test {}: {}",
                             phase, measureBinding.testId(), e.getMessage(), e);
@@ -342,19 +347,24 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
             ImplementationBinding binding,
             List<CanonicalRecord> records,
             PhaseGroupCache groupCache,
-            Map<String, DiscoveredImplementation> discoveredByKey,
+            Map<String, List<DiscoveredImplementation>> discoveredByKey,
             ExecutorService executor) {
         List<RecordGroup> groups = groupsForBinding(binding, records, groupCache);
-        String implementationKey = binding.implementationClass() + "#" + binding.implementationMethod();
+        List<DiscoveredImplementation> discoveredCandidates = discoveredByKey.getOrDefault(binding.legacyImplementationKey(), List.of());
+        DiscoveredImplementation implementation = discoveredCandidates.isEmpty()
+                ? null
+                : resolveImplementation(binding, discoveredCandidates);
+        IllegalStateException resolutionError = !discoveredCandidates.isEmpty() && implementation == null
+                ? new IllegalStateException(describeImplementationResolutionFailure(binding, discoveredCandidates))
+                : null;
         List<GroupInvocation> invocations = new ArrayList<>(groups.size());
         for (RecordGroup group : groups) {
             invocations.add(new GroupInvocation(binding, group, executor.submit(() -> {
                 progressListener.onTaskStarted(phase);
                 try {
-                    return executionAdapter.execute(
-                            group.representative(),
-                            binding,
-                            discoveredByKey.get(implementationKey));
+                    return resolutionError == null
+                            ? executionAdapter.execute(group.representative(), binding, implementation)
+                            : errorResponse(group.representative().id(), binding, resolutionError);
                 } finally {
                     progressListener.onTaskFinished(phase);
                 }
@@ -569,6 +579,7 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
         return BuiltInMeasureSpec.from(measureBinding)
                 .map(spec -> directPhaseBindings.stream()
                         .filter(binding -> !BuiltInMeasureSpec.isBuiltIn(binding))
+                        .filter(ImplementationBinding::isRunnable)
                         .anyMatch(binding -> spec.targetTestId().equals(binding.testId())))
                 .orElse(false);
     }
@@ -621,8 +632,25 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
             List<Response> phaseResponses,
             int totalRecords,
             java.time.Instant finishedAt) {
-        long matchingCount = phaseResponses.stream()
-                .filter(response -> spec.targetTestId().equals(response.testId()))
+        List<Response> targetResponses = targetResponses(spec, phaseResponses);
+        if (targetResponses.isEmpty()) {
+            return unableToRunMeasureResponse(
+                    phase,
+                    measureBinding,
+                    spec,
+                    "No target responses were available for " + spec.targetTestLabel(),
+                    finishedAt);
+        }
+        if (hasFailedTargetResponses(targetResponses)) {
+            return failedTargetMeasureResponse(
+                    phase,
+                    measureBinding,
+                    spec,
+                    targetResponses,
+                    totalRecords,
+                    finishedAt);
+        }
+        long matchingCount = targetResponses.stream()
                 .filter(response -> spec.responseResult().equals(response.responseResult()))
                 .count();
         double percentage = totalRecords == 0 ? 0.0d : (matchingCount * 100.0d) / totalRecords;
@@ -678,13 +706,36 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
             List<Response> phaseResponses,
             int totalRecords,
             java.time.Instant finishedAt) {
-        long eligibleCount = phaseResponses.stream()
-                .filter(response -> spec.targetTestId().equals(response.testId()))
-                .count();
-        long matchingCount = phaseResponses.stream()
-                .filter(response -> spec.targetTestId().equals(response.testId()))
+        List<Response> targetResponses = targetResponses(spec, phaseResponses);
+        if (targetResponses.isEmpty()) {
+            return unableToRunMeasureResponse(
+                    phase,
+                    measureBinding,
+                    spec,
+                    "No target responses were available for " + spec.targetTestLabel(),
+                    finishedAt);
+        }
+        if (hasFailedTargetResponses(targetResponses)) {
+            return failedTargetMeasureResponse(
+                    phase,
+                    measureBinding,
+                    spec,
+                    targetResponses,
+                    totalRecords,
+                    finishedAt);
+        }
+        long eligibleCount = targetResponses.size();
+        long matchingCount = targetResponses.stream()
                 .filter(spec::matchesQaCondition)
                 .count();
+        if (eligibleCount == 0 && totalRecords > 0) {
+            return unableToRunMeasureResponse(
+                    phase,
+                    measureBinding,
+                    spec,
+                    "No eligible target responses were available for " + spec.targetTestLabel(),
+                    finishedAt);
+        }
         boolean complete = eligibleCount == matchingCount;
         String responseResult = complete ? "COMPLETE" : "NOT_COMPLETE";
         String message = complete
@@ -717,6 +768,200 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
                 complete ? OutcomeStatus.PASSED : OutcomeStatus.FAILED,
                 "RUN_HAS_RESULT",
                 responseResult,
+                message,
+                message,
+                Map.of(),
+                finishedAt,
+                finishedAt);
+    }
+
+    /**
+     * Resolves the exact discovered implementation represented by a binding, rejecting class and
+     * method-name collisions between overloads.
+     *
+     * @param binding the binding to resolve
+     * @param candidates every discovered implementation sharing the binding's legacy key
+     * @return the unique exact match, or {@code null} if none or several overloads match
+     */
+    private static DiscoveredImplementation resolveImplementation(
+            ImplementationBinding binding,
+            List<DiscoveredImplementation> candidates) {
+        List<DiscoveredImplementation> exactMatches = candidates.stream()
+                .filter(candidate -> matchesBindingMetadata(binding, candidate))
+                .toList();
+        return exactMatches.size() == 1 ? exactMatches.get(0) : null;
+    }
+
+    /**
+     * Compares a binding's ordered parameter metadata against a discovered implementation's
+     * reflected metadata to confirm they describe the same method overload.
+     *
+     * @param binding the binding being resolved
+     * @param candidate one discovered implementation candidate
+     * @return {@code true} if the binding matches {@code candidate} exactly
+     */
+    private static boolean matchesBindingMetadata(
+            ImplementationBinding binding,
+            DiscoveredImplementation candidate) {
+        if (!binding.implementationClass().equals(candidate.implementationClass())
+                || !binding.implementationMethod().equals(candidate.implementationMethod())) {
+            return false;
+        }
+        List<BoundMethodParameter> boundParameters = binding.parameterBindings().stream()
+                .sorted(Comparator.comparingInt(bound -> bound.parameter().index()))
+                .toList();
+        List<org.filteredpush.bdq_workbench.model.MethodParameter> discoveredParameters = candidate.parameters().stream()
+                .sorted(Comparator.comparingInt(org.filteredpush.bdq_workbench.model.MethodParameter::index))
+                .toList();
+        if (boundParameters.size() != discoveredParameters.size()) {
+            return false;
+        }
+        for (int index = 0; index < discoveredParameters.size(); index++) {
+            org.filteredpush.bdq_workbench.model.MethodParameter discoveredParameter = discoveredParameters.get(index);
+            org.filteredpush.bdq_workbench.model.MethodParameter boundParameter = boundParameters.get(index).parameter();
+            if (discoveredParameter.index() != boundParameter.index()
+                    || !discoveredParameter.typeName().equals(boundParameter.typeName())
+                    || discoveredParameter.role() != boundParameter.role()
+                    || !java.util.Objects.equals(discoveredParameter.source(), boundParameter.source())
+                    || discoveredParameter.required() != boundParameter.required()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Builds a detailed diagnostic for a binding whose discovered implementation could not be
+     * resolved exactly at execution time.
+     *
+     * @param binding the binding being resolved
+     * @param candidates every discovered implementation sharing the binding's legacy key
+     * @return the controlled execution diagnostic
+     */
+    private static String describeImplementationResolutionFailure(
+            ImplementationBinding binding,
+            List<DiscoveredImplementation> candidates) {
+        if (candidates.isEmpty()) {
+            return "No discovered implementation metadata matched "
+                    + binding.fullImplementationSignature()
+                    + " during execution";
+        }
+        return "Unable to resolve the exact discovered implementation for "
+                + binding.fullImplementationSignature()
+                + "; matching legacy key candidates were "
+                + candidates.stream()
+                        .map(DiscoveredImplementation::fullImplementationSignature)
+                        .sorted()
+                        .collect(java.util.stream.Collectors.joining(", "))
+                + ". This usually indicates overloaded method ambiguity or mismatched binding metadata.";
+    }
+
+    /**
+     * Returns the target responses for a built-in measure in one phase.
+     *
+     * @param spec the built-in measure specification
+     * @param phaseResponses the phase's responses
+     * @return the target responses for {@code spec}
+     */
+    private static List<Response> targetResponses(BuiltInMeasureSpec spec, List<Response> phaseResponses) {
+        return phaseResponses.stream()
+                .filter(response -> spec.targetTestId().equals(response.testId()))
+                .toList();
+    }
+
+    /**
+     * Reports whether a built-in measure's target response stream contains execution failures.
+     *
+     * @param targetResponses the target responses to inspect
+     * @return {@code true} if any target response failed to execute
+     */
+    private static boolean hasFailedTargetResponses(List<Response> targetResponses) {
+        return targetResponses.stream().anyMatch(response ->
+                response.status() == OutcomeStatus.ERROR || response.status() == OutcomeStatus.UNABLE_TO_RUN);
+    }
+
+    /**
+     * Builds an {@link OutcomeStatus#UNABLE_TO_RUN} built-in measure response.
+     *
+     * @param phase the phase being synthesized
+     * @param binding the measure binding
+     * @param spec the built-in measure specification
+     * @param detail the diagnostic detail to report
+     * @param finishedAt the timestamp to record
+     * @return the synthesized non-runnable measure response
+     */
+    private static Response unableToRunMeasureResponse(
+            Phase phase,
+            ImplementationBinding binding,
+            BuiltInMeasureSpec spec,
+            String detail,
+            java.time.Instant finishedAt) {
+        return new Response(
+                "MULTIRECORD",
+                binding.testId(),
+                binding.testType(),
+                binding.implementationClass(),
+                binding.implementationMethod(),
+                phase,
+                binding.parameters(),
+                OutcomeStatus.UNABLE_TO_RUN,
+                "UNABLE_TO_RUN",
+                "UNABLE_TO_RUN",
+                detail,
+                detail,
+                Map.of(),
+                finishedAt,
+                finishedAt);
+    }
+
+    /**
+     * Builds a built-in measure response describing failed source responses instead of treating
+     * them as ordinary non-matches.
+     *
+     * @param phase the phase being synthesized
+     * @param binding the measure binding
+     * @param spec the built-in measure specification
+     * @param targetResponses the target response stream containing failures
+     * @param totalRecords the dataset record count
+     * @param finishedAt the timestamp to record
+     * @return the synthesized error response
+     */
+    private static Response failedTargetMeasureResponse(
+            Phase phase,
+            ImplementationBinding binding,
+            BuiltInMeasureSpec spec,
+            List<Response> targetResponses,
+            int totalRecords,
+            java.time.Instant finishedAt) {
+        long failedCount = targetResponses.stream()
+                .filter(response -> response.status() == OutcomeStatus.ERROR || response.status() == OutcomeStatus.UNABLE_TO_RUN)
+                .count();
+        String failedRecords = targetResponses.stream()
+                .filter(response -> response.status() == OutcomeStatus.ERROR || response.status() == OutcomeStatus.UNABLE_TO_RUN)
+                .map(Response::recordId)
+                .distinct()
+                .sorted()
+                .collect(java.util.stream.Collectors.joining(", "));
+        Map<String, String> parameters = new LinkedHashMap<>(binding.parameters());
+        parameters.put(BuiltInMeasureSpec.MATCHING_COUNT_KEY, Long.toString(targetResponses.size() - failedCount));
+        parameters.put(BuiltInMeasureSpec.TOTAL_RECORDS_KEY, Integer.toString(totalRecords));
+        String message = "Built-in multi-record measure for "
+                + spec.targetTestLabel()
+                + " cannot be synthesized because "
+                + failedCount
+                + " target response(s) failed or were unable to run: "
+                + failedRecords;
+        return new Response(
+                "MULTIRECORD",
+                binding.testId(),
+                binding.testType(),
+                binding.implementationClass(),
+                binding.implementationMethod(),
+                phase,
+                Map.copyOf(parameters),
+                OutcomeStatus.ERROR,
+                "ERROR",
+                null,
                 message,
                 message,
                 Map.of(),
@@ -772,6 +1017,35 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
                 null,
                 message,
                 message,
+                Map.of(),
+                now,
+                now);
+    }
+
+    /**
+     * Builds an {@link OutcomeStatus#UNABLE_TO_RUN} response for a binding that was intentionally
+     * retained for diagnostics but not executed.
+     *
+     * @param recordId the synthetic record ID to report
+     * @param binding the non-runnable binding
+     * @param detail the diagnostic detail to report
+     * @return the synthesized non-runnable response
+     */
+    private static Response unableToRunResponse(String recordId, ImplementationBinding binding, String detail) {
+        java.time.Instant now = java.time.Instant.now();
+        return new Response(
+                recordId,
+                binding.testId(),
+                binding.testType(),
+                binding.implementationClass(),
+                binding.implementationMethod(),
+                binding.phase(),
+                binding.parameters(),
+                OutcomeStatus.UNABLE_TO_RUN,
+                "UNABLE_TO_RUN",
+                "UNABLE_TO_RUN",
+                detail,
+                detail,
                 Map.of(),
                 now,
                 now);

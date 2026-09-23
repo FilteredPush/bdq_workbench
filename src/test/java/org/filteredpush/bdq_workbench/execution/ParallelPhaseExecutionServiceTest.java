@@ -231,6 +231,159 @@ class ParallelPhaseExecutionServiceTest {
     }
 
     @Test
+    void resolvesExactOverloadAtExecutionTimeWithoutClassMethodCollision() throws Exception {
+        ParallelPhaseExecutionService service = new ParallelPhaseExecutionService(2, new ReflectionExecutionAdapter());
+        OverloadedImpl impl = new OverloadedImpl();
+        Method oneArg = OverloadedImpl.class.getMethod("validate", String.class);
+        Method twoArg = OverloadedImpl.class.getMethod("validate", String.class, String.class);
+
+        List<DiscoveredImplementation> discovered = List.of(
+                new DiscoveredImplementation(
+                        "urn:test:overload",
+                        null,
+                        TestType.VALIDATION,
+                        Phase.PRE_AMENDMENT,
+                        OverloadedImpl.class.getName(),
+                        "validate",
+                        null,
+                        List.of(parameter(0, ParameterRole.ACTED_UPON, "dwc:eventDate", String.class)),
+                        impl,
+                        oneArg),
+                new DiscoveredImplementation(
+                        "urn:test:overload",
+                        null,
+                        TestType.VALIDATION,
+                        Phase.PRE_AMENDMENT,
+                        OverloadedImpl.class.getName(),
+                        "validate",
+                        null,
+                        List.of(
+                                parameter(0, ParameterRole.ACTED_UPON, "dwc:eventDate", String.class),
+                                parameter(1, ParameterRole.PARAMETER, "bdq:sourceAuthority", String.class)),
+                        impl,
+                        twoArg));
+
+        List<Response> responses = service.execute(
+                new RecordDataset(List.of(new CanonicalRecord("r1", Map.of("dwc:eventDate", "2025-01-01")))),
+                List.of(binding("urn:test:overload", TestType.VALIDATION, OverloadedImpl.class.getName(), "validate", Phase.PRE_AMENDMENT)),
+                discovered);
+
+        assertThat(responses.stream()
+                .filter(response -> response.testId().equals("urn:test:overload"))
+                .toList())
+                .extracting(Response::comment)
+                .containsExactly("one-arg", "one-arg");
+    }
+
+    @Test
+    void qaMeasureReportsTargetExecutionErrorsInsteadOfThrowing() throws Exception {
+        ParallelPhaseExecutionService service = new ParallelPhaseExecutionService(1, (record, binding, implementation) -> new Response(
+                record.id(),
+                binding.testId(),
+                binding.testType(),
+                binding.implementationClass(),
+                binding.implementationMethod(),
+                binding.phase(),
+                binding.parameters(),
+                OutcomeStatus.ERROR,
+                "ERROR",
+                null,
+                "target failed",
+                "target failed",
+                Map.of(),
+                java.time.Instant.now(),
+                java.time.Instant.now()));
+        Method pre = QaImpl.class.getMethod("pre", String.class);
+        List<DiscoveredImplementation> discovered = List.of(
+                new DiscoveredImplementation(
+                        "urn:test:validation",
+                        null,
+                        TestType.VALIDATION,
+                        Phase.PRE_AMENDMENT,
+                        QaImpl.class.getName(),
+                        "pre",
+                        null,
+                        List.of(parameter(0, ParameterRole.ACTED_UPON, "dwc:eventDate", String.class)),
+                        new QaImpl(),
+                        pre));
+
+        List<Response> responses = service.execute(
+                new RecordDataset(List.of(new CanonicalRecord("r1", Map.of("dwc:eventDate", "bad")))),
+                List.of(
+                        binding("urn:test:validation", TestType.VALIDATION, QaImpl.class.getName(), "pre", Phase.PRE_AMENDMENT),
+                        new ImplementationBinding(
+                                "urn:test:qa-error",
+                                TestType.MEASURE,
+                                BuiltInMeasureSpec.IMPLEMENTATION_CLASS,
+                                BuiltInMeasureSpec.IMPLEMENTATION_METHOD,
+                                Phase.PRE_AMENDMENT,
+                                new BuiltInMeasureSpec(
+                                        BuiltInMeasureSpec.MeasureKind.QA,
+                                        "VALIDATION_MINDEPTH_LESSTHAN_MAXDEPTH",
+                                        "urn:test:validation",
+                                        null,
+                                        List.of("COMPLIANT"),
+                                        List.of("INTERNAL_PREREQUISITES_NOT_MET")).asBindingParameters(),
+                                BindingStatus.BOUND,
+                                ParameterizationCapability.DEFAULT_ONLY,
+                                "built-in multi-record qa",
+                                true,
+                                List.of(),
+                                List.of("Built-in multi-record QA measure"))),
+                discovered);
+
+        assertThat(responses.stream()
+                .filter(response -> response.testId().equals("urn:test:qa-error"))
+                .toList())
+                .extracting(Response::status, Response::responseStatus, Response::message)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple(
+                                OutcomeStatus.ERROR,
+                                "ERROR",
+                                "Built-in multi-record measure for VALIDATION_MINDEPTH_LESSTHAN_MAXDEPTH cannot be synthesized because 1 target response(s) failed or were unable to run: r1"),
+                        org.assertj.core.groups.Tuple.tuple(
+                                OutcomeStatus.ERROR,
+                                "ERROR",
+                                "Built-in multi-record measure for VALIDATION_MINDEPTH_LESSTHAN_MAXDEPTH cannot be synthesized because 1 target response(s) failed or were unable to run: r1"));
+    }
+
+    @Test
+    void qaMeasureWithNoTargetResponsesOnNonEmptyDatasetIsNotComplete() {
+        ParallelPhaseExecutionService service = new ParallelPhaseExecutionService(1, new ReflectionExecutionAdapter());
+
+        List<Response> responses = service.execute(
+                new RecordDataset(List.of(new CanonicalRecord("r1", Map.of("dwc:eventDate", "bad")))),
+                List.of(new ImplementationBinding(
+                        "urn:test:qa-missing-target",
+                        TestType.MEASURE,
+                        BuiltInMeasureSpec.IMPLEMENTATION_CLASS,
+                        BuiltInMeasureSpec.IMPLEMENTATION_METHOD,
+                        Phase.PRE_AMENDMENT,
+                        new BuiltInMeasureSpec(
+                                BuiltInMeasureSpec.MeasureKind.QA,
+                                "VALIDATION_MISSING",
+                                "urn:test:missing-target",
+                                null,
+                                List.of("COMPLIANT"),
+                                List.of("INTERNAL_PREREQUISITES_NOT_MET")).asBindingParameters(),
+                        BindingStatus.BOUND,
+                        ParameterizationCapability.DEFAULT_ONLY,
+                        "built-in multi-record qa",
+                        true,
+                        List.of(),
+                        List.of("Built-in multi-record QA measure"))),
+                List.of());
+
+        assertThat(responses.stream()
+                .filter(response -> response.testId().equals("urn:test:qa-missing-target"))
+                .toList())
+                .extracting(Response::status, Response::responseStatus, Response::responseResult)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple(OutcomeStatus.UNABLE_TO_RUN, "UNABLE_TO_RUN", "UNABLE_TO_RUN"),
+                        org.assertj.core.groups.Tuple.tuple(OutcomeStatus.UNABLE_TO_RUN, "UNABLE_TO_RUN", "UNABLE_TO_RUN"));
+    }
+
+    @Test
     void continuesPhaseWhenExecutionAdapterThrowsUnexpectedRuntimeException() {
         ParallelPhaseExecutionService service = new ParallelPhaseExecutionService(1, (record, binding, implementation) -> {
             if (binding.testId().equals("urn:test:bad")) {
@@ -601,6 +754,16 @@ class ParallelPhaseExecutionServiceTest {
                 case "prereq" -> new StubDQResponse("INTERNAL_PREREQUISITES_NOT_MET", null, eventDate, Map.of());
                 default -> new StubDQResponse("RUN_HAS_RESULT", "NOT_COMPLIANT", eventDate, Map.of());
             };
+        }
+    }
+
+    static class OverloadedImpl {
+        public StubDQResponse validate(String eventDate) {
+            return new StubDQResponse("RUN_HAS_RESULT", "COMPLIANT", "one-arg", Map.of());
+        }
+
+        public StubDQResponse validate(String eventDate, String sourceAuthority) {
+            return new StubDQResponse("RUN_HAS_RESULT", "COMPLIANT", "two-arg", Map.of());
         }
     }
 

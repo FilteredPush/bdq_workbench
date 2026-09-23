@@ -51,4 +51,57 @@ public record ImplementationBinding(
         boolean usingDefaultParameters,
         java.util.List<BoundMethodParameter> parameterBindings,
         java.util.List<String> diagnostics) {
+
+    /**
+     * Reports whether this binding is executable, as opposed to being retained only for
+     * diagnostics and synthesized unresolved reporting.
+     *
+     * @return {@code true} if {@link #bindingStatus()} is runnable
+     */
+    public boolean isRunnable() {
+        return bindingStatus != null && bindingStatus.isRunnable();
+    }
+
+    /**
+     * Builds the legacy implementation lookup key used by older explicit mappings.
+     *
+     * @return {@code "<implementationClass>#<implementationMethod>"}
+     */
+    public String legacyImplementationKey() {
+        return implementationClass + "#" + implementationMethod;
+    }
+
+    /**
+     * Builds a stable full implementation signature from this binding's ordered bound parameters.
+     *
+     * <p>The signature uses only Java parameter types because those are stable across discovery,
+     * explicit mappings, and runtime reflective lookup. The richer role/source metadata remains on
+     * {@link #parameterBindings()} and is checked separately when resolving a discovered
+     * implementation at execution time. When no bound-parameter metadata is present, this falls
+     * back to the legacy {@code class#method} form rather than guessing an overload signature.
+     *
+     * @return {@code "<implementationClass>#<implementationMethod>(type1, type2, ...)"} when
+     *     bound-parameter metadata is available, otherwise the legacy
+     *     {@code "<implementationClass>#<implementationMethod>"} form
+     */
+    public String fullImplementationSignature() {
+        return parameterBindings == null || parameterBindings.isEmpty()
+                ? legacyImplementationKey()
+                : legacyImplementationKey() + parameterTypeSignature();
+    }
+
+    /**
+     * Renders the bound method's ordered Java parameter-type signature.
+     *
+     * @return {@code "(type1, type2, ...)"} or {@code "()"} when no parameters are bound
+     */
+    public String parameterTypeSignature() {
+        return parameterBindings == null
+                ? "()"
+                : parameterBindings.stream()
+                        .map(BoundMethodParameter::parameter)
+                        .sorted(java.util.Comparator.comparingInt(MethodParameter::index))
+                        .map(MethodParameter::typeName)
+                        .collect(java.util.stream.Collectors.joining(", ", "(", ")"));
+    }
 }

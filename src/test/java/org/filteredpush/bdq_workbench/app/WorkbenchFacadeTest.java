@@ -2,6 +2,7 @@ package org.filteredpush.bdq_workbench.app;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
@@ -14,7 +15,9 @@ import org.filteredpush.bdq_workbench.model.BindingReview;
 import org.filteredpush.bdq_workbench.model.BindingStatus;
 import org.filteredpush.bdq_workbench.model.CanonicalRecord;
 import org.filteredpush.bdq_workbench.model.ExecutionPlan;
+import org.filteredpush.bdq_workbench.model.ExecutionSummary;
 import org.filteredpush.bdq_workbench.model.ImplementationStatus;
+import org.filteredpush.bdq_workbench.model.ImplementationBinding;
 import org.filteredpush.bdq_workbench.model.ParameterizationCapability;
 import org.filteredpush.bdq_workbench.model.Phase;
 import org.filteredpush.bdq_workbench.model.Policy;
@@ -30,6 +33,7 @@ import org.filteredpush.bdq_workbench.test_discovery.DiscoveredImplementation;
 import org.filteredpush.bdq_workbench.test_discovery.TestBindingResult;
 import org.filteredpush.bdq_workbench.test_discovery.TestBindingService;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 class WorkbenchFacadeTest {
 
@@ -86,6 +90,191 @@ class WorkbenchFacadeTest {
         assertThat(prepared.filterSummary().originalRecordCount()).isEqualTo(2);
         assertThat(prepared.filterSummary().filteredRecordCount()).isEqualTo(1);
         assertThat(availableTermsSeen.get()).containsExactlyInAnyOrder("dwc:country", "dwc:genus");
+    }
+
+    @Test
+    void prepareWritesBindingDiagnosticsFileForIncompleteBindings(@TempDir Path tempDir) throws Exception {
+        String originalUserDir = System.getProperty("user.dir");
+        try {
+            System.setProperty("user.dir", tempDir.toString());
+            RecordDataset ingested = new RecordDataset(List.of(
+                    new CanonicalRecord("r1", Map.of("dwc:eventDate", "2025-01-01"))));
+            TestDefinition missingImplementation =
+                    new TestDefinition("urn:test:missing", "Missing impl", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of());
+            TestDefinition bindingProblem =
+                    new TestDefinition("urn:test:binding", "Binding problem", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of());
+            TestDefinition downstreamMeasure =
+                    new TestDefinition("urn:test:measure", "MULTIRECORD_MEASURE_QA_BINDING", TestType.MEASURE, Phase.PRE_AMENDMENT, Map.of());
+            TestDefinition missingTerm =
+                    new TestDefinition("urn:test:term", "Missing term", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of());
+            TestBindingResult bindingResult = new TestBindingResult(
+                    List.of(),
+                    List.of(missingImplementation, bindingProblem, downstreamMeasure, missingTerm),
+                    List.of(
+                            new BindingReview(
+                                    missingImplementation,
+                                    ImplementationStatus.MISSING,
+                                    BindingStatus.UNBOUND,
+                                    ParameterizationCapability.DEFAULT_ONLY,
+                                    "",
+                                    Map.of(),
+                                    true,
+                                    List.of("No implementation discovered for urn:test:missing")),
+                            new BindingReview(
+                                    bindingProblem,
+                                    ImplementationStatus.FOUND,
+                                    BindingStatus.UNBOUND,
+                                    ParameterizationCapability.DEFAULT_ONLY,
+                                    "example.Impl#binding()",
+                                    Map.of(),
+                                    true,
+                                    List.of("Missing parameter value for bdq:sourceAuthority")),
+                            new BindingReview(
+                                    downstreamMeasure,
+                                    ImplementationStatus.FOUND,
+                                    BindingStatus.UNBOUND,
+                                    ParameterizationCapability.DEFAULT_ONLY,
+                                    "built-in",
+                                    Map.of(),
+                                    true,
+                                    List.of("Built-in multi-record measure target is not runnable")),
+                            new BindingReview(
+                                    missingTerm,
+                                    ImplementationStatus.FOUND,
+                                    BindingStatus.BOUND,
+                                    ParameterizationCapability.DEFAULT_ONLY,
+                                    "example.Impl#term()",
+                                    Map.of(),
+                                    true,
+                                    List.of("Term acted_upon/consulted absent in input data: dwc:countryCode; binding as an empty string"))));
+            WorkbenchFacade facade = new WorkbenchFacade(
+                    inputPath -> ingested,
+                    useCaseId -> new ExecutionPlan(
+                            new UseCase("uc1", "Use Case", "policy:1"),
+                            new Policy("policy:1", List.of(missingImplementation.id(), bindingProblem.id(), downstreamMeasure.id(), missingTerm.id())),
+                            List.of(missingImplementation, bindingProblem, downstreamMeasure, missingTerm),
+                            List.of()),
+                    () -> List.of(),
+                    new TestBindingService() {
+                        @Override
+                        public TestBindingResult bind(
+                                List<TestDefinition> tests,
+                                List<DiscoveredImplementation> discovered,
+                                Map<String, String> explicitMapping) {
+                            return bindingResult;
+                        }
+
+                        @Override
+                        public TestBindingResult bind(
+                                List<TestDefinition> tests,
+                                List<DiscoveredImplementation> discovered,
+                                Map<String, String> explicitMapping,
+                                java.util.Collection<String> availableTerms) {
+                            return bindingResult;
+                        }
+                    },
+                    (dataset, bindings, discovered) -> List.of(),
+                    new ReportingService(List.of()),
+                    new DefaultRecordFilterService());
+
+            facade.prepare(new AppConfig(
+                    Path.of("usecase.xml"),
+                    List.of(),
+                    Path.of("dataset.zip"),
+                    "uc1",
+                    List.of("org.filteredpush"),
+                    1,
+                    true));
+
+            Path diagnosticsPath = WorkbenchFacade.bindingDiagnosticsPath();
+            assertThat(Files.exists(diagnosticsPath)).isTrue();
+            String diagnostics = Files.readString(diagnosticsPath);
+            assertThat(diagnostics).contains("BDQ Workbench binding diagnostics");
+            assertThat(diagnostics).contains("Problem summary");
+            assertThat(diagnostics).contains("Single-record test errors: 1");
+            assertThat(diagnostics).contains("Single-record test binding problems: 1");
+            assertThat(diagnostics).contains("Multi-record measure downstream errors/binding problems: 1");
+            assertThat(diagnostics).contains("Missing input term problems: 1");
+            assertThat(diagnostics).contains("Single-record test errors");
+            assertThat(diagnostics).contains("Single-record test binding problems");
+            assertThat(diagnostics).contains("Multi-record measure downstream errors/binding problems");
+            assertThat(diagnostics).contains("Missing input term problems");
+            assertThat(diagnostics).contains("No discovered implementation matched this policy test");
+            assertThat(diagnostics).contains("One or more Darwin Core information elements were absent from the filtered dataset");
+            assertThat(diagnostics.indexOf("urn:test:missing")).isLessThan(diagnostics.indexOf("urn:test:binding"));
+            assertThat(diagnostics.indexOf("urn:test:binding")).isLessThan(diagnostics.indexOf("urn:test:measure"));
+            assertThat(diagnostics.indexOf("urn:test:measure")).isLessThan(diagnostics.indexOf("urn:test:term"));
+        } finally {
+            System.setProperty("user.dir", originalUserDir);
+        }
+    }
+
+    @Test
+    void prepareDeletesStaleBindingDiagnosticsFileWhenEverythingIsBound(@TempDir Path tempDir) throws Exception {
+        String originalUserDir = System.getProperty("user.dir");
+        try {
+            System.setProperty("user.dir", tempDir.toString());
+            Path diagnosticsPath = WorkbenchFacade.bindingDiagnosticsPath();
+            Files.createDirectories(diagnosticsPath.getParent());
+            Files.writeString(diagnosticsPath, "stale");
+            RecordDataset ingested = new RecordDataset(List.of(
+                    new CanonicalRecord("r1", Map.of("dwc:eventDate", "2025-01-01"))));
+            TestDefinition test = new TestDefinition("urn:test:ok", "Bound", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of());
+            TestBindingResult bindingResult = new TestBindingResult(
+                    List.of(),
+                    List.of(),
+                    List.of(new BindingReview(
+                            test,
+                            ImplementationStatus.FOUND,
+                            BindingStatus.BOUND,
+                            ParameterizationCapability.DEFAULT_ONLY,
+                            "example.Impl#ok()",
+                            Map.of(),
+                            true,
+                            List.of("BOUND: all parameters compatible"))));
+            WorkbenchFacade facade = new WorkbenchFacade(
+                    inputPath -> ingested,
+                    useCaseId -> new ExecutionPlan(
+                            new UseCase("uc1", "Use Case", "policy:1"),
+                            new Policy("policy:1", List.of(test.id())),
+                            List.of(test),
+                            List.of()),
+                    () -> List.of(),
+                    new TestBindingService() {
+                        @Override
+                        public TestBindingResult bind(
+                                List<TestDefinition> tests,
+                                List<DiscoveredImplementation> discovered,
+                                Map<String, String> explicitMapping) {
+                            return bindingResult;
+                        }
+
+                        @Override
+                        public TestBindingResult bind(
+                                List<TestDefinition> tests,
+                                List<DiscoveredImplementation> discovered,
+                                Map<String, String> explicitMapping,
+                                java.util.Collection<String> availableTerms) {
+                            return bindingResult;
+                        }
+                    },
+                    (dataset, bindings, discovered) -> List.of(),
+                    new ReportingService(List.of()),
+                    new DefaultRecordFilterService());
+
+            facade.prepare(new AppConfig(
+                    Path.of("usecase.xml"),
+                    List.of(),
+                    Path.of("dataset.zip"),
+                    "uc1",
+                    List.of("org.filteredpush"),
+                    1,
+                    true));
+
+            assertThat(Files.exists(diagnosticsPath)).isFalse();
+        } finally {
+            System.setProperty("user.dir", originalUserDir);
+        }
     }
 
     @Test
@@ -203,5 +392,92 @@ class WorkbenchFacadeTest {
         assertThat(summary.metadata().filteredSingleRecordCount()).isEqualTo(2);
         assertThat(summary.metadata().filledInValueCounts()).containsEntry("dwc:countryCode=RU", 1L);
         assertThat(summary.metadata().amendedValuePairCounts()).containsEntry("dwc:countryCode: SU -> RU", 1L);
+    }
+
+    @Test
+    void runPreparedExecutesOnlyRunnableBindingsAndSynthesizesNonRunnableOutcomes() {
+        TestDefinition runnableTest =
+                new TestDefinition("urn:test:runnable", "Runnable", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of());
+        TestDefinition nonRunnableTest =
+                new TestDefinition("urn:test:non-runnable", "Non Runnable", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of());
+        ImplementationBinding runnableBinding = new ImplementationBinding(
+                runnableTest.id(),
+                runnableTest.type(),
+                "example.Impl",
+                "run",
+                runnableTest.phase(),
+                Map.of(),
+                BindingStatus.BOUND,
+                ParameterizationCapability.DEFAULT_ONLY,
+                "selected",
+                true,
+                List.of(),
+                List.of("BOUND: all parameters compatible"));
+        ImplementationBinding nonRunnableBinding = new ImplementationBinding(
+                nonRunnableTest.id(),
+                nonRunnableTest.type(),
+                "example.Impl",
+                "skip",
+                nonRunnableTest.phase(),
+                Map.of(),
+                BindingStatus.UNBOUND,
+                ParameterizationCapability.DEFAULT_ONLY,
+                "selected",
+                true,
+                List.of(),
+                List.of("Missing parameter value for bdq:sourceAuthority"));
+        PreparedRun preparedRun = new PreparedRun(
+                new AppConfig(Path.of("usecase.xml"), List.of(), Path.of("dataset.zip"), "uc1", List.of("org.filteredpush"), 1, true),
+                new RecordDataset(List.of(new CanonicalRecord("r1", Map.of("dwc:eventDate", "2025-01-01")))),
+                new ExecutionPlan(
+                        new UseCase("uc1", "Use Case", "policy:1"),
+                        new Policy("policy:1", List.of(runnableTest.id(), nonRunnableTest.id())),
+                        List.of(runnableTest, nonRunnableTest),
+                        List.of()),
+                List.of(),
+                new TestBindingResult(
+                        List.of(runnableBinding, nonRunnableBinding),
+                        List.of(nonRunnableTest),
+                        List.of(
+                                new BindingReview(
+                                        runnableTest,
+                                        ImplementationStatus.FOUND,
+                                        BindingStatus.BOUND,
+                                        ParameterizationCapability.DEFAULT_ONLY,
+                                        "example.Impl#run()",
+                                        Map.of(),
+                                        true,
+                                        List.of("BOUND: all parameters compatible")),
+                                new BindingReview(
+                                        nonRunnableTest,
+                                        ImplementationStatus.FOUND,
+                                        BindingStatus.UNBOUND,
+                                        ParameterizationCapability.DEFAULT_ONLY,
+                                        "example.Impl#skip()",
+                                        Map.of(),
+                                        true,
+                                        List.of("Missing parameter value for bdq:sourceAuthority")))));
+
+        AtomicReference<List<ImplementationBinding>> executedBindings = new AtomicReference<>(List.of());
+        TestExecutionService executionService = (dataset, bindings, discovered) -> {
+            executedBindings.set(List.copyOf(bindings));
+            return List.of();
+        };
+        WorkbenchFacade facade = new WorkbenchFacade(
+                null,
+                null,
+                null,
+                null,
+                executionService,
+                new ReportingService(List.of()));
+
+        ExecutionSummary summary = facade.runPrepared(preparedRun);
+
+        assertThat(executedBindings.get()).extracting(ImplementationBinding::testId).containsExactly("urn:test:runnable");
+        assertThat(summary.responses()).extracting(Response::testId, Response::responseStatus, Response::responseResult)
+                .contains(org.assertj.core.groups.Tuple.tuple(
+                        "urn:test:non-runnable",
+                        "UNABLE_TO_RUN",
+                        "UNABLE_TO_RUN"));
     }
 }

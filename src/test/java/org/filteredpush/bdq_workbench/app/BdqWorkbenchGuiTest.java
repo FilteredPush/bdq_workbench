@@ -262,6 +262,83 @@ class BdqWorkbenchGuiTest {
     }
 
     @Test
+    void preflightSummaryCountsOnlyRunnableBindings() throws Exception {
+        PreparedRun preparedRun = new PreparedRun(
+                new AppConfig(Path.of("usecase.xml"), List.of(), Path.of("dataset.zip"), "uc1", List.of("org.filteredpush"), 1, true),
+                new RecordDataset(List.of(new CanonicalRecord("r1", Map.of("dwc:eventDate", "2025-01-01")))),
+                new ExecutionPlan(
+                        new UseCase("uc1", "Use Case", "policy:1"),
+                        new Policy("policy:1", List.of("urn:test:runnable", "urn:test:non-runnable")),
+                        List.of(
+                                new TestDefinition("urn:test:runnable", "Runnable", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of()),
+                                new TestDefinition("urn:test:non-runnable", "Non Runnable", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of())),
+                        List.of()),
+                List.of(),
+                new TestBindingResult(
+                        List.of(
+                                new ImplementationBinding(
+                                        "urn:test:runnable",
+                                        TestType.VALIDATION,
+                                        "example.Impl",
+                                        "run",
+                                        Phase.PRE_AMENDMENT,
+                                        Map.of(),
+                                        BindingStatus.BOUND,
+                                        ParameterizationCapability.DEFAULT_ONLY,
+                                        "selected",
+                                        true,
+                                        List.of(),
+                                        List.of("BOUND: all parameters compatible")),
+                                new ImplementationBinding(
+                                        "urn:test:non-runnable",
+                                        TestType.VALIDATION,
+                                        "example.Impl",
+                                        "skip",
+                                        Phase.PRE_AMENDMENT,
+                                        Map.of(),
+                                        BindingStatus.UNBOUND,
+                                        ParameterizationCapability.DEFAULT_ONLY,
+                                        "selected",
+                                        true,
+                                        List.of(),
+                                        List.of("Missing parameter value for bdq:sourceAuthority"))),
+                        List.of(new TestDefinition("urn:test:non-runnable", "Non Runnable", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of())),
+                        List.of(
+                                new BindingReview(
+                                        new TestDefinition("urn:test:runnable", "Runnable", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of()),
+                                        ImplementationStatus.FOUND,
+                                        BindingStatus.BOUND,
+                                        ParameterizationCapability.DEFAULT_ONLY,
+                                        "example.Impl#run()",
+                                        Map.of(),
+                                        true,
+                                        List.of("BOUND: all parameters compatible")),
+                                new BindingReview(
+                                        new TestDefinition("urn:test:non-runnable", "Non Runnable", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of()),
+                                        ImplementationStatus.FOUND,
+                                        BindingStatus.UNBOUND,
+                                        ParameterizationCapability.DEFAULT_ONLY,
+                                        "example.Impl#skip()",
+                                        Map.of(),
+                                        true,
+                                        List.of("Missing parameter value for bdq:sourceAuthority")))),
+                RecordFilterSummary.unfiltered(new RecordDataset(List.of(new CanonicalRecord("r1", Map.of("dwc:eventDate", "2025-01-01"))))));
+
+        Class<?> preflightStateClass = Class.forName("org.filteredpush.bdq_workbench.app.BdqWorkbenchGui$PreflightState");
+        java.lang.reflect.Constructor<?> constructor = preflightStateClass.getDeclaredConstructor(PreparedRun.class);
+        constructor.setAccessible(true);
+        Object preflightState = constructor.newInstance(preparedRun);
+        Method renderPreflightMessage = BdqWorkbenchGui.class.getDeclaredMethod("renderPreflightMessage", preflightStateClass);
+        renderPreflightMessage.setAccessible(true);
+
+        String summary = (String) renderPreflightMessage.invoke(null, preflightState);
+
+        assertThat(summary).contains("Runnable mapped tests: 1");
+        assertThat(summary).contains("Mapped but not runnable");
+        assertThat(summary).contains("right-click a single test row");
+    }
+
+    @Test
     void resultSummaryUsesReadableMultiLineSections() throws Exception {
         Method renderSummary = BdqWorkbenchGui.class.getDeclaredMethod("renderResultSummary", ExecutionSummary.class);
         renderSummary.setAccessible(true);
@@ -468,11 +545,52 @@ class BdqWorkbenchGuiTest {
     }
 
     @Test
+    void bindingReviewTableModelSortsMeasuresAheadOfSingleRecordTestsAfterRun() {
+        BindingReviewTableModel model = new BindingReviewTableModel(List.of(
+                new BindingReview(
+                        new TestDefinition("urn:test:validation", "Zebra validation", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of()),
+                        ImplementationStatus.FOUND,
+                        BindingStatus.BOUND,
+                        ParameterizationCapability.DEFAULT_ONLY,
+                        "example#validation",
+                        Map.of(),
+                        true,
+                        List.of()),
+                new BindingReview(
+                        new TestDefinition("urn:test:measure-without", "Bravo measure", TestType.MEASURE, Phase.PRE_AMENDMENT, Map.of()),
+                        ImplementationStatus.FOUND,
+                        BindingStatus.BOUND,
+                        ParameterizationCapability.DEFAULT_ONLY,
+                        "built-in",
+                        Map.of(),
+                        true,
+                        List.of()),
+                new BindingReview(
+                        new TestDefinition("urn:test:measure-with", "Alpha measure", TestType.MEASURE, Phase.PRE_AMENDMENT, Map.of()),
+                        ImplementationStatus.FOUND,
+                        BindingStatus.BOUND,
+                        ParameterizationCapability.DEFAULT_ONLY,
+                        "built-in",
+                        Map.of(),
+                        true,
+                        List.of())));
+
+        model.applyExecutionOutputs(Map.of(
+                "urn:test:measure-with",
+                new BindingReviewTableModel.PhaseExecutionOutput("1 (50.0%)", "")));
+
+        assertThat(model.reviewAt(0).test().label()).isEqualTo("Alpha measure");
+        assertThat(model.reviewAt(1).test().label()).isEqualTo("Bravo measure");
+        assertThat(model.reviewAt(2).test().label()).isEqualTo("Zebra validation");
+    }
+
+    @Test
     void stageOverviewIncludesFilterStageCounts() throws Exception {
         Method helper = BdqWorkbenchGui.class.getDeclaredMethod(
                 "renderStageOverview",
                 PreparedRun.class,
                 Phase.class,
+                boolean.class,
                 boolean.class,
                 boolean.class);
         helper.setAccessible(true);
@@ -492,7 +610,7 @@ class BdqWorkbenchGuiTest {
                         Map.of("dwc:country", List.of("Canada")),
                         List.of("Record filter field country resolved to input field dwc:country")));
 
-        String overview = (String) helper.invoke(null, preparedRun, null, false, false);
+        String overview = (String) helper.invoke(null, preparedRun, null, false, false, false);
 
         assertThat(overview).contains("Workflow progress: 5/9 stages completed");
         assertThat(overview).contains("[completed] Load dataset - 3 records loaded");
@@ -508,6 +626,7 @@ class BdqWorkbenchGuiTest {
                 PreparedRun.class,
                 Phase.class,
                 boolean.class,
+                boolean.class,
                 boolean.class);
         helper.setAccessible(true);
         PreparedRun preparedRun = new PreparedRun(
@@ -519,13 +638,40 @@ class BdqWorkbenchGuiTest {
                 RecordFilterSummary.unfiltered(new RecordDataset(List.of(
                         new CanonicalRecord("r1", Map.of("dwc:country", "Canada"))))));
 
-        String overview = (String) helper.invoke(null, preparedRun, Phase.AMENDMENT, false, false);
+        String overview = (String) helper.invoke(null, preparedRun, Phase.AMENDMENT, false, false, false);
 
         assertThat(overview).contains("Workflow progress: 6/9 stages completed");
         assertThat(overview).contains("Current stage: AMENDMENT (stage 7/9)");
         assertThat(overview).contains("[completed] PRE_AMENDMENT - phase complete");
         assertThat(overview).contains("[running] AMENDMENT - phase in progress");
         assertThat(overview).contains("[pending] POST_AMENDMENT - phase not started");
+    }
+
+    @Test
+    void stageOverviewShowsExportStageWhileReportsAreWriting() throws Exception {
+        Method helper = BdqWorkbenchGui.class.getDeclaredMethod(
+		"renderStageOverview",
+		PreparedRun.class,
+		Phase.class,
+		boolean.class,
+		boolean.class,
+		boolean.class);
+        helper.setAccessible(true);
+        PreparedRun preparedRun = new PreparedRun(
+		null,
+		new RecordDataset(List.of(new CanonicalRecord("r1", Map.of("dwc:country", "Canada")))),
+		new ExecutionPlan(new UseCase("urn:usecase", "Use case", "urn:policy"), new Policy("urn:policy", List.of()), List.of(), List.of()),
+		List.of(),
+		new TestBindingResult(List.of(), List.of(), List.of()),
+		RecordFilterSummary.unfiltered(new RecordDataset(List.of(
+				new CanonicalRecord("r1", Map.of("dwc:country", "Canada"))))));
+
+        String overview = (String) helper.invoke(null, preparedRun, null, true, false, false);
+
+        assertThat(overview).contains("Workflow progress: 8/9 stages completed");
+        assertThat(overview).contains("Current stage: Export reports (stage 9/9)");
+        assertThat(overview).contains("[completed] POST_AMENDMENT - phase complete");
+        assertThat(overview).contains("[running] Export reports - reports in progress");
     }
 
     @Test

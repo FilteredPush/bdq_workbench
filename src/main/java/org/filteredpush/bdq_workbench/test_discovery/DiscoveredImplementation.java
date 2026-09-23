@@ -75,4 +75,35 @@ public record DiscoveredImplementation(
     public boolean isParameterized() {
         return parameters.stream().anyMatch(parameter -> parameter.role() == org.filteredpush.bdq_workbench.model.ParameterRole.PARAMETER);
     }
+
+    /**
+     * Builds the legacy implementation lookup key used by older explicit mappings.
+     *
+     * @return {@code "<implementationClass>#<implementationMethod>"}
+     */
+    public String legacyImplementationKey() {
+        return implementationClass + "#" + implementationMethod;
+    }
+
+    /**
+     * Builds a stable full implementation signature suitable for overload-safe lookup and new
+     * explicit mappings.
+     *
+     * @return {@code "<implementationClass>#<implementationMethod>(type1, type2, ...)"} using
+     *     the reflective method's declared parameter types
+     */
+    public String fullImplementationSignature() {
+        return legacyImplementationKey() + parameterTypeSignature();
+    }
+
+    /**
+     * Renders the discovered method's ordered Java parameter-type signature.
+     *
+     * @return {@code "(type1, type2, ...)"} or {@code "()"} for a no-argument method
+     */
+    public String parameterTypeSignature() {
+        return java.util.Arrays.stream(method.getParameterTypes())
+                .map(Class::getName)
+                .collect(java.util.stream.Collectors.joining(", ", "(", ")"));
+    }
 }

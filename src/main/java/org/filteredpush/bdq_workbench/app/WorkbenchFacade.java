@@ -19,21 +19,30 @@
  */
 package org.filteredpush.bdq_workbench.app;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import org.filteredpush.bdq_workbench.filtering.DefaultRecordFilterService;
 import org.filteredpush.bdq_workbench.filtering.RecordFilterService;
 import org.filteredpush.bdq_workbench.execution.TestExecutionService;
+import org.filteredpush.bdq_workbench.model.BindingReview;
+import org.filteredpush.bdq_workbench.model.BindingStatus;
 import org.filteredpush.bdq_workbench.ingest.IngestService;
 import org.filteredpush.bdq_workbench.model.ExecutionPlan;
 import org.filteredpush.bdq_workbench.model.ExecutionSummary;
 import org.filteredpush.bdq_workbench.model.ExecutionSummaryMetadata;
+import org.filteredpush.bdq_workbench.model.ImplementationStatus;
 import org.filteredpush.bdq_workbench.model.OutcomeStatus;
 import org.filteredpush.bdq_workbench.model.PreparedRun;
 import org.filteredpush.bdq_workbench.model.RecordFilterSummary;
 import org.filteredpush.bdq_workbench.model.Response;
+import org.filteredpush.bdq_workbench.model.TestType;
 import org.filteredpush.bdq_workbench.rdf_policy.PolicyResolverService;
 import org.filteredpush.bdq_workbench.reporting.ReportingService;
 import org.filteredpush.bdq_workbench.test_discovery.DiscoveredImplementation;
@@ -66,6 +75,8 @@ import org.slf4j.LoggerFactory;
 public class WorkbenchFacade {
 
 	private static final Logger LOG = LoggerFactory.getLogger(WorkbenchFacade.class);
+    static final String OUTPUT_DIRECTORY = "reports";
+    static final String BINDING_DIAGNOSTICS_FILE = "bdq-binding-diagnostics.txt";
 
     private final IngestService ingestService;
     private final PolicyResolverService policyResolverService;
@@ -158,7 +169,234 @@ public class WorkbenchFacade {
                 discovered,
                 java.util.Map.of(),
                 collectAvailableTerms(dataset));
+        writeBindingDiagnosticsFile(plan, bindingResult);
         return new PreparedRun(config, dataset, plan, List.copyOf(discovered), bindingResult, filterSummary);
+    }
+
+    /**
+     * Writes a developer-oriented binding diagnostics report when setup/preflight finds tests that
+     * were not fully bound, and deletes any stale report when every binding is fully bound.
+     *
+     * @param plan the resolved execution plan for the current setup run
+     * @param bindingResult the binding outcome produced during setup
+     */
+    private static void writeBindingDiagnosticsFile(ExecutionPlan plan, TestBindingResult bindingResult) {
+        Path diagnosticsPath = bindingDiagnosticsPath();
+        List<BindingReview> diagnosticReviews = bindingResult.reviews().stream()
+                .filter(WorkbenchFacade::shouldWriteBindingDiagnostic)
+                .sorted(bindingDiagnosticComparator())
+                .toList();
+        try {
+            if (diagnosticReviews.isEmpty()) {
+                Files.deleteIfExists(diagnosticsPath);
+                return;
+            }
+            Files.createDirectories(diagnosticsPath.getParent());
+            Files.writeString(
+                    diagnosticsPath,
+                    renderBindingDiagnostics(plan, diagnosticReviews),
+                    StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new AppException("Unable to write binding diagnostics", e);
+        }
+    }
+
+    /**
+     * Reports whether one binding review should appear in the developer diagnostics report.
+     *
+     * @param review one binding review
+     * @return {@code true} when the review reflects an incomplete or failed binding
+     */
+    private static boolean shouldWriteBindingDiagnostic(BindingReview review) {
+        return review.implementationStatus() != ImplementationStatus.FOUND
+                || review.bindingStatus() != BindingStatus.BOUND
+                || hasMissingInputTermDiagnostic(review);
+    }
+
+    /**
+     * Orders diagnostics with binding/configuration errors first and missing-input-term problems
+     * afterward, preserving a stable developer-friendly grouping.
+     *
+     * @return comparator for binding-diagnostics report rows
+     */
+    private static Comparator<BindingReview> bindingDiagnosticComparator() {
+        return Comparator
+                .comparingInt(WorkbenchFacade::bindingDiagnosticCategory)
+                .thenComparing((BindingReview review) -> review.test().phase())
+                .thenComparing(review -> review.test().id());
+    }
+
+    /**
+     * Renders the plain-text binding diagnostics report written after setup/preflight.
+     *
+     * @param plan the execution plan whose tests were bound
+     * @param diagnosticReviews the binding reviews to describe, already sorted
+     * @return the diagnostics report text
+     */
+    private static String renderBindingDiagnostics(
+            ExecutionPlan plan,
+            List<BindingReview> diagnosticReviews) {
+        StringBuilder builder = new StringBuilder();
+        builder.append("BDQ Workbench binding diagnostics\n");
+        builder.append("Use case: ").append(plan.useCase().id()).append(" (").append(plan.useCase().label()).append(")\n");
+        builder.append("Problem summary\n");
+        builder.append(" - Single-record test errors: ")
+                .append(countBindingDiagnostics(diagnosticReviews, 0))
+                .append('\n');
+        builder.append(" - Single-record test binding problems: ")
+                .append(countBindingDiagnostics(diagnosticReviews, 1))
+                .append('\n');
+        builder.append(" - Multi-record measure downstream errors/binding problems: ")
+                .append(countBindingDiagnostics(diagnosticReviews, 2))
+                .append('\n');
+        builder.append(" - Missing input term problems: ")
+                .append(countBindingDiagnostics(diagnosticReviews, 3))
+                .append('\n');
+        builder.append(" - Total diagnostics entries: ")
+                .append(diagnosticReviews.size())
+                .append("\n\n");
+        builder.append("Entries are ordered with single-record test errors first, then single-record binding problems, then downstream multi-record measure issues, and finally missing-input-term problems.\n\n");
+        appendBindingDiagnosticSection(builder, "Single-record test errors", diagnosticReviews, 0);
+        appendBindingDiagnosticSection(builder, "Single-record test binding problems", diagnosticReviews, 1);
+        appendBindingDiagnosticSection(builder, "Multi-record measure downstream errors/binding problems", diagnosticReviews, 2);
+        appendBindingDiagnosticSection(builder, "Missing input term problems", diagnosticReviews, 3);
+        return builder.toString();
+    }
+
+    /**
+     * Appends one binding-diagnostics section.
+     *
+     * @param builder report buffer under construction
+     * @param title section title
+     * @param reviews all candidate reviews
+     * @param category the diagnostics category to append
+     */
+    private static void appendBindingDiagnosticSection(
+            StringBuilder builder,
+            String title,
+            List<BindingReview> reviews,
+            int category) {
+        List<BindingReview> sectionReviews = reviews.stream()
+                .filter(review -> bindingDiagnosticCategory(review) == category)
+                .toList();
+        if (sectionReviews.isEmpty()) {
+            return;
+        }
+        builder.append(title).append('\n');
+        for (BindingReview review : sectionReviews) {
+            builder.append(" - Test: ")
+                    .append(review.test().id())
+                    .append(" [")
+                    .append(review.test().phase())
+                    .append(", ")
+                    .append(review.test().type())
+                    .append("]\n");
+            if (review.test().label() != null && !review.test().label().isBlank()) {
+                builder.append("   Label: ").append(review.test().label()).append('\n');
+            }
+            if (review.chosenImplementationMethod() != null && !review.chosenImplementationMethod().isBlank()) {
+                builder.append("   Candidate: ").append(review.chosenImplementationMethod()).append('\n');
+            }
+            builder.append("   Implementation status: ").append(review.implementationStatus()).append('\n');
+            builder.append("   Binding status: ").append(review.bindingStatus()).append('\n');
+            builder.append("   Developer explanation: ").append(bindingDeveloperExplanation(review)).append('\n');
+            if (!review.parameterValues().isEmpty()) {
+                builder.append("   Parameter values: ").append(review.parameterValues()).append('\n');
+            }
+            builder.append("   Diagnostics:\n");
+            review.diagnostics().forEach(diagnostic -> builder.append("    * ").append(diagnostic).append('\n'));
+        }
+        builder.append('\n');
+    }
+
+    /**
+     * Counts how many diagnostics reviews fall into one category.
+     *
+     * @param reviews the diagnostic reviews to count
+     * @param category the category identifier returned by {@link #bindingDiagnosticCategory}
+     * @return the number of reviews in that category
+     */
+    private static long countBindingDiagnostics(List<BindingReview> reviews, int category) {
+        return reviews.stream()
+                .filter(review -> bindingDiagnosticCategory(review) == category)
+                .count();
+    }
+
+    /**
+     * Classifies one binding diagnostic into its report ordering bucket.
+     *
+     * @param review the binding review to classify
+     * @return 0 for single-record errors, 1 for single-record binding problems, 2 for multi-record
+     *     measure downstream problems, 3 for missing-input-term problems
+     */
+    private static int bindingDiagnosticCategory(BindingReview review) {
+        if (review.bindingStatus() == BindingStatus.TERM_MISSING || hasMissingInputTermDiagnostic(review)) {
+            return 3;
+        }
+        if (isMultiRecordMeasure(review)) {
+            return 2;
+        }
+        if (review.implementationStatus() != ImplementationStatus.FOUND) {
+            return 0;
+        }
+        return 1;
+    }
+
+    /**
+     * Reports whether a binding review describes a multi-record measure.
+     *
+     * @param review the binding review to inspect
+     * @return {@code true} for multi-record measure tests, {@code false} otherwise
+     */
+    private static boolean isMultiRecordMeasure(BindingReview review) {
+        return review.test().type() == TestType.MEASURE
+                || (review.test().label() != null && review.test().label().startsWith("MULTIRECORD_"));
+    }
+
+    /**
+     * Reports whether a review carries a warning that one of its information-element terms was
+     * absent from the dataset and therefore bound as an empty string.
+     *
+     * @param review the binding review to inspect
+     * @return {@code true} if the review diagnostics include the empty-string missing-term warning
+     */
+    private static boolean hasMissingInputTermDiagnostic(BindingReview review) {
+        return review.diagnostics().stream()
+                .anyMatch(diagnostic -> diagnostic.startsWith("Term acted_upon/consulted absent in input data:"));
+    }
+
+    /**
+     * Summarizes the likely cause of one incomplete binding in developer-facing terms.
+     *
+     * @param review the binding review to explain
+     * @return one concise developer-oriented explanation
+     */
+    private static String bindingDeveloperExplanation(BindingReview review) {
+        if (review.bindingStatus() == BindingStatus.TERM_MISSING || hasMissingInputTermDiagnostic(review)) {
+            return "One or more Darwin Core information elements were absent from the filtered dataset. This binding will execute with empty-string values for those terms, so review the dataset table selection, record filters, ingest mapping, and whether the test expects fields carried only in another table.";
+        }
+        if (review.implementationStatus() == ImplementationStatus.MISSING) {
+            return "No discovered implementation matched this policy test. Verify the dependency is on the classpath, the discovery package includes it, and its @Provides/@ProvidesVersion identifiers match the RDF test definition.";
+        }
+        if (review.implementationStatus() == ImplementationStatus.AMBIGUOUS) {
+            return "More than one discovered implementation remained viable for this test. Compare the candidate signatures and annotations, then either fix the conflicting metadata or supply an explicit full-signature mapping.";
+        }
+        if (review.bindingStatus() == BindingStatus.UNBOUND) {
+            return "A candidate implementation was discovered but could not be bound safely. Review the parameter diagnostics for missing RDF parameters, namespace mismatches, overload ambiguity, or stale implementation metadata.";
+        }
+        if (review.bindingStatus() == BindingStatus.PARTIAL) {
+            return "This binding is only partial: execution may still be possible, but at least one optional/defaultable input could not be matched exactly. Review the diagnostics to confirm the implementation defaults and parameter mapping are intentional.";
+        }
+        return "Review the diagnostics below for the exact binding mismatch.";
+    }
+
+    /**
+     * Returns the setup-phase binding diagnostics output path.
+     *
+     * @return the binding diagnostics file under the standard output directory
+     */
+    static Path bindingDiagnosticsPath() {
+        return Path.of(System.getProperty("user.dir"), OUTPUT_DIRECTORY, BINDING_DIAGNOSTICS_FILE);
     }
 
     /**
@@ -201,12 +439,12 @@ public class WorkbenchFacade {
         TestBindingResult bindingResult = preparedRun.bindingResult();
 
         LOG.info("Executing {} tests with {} discovered implementations",
-                bindingResult.bindings().size(),
+                bindingResult.runnableBindings().size(),
                 discovered.size());
 
         List<Response> responses = new ArrayList<>(executionService.execute(
                 dataset,
-                bindingResult.bindings(),
+                bindingResult.runnableBindings(),
                 discovered));
 
         for (var unresolved : plan.unresolvedTests()) {
