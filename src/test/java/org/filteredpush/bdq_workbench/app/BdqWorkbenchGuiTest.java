@@ -6,6 +6,7 @@ import java.awt.CardLayout;
 import java.lang.reflect.Method;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import javax.swing.JButton;
@@ -712,6 +713,30 @@ class BdqWorkbenchGuiTest {
         assertThat(suggestions).contains(" - Canada (2)");
         assertThat(suggestions).contains(" - Mexico (1)");
     }
+
+	@Test
+	void recordFilterProfileSuggestionsShowTwentyValuesThenSummarizeRemainder() throws Exception {
+		Method profileHelper = BdqWorkbenchGui.class.getDeclaredMethod("profileRecordFilters", RecordDataset.class);
+		profileHelper.setAccessible(true);
+		List<CanonicalRecord> records = new ArrayList<>();
+		for (int i = 1; i <= 21; i++) {
+			records.add(new CanonicalRecord("r" + i, Map.of("dwc:country", "v" + i)));
+		}
+		Object profile = profileHelper.invoke(null, new RecordDataset(records));
+		Method suggestionHelper = BdqWorkbenchGui.class.getDeclaredMethod(
+				"renderRecordFilterValueSuggestions",
+				profile.getClass(),
+				String.class,
+				String.class);
+		suggestionHelper.setAccessible(true);
+
+		String suggestions = (String) suggestionHelper.invoke(null, profile, "dwc:country", null);
+
+		assertThat(suggestions).contains(" - v1 (1)");
+		assertThat(suggestions).contains(" - v20 (1)");
+		assertThat(suggestions).doesNotContain(" - v21 (1)");
+		assertThat(suggestions).contains("... and 1 more distinct value(s)");
+	}
 
     @Test
     void recordFilterSuggestionsWarnWhenSavedFieldIsMissingFromCurrentDataset() throws Exception {

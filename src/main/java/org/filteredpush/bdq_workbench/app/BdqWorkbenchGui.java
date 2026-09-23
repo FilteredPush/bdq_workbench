@@ -130,6 +130,7 @@ import org.slf4j.LoggerFactory;
  */
 final class BdqWorkbenchGui {
     private static final Logger LOG = LoggerFactory.getLogger(BdqWorkbenchGui.class);
+    private static final int RECORD_FILTER_SUGGESTION_LIMIT = 20;
     private static final int FINALIZATION_STAGE_STEP_COUNT = 5;
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
@@ -2188,14 +2189,17 @@ final class BdqWorkbenchGui {
         }
         JTextField values = new JTextField(initialValues == null ? "" : initialValues);
         forceSingleLineControlHeight(fieldChoice, values.getPreferredSize().height);
-        JTextArea suggestionArea = new JTextArea(3, 30);
+        forceSingleLineControlHeight(values, values.getPreferredSize().height);
+        JTextArea suggestionArea = new JTextArea(8, 30);
         suggestionArea.setEditable(false);
         suggestionArea.setLineWrap(true);
         suggestionArea.setWrapStyleWord(true);
         suggestionArea.setBorder(BorderFactory.createEtchedBorder());
-        lockTextAreaHeight(suggestionArea);
         installTextAreaClipboardSupport(suggestionArea);
+        JScrollPane suggestionScroll = new JScrollPane(suggestionArea);
+        lockTextAreaHeight(suggestionScroll, suggestionArea.getPreferredSize().height + 60);
         JButton remove = new JButton("Remove");
+        forceSingleLineControlHeight(remove, values.getPreferredSize().height);
         remove.addActionListener(e -> {
 	rowsPanel.remove(row);
 	rowsPanel.revalidate();
@@ -2222,10 +2226,11 @@ final class BdqWorkbenchGui {
         stacked.setLayout(new BoxLayout(stacked, BoxLayout.Y_AXIS));
         stacked.add(inputRow);
         stacked.add(valuesRow);
-        stacked.add(suggestionArea);
+        stacked.add(suggestionScroll);
 
         row.add(stacked, BorderLayout.CENTER);
         row.setBorder(BorderFactory.createEmptyBorder(4, 0, 4, 0));
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, row.getPreferredSize().height));
         rowsPanel.add(row);
         return new RecordFilterRowWidgets(row, fieldChoice, values, unresolvedField, unresolvedMessage);
     }
@@ -2255,7 +2260,7 @@ final class BdqWorkbenchGui {
 	.thenComparing(Map.Entry::getKey, String.CASE_INSENSITIVE_ORDER));
 	distinctValueCounts.put(term, entries.size());
 	topValuesByTerm.put(term, entries.stream()
-	.limit(8)
+	.limit(RECORD_FILTER_SUGGESTION_LIMIT)
 	.map(entry -> new RecordFilterValueOption(entry.getKey(), entry.getValue()))
 	.toList());
         });
@@ -2528,17 +2533,46 @@ final class BdqWorkbenchGui {
     }
 
     /**
-     * Fixes a text area's preferred/minimum/maximum height so dynamic wrapped text does not cause
+     * Forces a text field to keep a single-line control height.
+     *
+     * @param textField the text field to normalize
+     * @param targetHeight the desired control height in pixels
+     */
+    private static void forceSingleLineControlHeight(JTextField textField, int targetHeight) {
+        Dimension preferred = textField.getPreferredSize();
+        Dimension normalized = new Dimension(preferred.width, targetHeight);
+        textField.setPreferredSize(normalized);
+        textField.setMinimumSize(normalized);
+        textField.setMaximumSize(new Dimension(Integer.MAX_VALUE, targetHeight));
+    }
+
+    /**
+     * Forces a button to keep a single-line control height.
+     *
+     * @param button the button to normalize
+     * @param targetHeight the desired control height in pixels
+     */
+    private static void forceSingleLineControlHeight(JButton button, int targetHeight) {
+        Dimension preferred = button.getPreferredSize();
+        Dimension normalized = new Dimension(preferred.width, targetHeight);
+        button.setPreferredSize(normalized);
+        button.setMinimumSize(normalized);
+        button.setMaximumSize(normalized);
+    }
+
+    /**
+     * Fixes a scroll pane's preferred/minimum/maximum height so dynamic wrapped text does not cause
      * surrounding filter rows to resize and scroll the selected controls out of view.
      *
-     * @param textArea the text area whose height should remain stable
+     * @param scrollPane the scroll pane whose height should remain stable
+     * @param targetHeight the desired control height in pixels
      */
-    private static void lockTextAreaHeight(JTextArea textArea) {
-        Dimension preferred = textArea.getPreferredSize();
-        Dimension normalized = new Dimension(Math.max(preferred.width, 320), preferred.height);
-        textArea.setPreferredSize(normalized);
-        textArea.setMinimumSize(normalized);
-        textArea.setMaximumSize(new Dimension(Integer.MAX_VALUE, normalized.height));
+    private static void lockTextAreaHeight(JScrollPane scrollPane, int targetHeight) {
+        Dimension preferred = scrollPane.getPreferredSize();
+        Dimension normalized = new Dimension(Math.max(preferred.width, 320), targetHeight);
+        scrollPane.setPreferredSize(normalized);
+        scrollPane.setMinimumSize(normalized);
+        scrollPane.setMaximumSize(new Dimension(Integer.MAX_VALUE, normalized.height));
     }
 
     /**
