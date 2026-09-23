@@ -20,8 +20,10 @@
 package org.filteredpush.bdq_workbench.ingest;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import org.filteredpush.bdq_workbench.model.DatasetSchema;
 import org.filteredpush.bdq_workbench.model.DatasetView;
 import org.filteredpush.bdq_workbench.model.DatasetViewCardinalityPolicy;
@@ -77,7 +79,7 @@ final class BuiltInDatasetViews {
 		if (joins.isEmpty()) {
 			return Optional.empty();
 		}
-		List<DatasetViewMapping> mappings = defaultOccurrenceMappings(occurrence.name(), joins);
+		List<DatasetViewMapping> mappings = defaultOccurrenceMappings(schema, occurrence.name(), joins);
 		return Optional.of(new DatasetView(occurrence.name(), schema.schemaFingerprint(), joins, mappings));
 	}
 
@@ -97,18 +99,64 @@ final class BuiltInDatasetViews {
 				occurrence.name(),
 				occurrence.name(),
 				DatasetViewCardinalityPolicy.FIRST_ROW));
-		List<DatasetViewMapping> mappings = defaultOccurrenceMappings(occurrence.name(), joins);
+		List<DatasetViewMapping> mappings = defaultOccurrenceMappings(schema, occurrence.name(), joins);
 		return Optional.of(new DatasetView(event.name(), schema.schemaFingerprint(), joins, mappings));
 	}
 
-	private static List<DatasetViewMapping> defaultOccurrenceMappings(String occurrenceTable, List<DatasetViewJoin> joins) {
-		String sourceTable = joins.isEmpty() ? "core" : occurrenceTable;
+	/**
+	 * Builds default occurrence-oriented mappings, preferring a joined source table when the
+	 * occurrence table does not carry a mapped term.
+	 *
+	 * @param schema discovered dataset schema
+	 * @param occurrenceTable name of the occurrence table
+	 * @param joins joins included in the selected built-in view
+	 * @return direct source mappings for common occurrence terms
+	 */
+	private static List<DatasetViewMapping> defaultOccurrenceMappings(
+			DatasetSchema schema,
+			String occurrenceTable,
+			List<DatasetViewJoin> joins) {
+		Set<String> allowedSourceTables = new LinkedHashSet<>();
+		allowedSourceTables.add(occurrenceTable);
+		joins.forEach(join -> allowedSourceTables.add(join.sourceTable()));
 		return List.of(
-				new DatasetViewMapping("occurrenceID", sourceTable, "occurrenceID"),
-				new DatasetViewMapping("scientificName", sourceTable, "scientificName"),
-				new DatasetViewMapping("eventDate", sourceTable, "eventDate"),
-				new DatasetViewMapping("decimalLatitude", sourceTable, "decimalLatitude"),
-				new DatasetViewMapping("decimalLongitude", sourceTable, "decimalLongitude"));
+				new DatasetViewMapping("occurrenceID",
+						resolveSourceTable(schema, allowedSourceTables, occurrenceTable, "occurrenceID"),
+						"occurrenceID"),
+				new DatasetViewMapping("scientificName",
+						resolveSourceTable(schema, allowedSourceTables, occurrenceTable, "scientificName"),
+						"scientificName"),
+				new DatasetViewMapping("eventDate",
+						resolveSourceTable(schema, allowedSourceTables, occurrenceTable, "eventDate"),
+						"eventDate"),
+				new DatasetViewMapping("decimalLatitude",
+						resolveSourceTable(schema, allowedSourceTables, occurrenceTable, "decimalLatitude"),
+						"decimalLatitude"),
+				new DatasetViewMapping("decimalLongitude",
+						resolveSourceTable(schema, allowedSourceTables, occurrenceTable, "decimalLongitude"),
+						"decimalLongitude"));
+	}
+
+	/**
+	 * Resolves which allowed table should source a mapped term.
+	 *
+	 * @param schema discovered dataset schema
+	 * @param allowedSourceTables tables permitted by the built-in view
+	 * @param fallbackTable table name used when no candidate table carries the mapped column
+	 * @param columnName column/term being mapped
+	 * @return table name to use as mapping source
+	 */
+	private static String resolveSourceTable(
+			DatasetSchema schema,
+			Set<String> allowedSourceTables,
+			String fallbackTable,
+			String columnName) {
+		return schema.tables().stream()
+				.filter(table -> allowedSourceTables.contains(table.name()))
+				.filter(table -> table.columns().contains(columnName))
+				.map(TableSchema::name)
+				.findFirst()
+				.orElse(fallbackTable);
 	}
 
 	private static TableSchema findByRowType(DatasetSchema schema, String rowType) {

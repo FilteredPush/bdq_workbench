@@ -76,6 +76,32 @@ class DatasetViewSchemaTest {
 	}
 
 	@Test
+	void builtInDataPackageViewSourcesScientificNameFromJoinedTableWhenOccurrenceLacksColumn() {
+		DatasetSchema schema = new DatasetSchema(
+				List.of(
+						new TableSchema("occurrence", "occurrence", "OCCURRENCE", "occurrenceID",
+								List.of("occurrenceID", "eventDate", "decimalLatitude", "decimalLongitude")),
+						new TableSchema("identification", "identification", "OTHER", "identificationID",
+								List.of("occurrenceID", "scientificName"))),
+				List.of(new RelationshipSchema(
+						"identification",
+						"occurrenceID",
+						"occurrence",
+						"occurrenceID",
+						"identification")),
+				"fp");
+
+		DatasetView view = BuiltInDatasetViews.select(schema, new java.util.ArrayList<>()).orElseThrow();
+
+		assertThat(view.mappings())
+				.anySatisfy(mapping -> {
+					assertThat(mapping.term()).isEqualTo("scientificName");
+					assertThat(mapping.sourceTable()).isEqualTo("identification");
+					assertThat(mapping.sourceColumn()).isEqualTo("scientificName");
+				});
+	}
+
+	@Test
 	void viewLoadFailureIsReportedAsAppException(@TempDir Path tempDir) {
 		DatasetViewIO io = new DatasetViewIO();
 		Path missing = tempDir.resolve("missing-view.json");
