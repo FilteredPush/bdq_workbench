@@ -20,8 +20,14 @@
 package org.filteredpush.bdq_workbench.ingest;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
 import org.filteredpush.bdq_workbench.app.AppException;
+import org.filteredpush.bdq_workbench.model.DatasetView;
 import org.filteredpush.bdq_workbench.model.RecordDataset;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Dispatches ingestion based on source format.
@@ -31,15 +37,20 @@ import org.filteredpush.bdq_workbench.model.RecordDataset;
  * {@code datapackage} Darwin Core Data Packages.
  */
 public class DefaultIngestService implements IngestService {
+    private static final Logger LOG = LoggerFactory.getLogger(DefaultIngestService.class);
     private final DwcArchiveIngestor dwcArchiveIngestor;
     private final DataPackageIngestor dataPackageIngestor;
+    private final RelationalDatasetIngestor relationalDatasetIngestor;
+    private final DatasetViewIO datasetViewIO;
+    private final ViewFlattener viewFlattener;
 
     /**
      * Creates a service with default {@link DwcArchiveIngestor} and {@link DataPackageIngestor}
      * instances.
      */
     public DefaultIngestService() {
-        this(new DwcArchiveIngestor(), new DataPackageIngestor());
+        this(new DwcArchiveIngestor(), new DataPackageIngestor(),
+        		new RelationalDatasetIngestor(), new DatasetViewIO(), new ViewFlattener());
     }
 
     /**
@@ -49,8 +60,24 @@ public class DefaultIngestService implements IngestService {
      * @param dataPackageIngestor ingestor used for {@code .json}/{@code datapackage} inputs
      */
     public DefaultIngestService(DwcArchiveIngestor dwcArchiveIngestor, DataPackageIngestor dataPackageIngestor) {
+        this(dwcArchiveIngestor, dataPackageIngestor,
+        		new RelationalDatasetIngestor(), new DatasetViewIO(), new ViewFlattener());
+    }
+
+    /**
+     * Creates a service wired to explicit flat and relational ingestion components.
+     */
+    public DefaultIngestService(
+        	DwcArchiveIngestor dwcArchiveIngestor,
+        	DataPackageIngestor dataPackageIngestor,
+        	RelationalDatasetIngestor relationalDatasetIngestor,
+        	DatasetViewIO datasetViewIO,
+        	ViewFlattener viewFlattener) {
         this.dwcArchiveIngestor = dwcArchiveIngestor;
         this.dataPackageIngestor = dataPackageIngestor;
+        this.relationalDatasetIngestor = relationalDatasetIngestor;
+        this.datasetViewIO = datasetViewIO;
+        this.viewFlattener = viewFlattener;
     }
 
     /**
@@ -80,6 +107,22 @@ public class DefaultIngestService implements IngestService {
      */
     @Override
     public RecordDataset ingest(Path inputPath, String requestedTable) {
+        return ingest(inputPath, requestedTable, "");
+    }
+
+    @Override
+    public RecordDataset ingest(Path inputPath, String requestedTable, String datasetView) {
+        if (datasetView != null && !datasetView.isBlank()) {
+            return ingestThroughView(inputPath, requestedTable, datasetView);
+        }
+        RecordDataset maybeBuiltIn = ingestThroughBuiltInView(inputPath, requestedTable);
+        if (maybeBuiltIn != null) {
+            return maybeBuiltIn;
+        }
+        return ingestFlat(inputPath, requestedTable);
+    }
+
+    private RecordDataset ingestFlat(Path inputPath, String requestedTable) {
         String fileName = inputPath.getFileName().toString().toLowerCase();
         if (fileName.endsWith(".zip")) {
             return dwcArchiveIngestor.ingest(inputPath, requestedTable);
@@ -88,5 +131,36 @@ public class DefaultIngestService implements IngestService {
             return dataPackageIngestor.ingest(inputPath, requestedTable);
         }
         throw new AppException("Unsupported dataset input: " + inputPath);
+    }
+
+    private RecordDataset ingestThroughView(Path inputPath, String requestedTable, String datasetViewPath) {
+        RelationalIngestResult relational = relationalDatasetIngestor.ingest(inputPath, requestedTable);
+        DatasetView view = datasetViewIO.load(Path.of(datasetViewPath));
+        datasetViewIO.validateCompatibility(view, relational.schema());
+        ViewFlattenResult flattened = viewFlattener.flatten(relational, view);
+        logDiagnostics(relational.diagnostics(), flattened.diagnostics());
+        return flattened.dataset();
+    }
+
+    private RecordDataset ingestThroughBuiltInView(Path inputPath, String requestedTable) {
+        RelationalIngestResult relational = relationalDatasetIngestor.ingest(inputPath, requestedTable);
+        if (relational.graphs().isEmpty()) {
+        	return null;
+        }
+        List<String> diagnostics = new ArrayList<>();
+        Optional<DatasetView> builtIn = BuiltInDatasetViews.select(relational.schema(), diagnostics);
+        if (builtIn.isEmpty()) {
+        	logDiagnostics(relational.diagnostics(), diagnostics);
+        	return null;
+        }
+        ViewFlattenResult flattened = viewFlattener.flatten(relational, builtIn.get());
+        logDiagnostics(relational.diagnostics(), diagnostics, flattened.diagnostics());
+        return flattened.dataset();
+    }
+
+    private void logDiagnostics(List<String>... groups) {
+        for (List<String> group : groups) {
+        	group.forEach(message -> LOG.warn("Dataset view diagnostic: {}", message));
+        }
     }
 }

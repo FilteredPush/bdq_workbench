@@ -27,4 +27,13 @@ class ConfigLoaderTest {
 				.isInstanceOf(AppException.class)
 				.hasMessageContaining("values must not be blank");
 	}
+
+	@Test
+	void loadsDatasetViewPathFromOverrides() {
+		AppConfig config = new ConfigLoader().load(Map.of(
+				"bdq.dataset", "dataset.zip",
+				"bdq.dataset.view", "/tmp/view.json"));
+
+		assertThat(config.datasetView()).isEqualTo("/tmp/view.json");
+	}
 }

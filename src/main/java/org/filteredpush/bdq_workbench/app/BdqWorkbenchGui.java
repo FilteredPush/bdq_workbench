@@ -68,10 +68,17 @@ import javax.swing.table.TableCellRenderer;
 import org.filteredpush.bdq_workbench.execution.ExecutionProgressListener;
 import org.filteredpush.bdq_workbench.execution.ParallelPhaseExecutionService;
 import org.filteredpush.bdq_workbench.execution.ReflectionExecutionAdapter;
+import org.filteredpush.bdq_workbench.ingest.DatasetViewIO;
 import org.filteredpush.bdq_workbench.ingest.DefaultIngestService;
+import org.filteredpush.bdq_workbench.ingest.RelationalDatasetIngestor;
 import org.filteredpush.bdq_workbench.model.RecordFilterSummary;
 import org.filteredpush.bdq_workbench.model.BindingReview;
 import org.filteredpush.bdq_workbench.model.BuiltInMeasureSpec;
+import org.filteredpush.bdq_workbench.model.DatasetSchema;
+import org.filteredpush.bdq_workbench.model.DatasetView;
+import org.filteredpush.bdq_workbench.model.DatasetViewCardinalityPolicy;
+import org.filteredpush.bdq_workbench.model.DatasetViewJoin;
+import org.filteredpush.bdq_workbench.model.DatasetViewMapping;
 import org.filteredpush.bdq_workbench.model.ExecutionPlan;
 import org.filteredpush.bdq_workbench.model.ExecutionSummary;
 import org.filteredpush.bdq_workbench.model.ImplementationBinding;
@@ -305,6 +312,8 @@ final class BdqWorkbenchGui {
         form.add(setupHeaderRow);
 
         PickerField dataset = addPickerField(form, frame, "Dataset", defaults.datasetPath().toString());
+        PickerField datasetView = addPickerField(form, frame, "Dataset view (JSON)",
+                overrides.getOrDefault("bdq.dataset.view", defaults.datasetView()));
         String[] configuredRecordFilters = new String[] {defaults.recordFilter().toPropertyString()};
         JTextArea recordFilterSummary = new JTextArea(4, 40);
         recordFilterSummary.setEditable(false);
@@ -317,8 +326,13 @@ final class BdqWorkbenchGui {
         recordFilterRow.add(new JLabel("Record filters"), BorderLayout.WEST);
         JPanel recordFilterButtons = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
         JButton buildRecordFilters = new JButton("Build Record Filters...");
+        JButton buildDatasetView = new JButton("Build Dataset View...");
         JButton clearRecordFilters = new JButton("Clear Filters");
+        JButton clearDatasetView = new JButton("Clear View");
         clearRecordFilters.setEnabled(!configuredRecordFilters[0].isBlank());
+        clearDatasetView.setEnabled(!datasetView.field().getText().isBlank());
+        recordFilterButtons.add(buildDatasetView);
+        recordFilterButtons.add(clearDatasetView);
         recordFilterButtons.add(buildRecordFilters);
         recordFilterButtons.add(clearRecordFilters);
         recordFilterRow.add(recordFilterButtons, BorderLayout.CENTER);
@@ -485,6 +499,27 @@ final class BdqWorkbenchGui {
                 recordFilterSummary,
                 clearRecordFilters,
                 buildRecordFilters));
+        buildDatasetView.addActionListener(e -> loadDatasetViewDialog(frame, dataset.field().getText().trim(), datasetView.field()));
+        clearDatasetView.addActionListener(e -> {
+            datasetView.field().setText("");
+            clearDatasetView.setEnabled(false);
+        });
+        datasetView.field().getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+            @Override
+            public void insertUpdate(javax.swing.event.DocumentEvent e) {
+                clearDatasetView.setEnabled(!datasetView.field().getText().isBlank());
+            }
+
+            @Override
+            public void removeUpdate(javax.swing.event.DocumentEvent e) {
+                clearDatasetView.setEnabled(!datasetView.field().getText().isBlank());
+            }
+
+            @Override
+            public void changedUpdate(javax.swing.event.DocumentEvent e) {
+                clearDatasetView.setEnabled(!datasetView.field().getText().isBlank());
+            }
+        });
         clearRecordFilters.addActionListener(e -> {
             configuredRecordFilters[0] = "";
             updateRecordFilterSummary(recordFilterSummary, configuredRecordFilters[0]);
@@ -536,6 +571,7 @@ final class BdqWorkbenchGui {
                             selectedUseCaseId(useCaseChoice),
                             configuredRecordFilters[0],
                             datasetTable.getText().trim(),
+                            datasetView.field().getText().trim(),
                             useCaseSource.getText().trim(),
                             testDefinitionsSource.getText().trim(),
                             additionalTestDefinitions.getText().trim(),
@@ -1395,6 +1431,7 @@ final class BdqWorkbenchGui {
      *     form
      * @param datasetTable which of the dataset's tables to run against, named by location,
      *     resource name or Darwin Core row type; blank to let the ingestor choose
+     * @param datasetView optional dataset-view JSON file path
      * @param useCaseSource use case RDF file/URL field value
      * @param testDefinitionsSource primary test definitions file/URL field value
      * @param additionalTestDefinitions comma-separated extra test definition files/URLs
@@ -1411,6 +1448,7 @@ final class BdqWorkbenchGui {
             String selectedUseCaseId,
             String recordFilters,
             String datasetTable,
+            String datasetView,
             String useCaseSource,
             String testDefinitionsSource,
             String additionalTestDefinitions,
@@ -1446,7 +1484,8 @@ final class BdqWorkbenchGui {
                 parseThreads(threads),
                 dedupEnabled,
                 RecordFilterSpec.parse(recordFilters),
-                datasetTable);
+                datasetTable,
+                datasetView);
     }
 
     /**
@@ -1784,6 +1823,147 @@ final class BdqWorkbenchGui {
         };
         worker.execute();
     }
+
+	/**
+	 * Loads relational schema metadata and helps the user create/save a dataset view file.
+	 *
+	 * @param frame owner frame
+	 * @param datasetPath selected dataset path
+	 * @param datasetViewField dataset-view path field to update
+	 */
+	private static void loadDatasetViewDialog(JFrame frame, String datasetPath, JTextField datasetViewField) {
+		if (datasetPath == null || datasetPath.isBlank()) {
+			JOptionPane.showMessageDialog(
+					frame,
+					"Select a dataset before building a dataset view.",
+					"Dataset required",
+					JOptionPane.WARNING_MESSAGE);
+			return;
+		}
+		Path path = Path.of(datasetPath);
+		if (!Files.exists(path)) {
+			JOptionPane.showMessageDialog(
+					frame,
+					"Dataset input not found: " + datasetPath,
+					"Dataset required",
+					JOptionPane.ERROR_MESSAGE);
+			return;
+		}
+		RelationalDatasetIngestor ingestor = new RelationalDatasetIngestor();
+		DatasetViewIO io = new DatasetViewIO();
+		var relational = ingestor.ingest(path, "");
+		DatasetSchema schema = relational.schema();
+		DatasetView suggested = suggestDatasetView(schema);
+		var preview = new org.filteredpush.bdq_workbench.ingest.ViewFlattener().flatten(relational, suggested);
+
+		JTextArea details = new JTextArea(18, 80);
+		details.setEditable(false);
+		details.setLineWrap(true);
+		details.setWrapStyleWord(true);
+		StringBuilder builder = new StringBuilder();
+		builder.append("Schema fingerprint: ").append(schema.schemaFingerprint()).append('\n');
+		builder.append("Tables:\n");
+		schema.tables().forEach(table -> builder.append(" - ")
+				.append(table.name())
+				.append(" [")
+				.append(table.rowType())
+				.append("] columns=")
+				.append(table.columns().size())
+				.append('\n'));
+		builder.append("Relationships:\n");
+		schema.relationships().forEach(relationship -> builder.append(" - ")
+				.append(relationship.fromTable())
+				.append('.')
+				.append(relationship.fromColumn())
+				.append(" -> ")
+				.append(relationship.toTable())
+				.append('.')
+				.append(relationship.toColumn())
+				.append('\n'));
+		builder.append("Suggested mappings:\n");
+		suggested.mappings().forEach(mapping -> builder.append(" - ")
+				.append(mapping.term())
+				.append(" <- ")
+				.append(mapping.sourceTable())
+				.append('.')
+				.append(mapping.sourceColumn())
+				.append('\n'));
+		builder.append("Preview rows: ").append(Math.min(5, preview.dataset().records().size())).append('\n');
+		preview.dataset().records().stream().limit(5).forEach(row -> builder.append(" - ")
+				.append(row.id())
+				.append(" => ")
+				.append(row.terms())
+				.append('\n'));
+		if (!preview.diagnostics().isEmpty()) {
+			builder.append("Cardinality warnings:\n");
+			preview.diagnostics().forEach(message -> builder.append(" - ").append(message).append('\n'));
+		}
+		details.setText(builder.toString());
+
+		JButton save = new JButton("Save View...");
+		JButton load = new JButton("Load View...");
+		JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+		buttons.add(load);
+		buttons.add(save);
+		JPanel panel = new JPanel(new BorderLayout(8, 8));
+		panel.add(new JScrollPane(details), BorderLayout.CENTER);
+		panel.add(buttons, BorderLayout.SOUTH);
+		JDialog dialog = new JDialog(frame, "Build Dataset View", true);
+		dialog.setContentPane(panel);
+		dialog.pack();
+		dialog.setLocationRelativeTo(frame);
+
+		load.addActionListener(e -> {
+			String selected = chooseFile(frame, "Select dataset view JSON");
+			if (selected == null) {
+				return;
+			}
+			DatasetView view = io.load(Path.of(selected));
+			io.validateCompatibility(view, schema);
+			datasetViewField.setText(selected);
+			dialog.dispose();
+		});
+		save.addActionListener(e -> {
+			String selected = chooseSaveFile(frame, "Save dataset view JSON", "bdq-dataset-view.json");
+			if (selected == null) {
+				return;
+			}
+			io.save(Path.of(selected), suggested);
+			datasetViewField.setText(selected);
+			dialog.dispose();
+		});
+		dialog.setVisible(true);
+	}
+
+	/**
+	 * Creates a simple direct-mapping view suggestion from discovered schema.
+	 */
+	private static DatasetView suggestDatasetView(DatasetSchema schema) {
+		String grain = schema.tables().stream()
+				.filter(table -> "OCCURRENCE".equalsIgnoreCase(table.rowType()))
+				.findFirst()
+				.map(table -> table.name())
+				.orElse(schema.tables().isEmpty() ? "core" : schema.tables().get(0).name());
+		List<DatasetViewJoin> joins = schema.relationships().stream()
+				.filter(relationship -> relationship.toTable().equals(grain))
+				.map(relationship -> new DatasetViewJoin(
+						relationship.relationName(),
+						relationship.fromTable(),
+						DatasetViewCardinalityPolicy.REJECT))
+				.toList();
+		List<String> requestedTerms = List.of(
+				"occurrenceID", "scientificName", "eventDate", "decimalLatitude", "decimalLongitude");
+		List<DatasetViewMapping> mappings = new ArrayList<>();
+		for (String term : requestedTerms) {
+			String sourceTable = schema.tables().stream()
+					.filter(table -> table.columns().contains(term))
+					.findFirst()
+					.map(table -> table.name())
+					.orElse("core");
+			mappings.add(new DatasetViewMapping(term, sourceTable, term));
+		}
+		return new DatasetView(grain, schema.schemaFingerprint(), joins, mappings);
+	}
 
     /**
      * Opens the interactive record-filter dialog for one already-profiled dataset.

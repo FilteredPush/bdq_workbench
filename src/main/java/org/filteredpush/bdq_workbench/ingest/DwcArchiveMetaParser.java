@@ -229,6 +229,10 @@ final class DwcArchiveMetaParser {
 		if (idIndex >= 0) {
 			namesByIndex.putIfAbsent(idIndex, "id");
 		}
+		int coreIdIndex = parseInt(attribute(firstChildElement(core, "coreid"), "index"), -1);
+		if (coreIdIndex >= 0) {
+			namesByIndex.putIfAbsent(coreIdIndex, "coreid");
+		}
 		DwcArchiveCoreMeta meta = new DwcArchiveCoreMeta(
 				attributeOrDefault(core, "rowType", ""),
 				locations,
@@ -238,6 +242,7 @@ final class DwcArchiveMetaParser {
 				Math.max(0, parseInt(attribute(core, "ignoreHeaderLines"), 0)),
 				toColumnNames(namesByIndex),
 				idIndex >= 0 ? namesByIndex.getOrDefault(idIndex, "") : "",
+				coreIdIndex >= 0 ? namesByIndex.getOrDefault(coreIdIndex, "") : "",
 				constantTerms);
 		LOG.debug("Parsed meta.xml table: rowType={}, locations={}, encoding={}, delimiter={}, enclosedBy={}, "
 						+ "ignoreHeaderLines={}, columns={}, constantTerms={}",

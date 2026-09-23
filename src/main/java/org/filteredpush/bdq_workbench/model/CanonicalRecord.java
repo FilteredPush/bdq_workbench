@@ -20,6 +20,8 @@
 package org.filteredpush.bdq_workbench.model;
 
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -30,8 +32,9 @@ import java.util.Map;
  * can update term values in place as a run progresses.
  */
 public final class CanonicalRecord {
-    private final String id;
-    private final Map<String, String> terms;
+	private final String id;
+	private final Map<String, String> terms;
+	private final Map<String, List<SourceCell>> provenanceByTerm;
 
     /**
      * Creates a canonical record, copying the supplied terms into a new mutable map.
@@ -39,35 +42,58 @@ public final class CanonicalRecord {
      * @param id the record's identifier
      * @param terms the record's initial Darwin Core term values, keyed by term name
      */
-    public CanonicalRecord(String id, Map<String, String> terms) {
-        this.id = id;
-        this.terms = new HashMap<>(terms);
-    }
+	public CanonicalRecord(String id, Map<String, String> terms) {
+		this(id, terms, Map.of());
+	}
+
+	/**
+	 * Creates a canonical record with value-level source provenance.
+	 *
+	 * @param id the record's identifier
+	 * @param terms the record's Darwin Core term values, keyed by term name
+	 * @param provenanceByTerm provenance cells for each term value
+	 */
+	public CanonicalRecord(String id, Map<String, String> terms, Map<String, List<SourceCell>> provenanceByTerm) {
+		this.id = id;
+		this.terms = new HashMap<>(terms);
+		Map<String, List<SourceCell>> copy = new LinkedHashMap<>();
+		provenanceByTerm.forEach((term, cells) -> copy.put(term, List.copyOf(cells)));
+		this.provenanceByTerm = Map.copyOf(copy);
+	}
 
     /**
      * Returns this record's identifier.
      *
      * @return the record ID
      */
-    public String id() {
-        return id;
-    }
+	public String id() {
+		return id;
+	}
 
     /**
      * Returns this record's Darwin Core term values.
      *
      * @return the mutable map of term name to value backing this record
      */
-    public Map<String, String> terms() {
-        return terms;
-    }
+	public Map<String, String> terms() {
+		return terms;
+	}
+
+	/**
+	 * Returns source provenance for this record's term values.
+	 *
+	 * @return immutable map of term name to one or more source cells
+	 */
+	public Map<String, List<SourceCell>> provenanceByTerm() {
+		return provenanceByTerm;
+	}
 
     /**
      * Creates an independent copy of this record, with its own copy of the terms map.
      *
      * @return a new {@code CanonicalRecord} with the same ID and a copy of the current term values
      */
-    public CanonicalRecord copy() {
-        return new CanonicalRecord(id, terms);
-    }
+	public CanonicalRecord copy() {
+		return new CanonicalRecord(id, terms, provenanceByTerm);
+	}
 }

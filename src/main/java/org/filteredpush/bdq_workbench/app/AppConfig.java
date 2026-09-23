@@ -48,17 +48,19 @@ import org.filteredpush.bdq_workbench.model.RecordFilterSpec;
  * @param datasetTable which of the input dataset's tables to run against — a Darwin Core
  *     Archive's core or one of its extensions, or one of a Data Package's resources — named by
  *     its location, resource name or Darwin Core row type; empty to let the ingestor choose
+ * @param datasetView optional path to a standalone dataset view JSON file
  */
 public record AppConfig(
-        Path useCaseXml,
-        List<Path> rdfDefinitions,
-        Path datasetPath,
-        String useCaseId,
-        List<String> implementationPackages,
-        int threadCount,
-        boolean dedupEnabled,
-        RecordFilterSpec recordFilter,
-        String datasetTable) {
+		Path useCaseXml,
+		List<Path> rdfDefinitions,
+		Path datasetPath,
+		String useCaseId,
+		List<String> implementationPackages,
+		int threadCount,
+		boolean dedupEnabled,
+		RecordFilterSpec recordFilter,
+		String datasetTable,
+		String datasetView) {
 
 	/**
 	 * Creates a configuration with no record filters.
@@ -80,7 +82,7 @@ public record AppConfig(
 			int threadCount,
 			boolean dedupEnabled) {
 		this(useCaseXml, rdfDefinitions, datasetPath, useCaseId, implementationPackages, threadCount, dedupEnabled,
-				RecordFilterSpec.empty(), "");
+				RecordFilterSpec.empty(), "", "");
 	}
 
 	/**
@@ -105,7 +107,24 @@ public record AppConfig(
 			boolean dedupEnabled,
 			RecordFilterSpec recordFilter) {
 		this(useCaseXml, rdfDefinitions, datasetPath, useCaseId, implementationPackages, threadCount, dedupEnabled,
-				recordFilter, "");
+				recordFilter, "", "");
+	}
+
+	/**
+	 * Creates a configuration with explicit table selection and no dataset view.
+	 */
+	public AppConfig(
+			Path useCaseXml,
+			List<Path> rdfDefinitions,
+			Path datasetPath,
+			String useCaseId,
+			List<String> implementationPackages,
+			int threadCount,
+			boolean dedupEnabled,
+			RecordFilterSpec recordFilter,
+			String datasetTable) {
+		this(useCaseXml, rdfDefinitions, datasetPath, useCaseId, implementationPackages, threadCount, dedupEnabled,
+				recordFilter, datasetTable, "");
 	}
 
 	/**
@@ -115,5 +134,6 @@ public record AppConfig(
 	public AppConfig {
 		recordFilter = recordFilter == null ? RecordFilterSpec.empty() : recordFilter;
 		datasetTable = datasetTable == null ? "" : datasetTable.trim();
+		datasetView = datasetView == null ? "" : datasetView.trim();
 	}
 }

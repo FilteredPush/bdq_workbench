@@ -7,8 +7,10 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
 import org.filteredpush.bdq_workbench.model.RecordDataset;
 import org.junit.jupiter.api.Test;
@@ -191,6 +193,45 @@ class DwcArchiveMetaIngestTest {
 
 		assertThat(dataset.records()).hasSize(1);
 		assertThat(dataset.records().get(0).terms()).containsEntry("country", "Canada");
+	}
+
+	@Test
+	void extensionCoreIdColumnIsParsedFromMetaXml(@TempDir Path tempDir) throws Exception {
+		String meta = """
+				<?xml version="1.0" encoding="UTF-8"?>
+				<archive xmlns="http://rs.tdwg.org/dwc/text/">
+				  <core fieldsTerminatedBy="\\t" fieldsEnclosedBy="" ignoreHeaderLines="1"
+				        rowType="http://rs.tdwg.org/dwc/terms/Event">
+				    <files><location>event.txt</location></files>
+				    <id index="0"/>
+				    <field index="0" term="http://rs.tdwg.org/dwc/terms/eventID"/>
+				  </core>
+				  <extension fieldsTerminatedBy="\\t" fieldsEnclosedBy="" ignoreHeaderLines="1"
+				             rowType="http://rs.tdwg.org/dwc/terms/Occurrence">
+				    <files><location>occurrence.txt</location></files>
+				    <coreid index="0"/>
+				    <field index="1" term="http://rs.tdwg.org/dwc/terms/occurrenceID"/>
+				  </extension>
+				</archive>
+				""";
+		Map<String, byte[]> entries = new LinkedHashMap<>();
+		entries.put("meta.xml", meta.getBytes(StandardCharsets.UTF_8));
+		entries.put("event.txt", "eventID\nevt-1\n".getBytes(StandardCharsets.UTF_8));
+		entries.put("occurrence.txt", "coreid\toccurrenceID\nevt-1\tocc-1\n".getBytes(StandardCharsets.UTF_8));
+		Path archive = Files.createTempFile(tempDir, "dataset", ".zip");
+		try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(archive), StandardCharsets.UTF_8)) {
+			for (Map.Entry<String, byte[]> entry : entries.entrySet()) {
+				zip.putNextEntry(new ZipEntry(entry.getKey()));
+				zip.write(entry.getValue());
+				zip.closeEntry();
+			}
+		}
+
+		try (ZipFile zipFile = new ZipFile(archive.toFile())) {
+			List<CoreTableCandidate<DwcArchiveCoreMeta>> tables = DwcArchiveMetaParser.parseTables(zipFile);
+			assertThat(tables).hasSize(2);
+			assertThat(tables.get(1).descriptor().coreIdColumn()).isEqualTo("coreid");
+		}
 	}
 
 	/**

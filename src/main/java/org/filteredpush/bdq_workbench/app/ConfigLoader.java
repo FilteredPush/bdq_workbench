@@ -123,7 +123,8 @@ public class ConfigLoader {
                 parseThreadCount(getValue(defaults, overrides, "bdq.threads", "4")),
                 parseBoolean(getValue(defaults, overrides, "bdq.execution.dedup", "true"), "bdq.execution.dedup"),
                 RecordFilterSpec.parse(getValue(defaults, overrides, "bdq.record.filters", "")),
-                getValue(defaults, overrides, "bdq.dataset.table", ""));
+                getValue(defaults, overrides, "bdq.dataset.table", ""),
+                getValue(defaults, overrides, "bdq.dataset.view", ""));
     }
 
     /**
