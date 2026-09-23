@@ -25,7 +25,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Optional;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import org.filteredpush.bdq_workbench.app.AppException;
@@ -66,7 +65,7 @@ public class DatasetSchemaInspector {
 						.toList());
 			}
 			return new DatasetSchemaOverview(List.of(new DatasetTableSummary(
-					resolveConventionalCoreEntry(zipFile).map(ZipEntry::getName).orElse("occurrence.txt"),
+					resolveConventionalCoreEntryName(zipFile),
 					DatasetRowType.OCCURRENCE,
 					"conventional default",
 					true)));
@@ -93,14 +92,16 @@ public class DatasetSchemaInspector {
 		}
 	}
 
-	private Optional<ZipEntry> resolveConventionalCoreEntry(ZipFile zipFile) {
+	private String resolveConventionalCoreEntryName(ZipFile zipFile) {
 		ZipEntry occurrence = zipFile.getEntry("occurrence.txt");
 		if (occurrence != null) {
-			return Optional.of(occurrence);
+			return occurrence.getName();
 		}
 		return zipFile.stream()
 				.filter(entry -> !entry.isDirectory() && entry.getName().endsWith(".txt"))
-				.findFirst();
+				.map(ZipEntry::getName)
+				.findFirst()
+				.orElse("occurrence.txt");
 	}
 
 	/**
