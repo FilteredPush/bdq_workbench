@@ -24,7 +24,9 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Comparator;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.stream.Collectors;
+import org.filteredpush.bdq_workbench.model.RelationshipSchema;
 import org.filteredpush.bdq_workbench.model.TableSchema;
 
 /**
@@ -41,8 +43,8 @@ final class SchemaFingerprint {
 	 * @param tables discovered tables
 	 * @return fingerprint hash
 	 */
-	static String of(Iterable<TableSchema> tables) {
-		String canonical = java.util.stream.StreamSupport.stream(tables.spliterator(), false)
+	static String of(List<TableSchema> tables, List<RelationshipSchema> relationships) {
+		String tablePart = tables.stream()
 				.sorted(Comparator.comparing(TableSchema::name))
 				.map(table -> table.name().toLowerCase()
 						+ "|"
@@ -50,6 +52,23 @@ final class SchemaFingerprint {
 						+ "|"
 						+ table.columns().stream().map(String::toLowerCase).sorted().collect(Collectors.joining(",")))
 				.collect(Collectors.joining("||"));
+		String relationshipPart = relationships.stream()
+				.sorted(Comparator.comparing(RelationshipSchema::relationName)
+						.thenComparing(RelationshipSchema::fromTable)
+						.thenComparing(RelationshipSchema::fromColumn)
+						.thenComparing(RelationshipSchema::toTable)
+						.thenComparing(RelationshipSchema::toColumn))
+				.map(relationship -> relationship.relationName().toLowerCase()
+						+ "|"
+						+ relationship.fromTable().toLowerCase()
+						+ "."
+						+ relationship.fromColumn().toLowerCase()
+						+ "->"
+						+ relationship.toTable().toLowerCase()
+						+ "."
+						+ relationship.toColumn().toLowerCase())
+				.collect(Collectors.joining("||"));
+		String canonical = tablePart + "##" + relationshipPart;
 		try {
 			MessageDigest digest = MessageDigest.getInstance("SHA-256");
 			return HexFormat.of().formatHex(digest.digest(canonical.getBytes(StandardCharsets.UTF_8)));

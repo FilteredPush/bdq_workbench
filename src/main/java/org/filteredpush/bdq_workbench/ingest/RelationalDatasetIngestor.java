@@ -123,19 +123,30 @@ public class RelationalDatasetIngestor {
 			List<RelationshipSchema> relationships = new ArrayList<>();
 			for (CoreTableCandidate<DataPackageResourceMeta> table : tables) {
 				for (DataPackageForeignKey key : table.descriptor().foreignKeys()) {
-					String refResource = key.referenceResource().isBlank()
-							? table.descriptor().name()
-							: key.referenceResource();
-					if (!refResource.equalsIgnoreCase(selected.descriptor().name())) {
+					String referencedTableLabel = resolveReferencedTableLabel(tables, table, key);
+					if (referencedTableLabel == null || !referencedTableLabel.equals(selected.label())) {
 						continue;
 					}
 					relationships.add(new RelationshipSchema(
 							table.label(),
 							key.field(),
-							selected.label(),
+							referencedTableLabel,
 							key.referenceField(),
 							table.label()));
 				}
+			}
+
+			private String resolveReferencedTableLabel(List<CoreTableCandidate<DataPackageResourceMeta>> tables,
+					CoreTableCandidate<DataPackageResourceMeta> source,
+					DataPackageForeignKey key) {
+				if (key.referenceResource().isBlank()) {
+					return source.label();
+				}
+				return tables.stream()
+						.filter(candidate -> candidate.descriptor().name().equalsIgnoreCase(key.referenceResource()))
+						.map(CoreTableCandidate::label)
+						.findFirst()
+						.orElse(null);
 			}
 			return assembleResult(selected.label(), rowsByTable, tables.stream()
 					.map(table -> new TableSchema(
@@ -183,7 +194,7 @@ public class RelationalDatasetIngestor {
 			}
 			graphs.add(new RecordGraph(core, relatedByRelation));
 		}
-		String fingerprint = SchemaFingerprint.of(tables);
+		String fingerprint = SchemaFingerprint.of(tables, relationships);
 		return new RelationalIngestResult(graphs, new DatasetSchema(tables, relationships, fingerprint), diagnostics);
 	}
 

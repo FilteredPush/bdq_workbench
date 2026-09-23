@@ -115,11 +115,7 @@ public class DefaultIngestService implements IngestService {
         if (datasetView != null && !datasetView.isBlank()) {
             return ingestThroughView(inputPath, requestedTable, datasetView);
         }
-        RecordDataset maybeBuiltIn = ingestThroughBuiltInView(inputPath, requestedTable);
-        if (maybeBuiltIn != null) {
-            return maybeBuiltIn;
-        }
-        return ingestFlat(inputPath, requestedTable);
+        return ingestWithOptionalBuiltInView(inputPath, requestedTable);
     }
 
     private RecordDataset ingestFlat(Path inputPath, String requestedTable) {
@@ -142,16 +138,19 @@ public class DefaultIngestService implements IngestService {
         return flattened.dataset();
     }
 
-    private RecordDataset ingestThroughBuiltInView(Path inputPath, String requestedTable) {
+    private RecordDataset ingestWithOptionalBuiltInView(Path inputPath, String requestedTable) {
         RelationalIngestResult relational = relationalDatasetIngestor.ingest(inputPath, requestedTable);
         if (relational.graphs().isEmpty()) {
-        	return null;
+        	return ingestFlat(inputPath, requestedTable);
         }
         List<String> diagnostics = new ArrayList<>();
         Optional<DatasetView> builtIn = BuiltInDatasetViews.select(relational.schema(), diagnostics);
         if (builtIn.isEmpty()) {
         	logDiagnostics(relational.diagnostics(), diagnostics);
-        	return null;
+        	List<org.filteredpush.bdq_workbench.model.CanonicalRecord> rows = relational.graphs().stream()
+        			.map(org.filteredpush.bdq_workbench.model.RecordGraph::core)
+        			.toList();
+        	return new RecordDataset(rows);
         }
         ViewFlattenResult flattened = viewFlattener.flatten(relational, builtIn.get());
         logDiagnostics(relational.diagnostics(), diagnostics, flattened.diagnostics());

@@ -52,7 +52,7 @@ public class ViewFlattener {
 			Map<String, String> terms = new LinkedHashMap<>();
 			Map<String, List<SourceCell>> provenance = new LinkedHashMap<>();
 			for (DatasetViewMapping mapping : view.mappings()) {
-				ValueSelection selected = selectValue(graph, mapping, view.joins(), diagnostics);
+				ValueSelection selected = selectValue(graph, mapping, view.grainTable(), view.joins(), diagnostics);
 				terms.put(mapping.term(), selected.value());
 				if (!selected.cells().isEmpty()) {
 					provenance.put(mapping.term(), selected.cells());
@@ -66,14 +66,15 @@ public class ViewFlattener {
 	/**
 	 * Resolves one mapping from either the core row or one related relation.
 	 */
-	private ValueSelection selectValue(RecordGraph graph, DatasetViewMapping mapping, List<DatasetViewJoin> joins,
+	private ValueSelection selectValue(RecordGraph graph, DatasetViewMapping mapping, String grainTable,
+			List<DatasetViewJoin> joins,
 			List<String> diagnostics) {
-		if (mapping.sourceTable().equalsIgnoreCase("core")) {
+		if (mapping.sourceTable().equalsIgnoreCase(grainTable)) {
 			String value = graph.core().terms().getOrDefault(mapping.sourceColumn(), "");
-			return new ValueSelection(value, sourceCells(graph.core(), "core", mapping.sourceColumn(), mapping.term()));
+			return new ValueSelection(value, sourceCells(graph.core(), grainTable, mapping.sourceColumn(), mapping.term()));
 		}
 		DatasetViewJoin join = joins.stream()
-				.filter(candidate -> candidate.sourceTable().equals(mapping.sourceTable()))
+				.filter(candidate -> candidate.sourceTable().equalsIgnoreCase(mapping.sourceTable()))
 				.findFirst()
 				.orElse(null);
 		if (join == null) {
@@ -85,11 +86,10 @@ public class ViewFlattener {
 		if (related.isEmpty()) {
 			return ValueSelection.empty();
 		}
-		List<String> values = related.stream()
-				.map(row -> row.terms().getOrDefault(mapping.sourceColumn(), ""))
-				.toList();
-		List<SourceCell> cells = related.stream()
-				.flatMap(row -> sourceCells(row, join.sourceTable(), mapping.sourceColumn(), mapping.term()).stream())
+		List<ValueSelection> selections = related.stream()
+				.map(row -> new ValueSelection(
+						row.terms().getOrDefault(mapping.sourceColumn(), ""),
+						sourceCells(row, join.sourceTable(), mapping.sourceColumn(), mapping.term())))
 				.toList();
 		if (related.size() > 1 && join.cardinalityPolicy() == DatasetViewCardinalityPolicy.REJECT) {
 			diagnostics.add("Cardinality conflict for relation " + join.relationName() + " on record "
@@ -97,15 +97,19 @@ public class ViewFlattener {
 			return ValueSelection.empty();
 		}
 		if (join.cardinalityPolicy() == DatasetViewCardinalityPolicy.FIRST_ROW) {
-			return new ValueSelection(values.get(0), cells.isEmpty() ? List.of() : List.of(cells.get(0)));
+			return selections.get(0);
 		}
-		if (join.cardinalityPolicy() == DatasetViewCardinalityPolicy.AGGREGATE && values.size() > 1) {
-			String aggregated = values.stream()
-					.filter(value -> !value.isBlank())
+		if (join.cardinalityPolicy() == DatasetViewCardinalityPolicy.AGGREGATE) {
+			List<ValueSelection> included = selections.stream()
+					.filter(selection -> !selection.value().isBlank())
+					.toList();
+			String aggregated = included.stream()
+					.map(ValueSelection::value)
 					.collect(Collectors.joining(" | "));
+			List<SourceCell> cells = included.stream().flatMap(selection -> selection.cells().stream()).toList();
 			return new ValueSelection(aggregated, cells);
 		}
-		return new ValueSelection(values.get(0), cells);
+		return selections.get(0);
 	}
 
 	/**

@@ -31,7 +31,7 @@ class DatasetViewSchemaTest {
 				new TableSchema("occurrence", "occurrence", "OCCURRENCE", "occurrenceID",
 						List.of("scientificName", "occurrenceID")));
 
-		assertThat(SchemaFingerprint.of(first)).isEqualTo(SchemaFingerprint.of(second));
+		assertThat(SchemaFingerprint.of(first, List.of())).isEqualTo(SchemaFingerprint.of(second, List.of()));
 	}
 
 	@Test
@@ -73,5 +73,26 @@ class DatasetViewSchemaTest {
 
 		assertThat(BuiltInDatasetViews.select(withoutRelationship, new java.util.ArrayList<>())).isEmpty();
 		assertThat(BuiltInDatasetViews.select(withRelationship, new java.util.ArrayList<>())).isPresent();
+	}
+
+	@Test
+	void viewLoadFailureIsReportedAsAppException(@TempDir Path tempDir) {
+		DatasetViewIO io = new DatasetViewIO();
+		Path missing = tempDir.resolve("missing-view.json");
+
+		assertThatThrownBy(() -> io.load(missing))
+				.isInstanceOf(AppException.class)
+				.hasMessageContaining("Unable to read dataset view file");
+	}
+
+	@Test
+	void viewSaveFailureIsReportedAsAppException(@TempDir Path tempDir) {
+		DatasetViewIO io = new DatasetViewIO();
+		DatasetView view = new DatasetView("occurrence", "fp", List.of(), List.of());
+		Path invalid = tempDir.resolve("missing").resolve("view.json");
+
+		assertThatThrownBy(() -> io.save(invalid, view))
+				.isInstanceOf(AppException.class)
+				.hasMessageContaining("Unable to save dataset view file");
 	}
 }

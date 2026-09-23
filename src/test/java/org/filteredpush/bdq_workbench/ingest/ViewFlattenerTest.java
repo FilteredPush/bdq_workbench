@@ -84,4 +84,48 @@ class ViewFlattenerTest {
 		assertThat(flattened.dataset().records().get(0).terms().get("scientificName")).isEmpty();
 		assertThat(flattened.diagnostics()).anyMatch(message -> message.contains("Cardinality conflict"));
 	}
+
+	@Test
+	void missingJoinAddsDiagnostic() {
+		CanonicalRecord core = new CanonicalRecord("occ-1", Map.of("occurrenceID", "occ-1"));
+		RecordGraph graph = new RecordGraph(core, Map.of());
+		RelationalIngestResult relational = new RelationalIngestResult(
+				List.of(graph),
+				new DatasetSchema(List.of(), List.of(), "fp"),
+				List.of());
+		DatasetView view = new DatasetView(
+				"occurrence",
+				"fp",
+				List.of(),
+				List.of(new DatasetViewMapping("scientificName", "identification", "scientificName")));
+
+		ViewFlattenResult flattened = new ViewFlattener().flatten(relational, view);
+
+		assertThat(flattened.diagnostics()).anyMatch(message -> message.contains("no join"));
+	}
+
+	@Test
+	void firstRowPolicyKeepsFirstRowEvenWhenBlankAndUsesItsProvenance() {
+		CanonicalRecord core = new CanonicalRecord("occ-1", Map.of("occurrenceID", "occ-1"));
+		CanonicalRecord idA = new CanonicalRecord("id-1", Map.of("scientificName", ""));
+		CanonicalRecord idB = new CanonicalRecord("id-2", Map.of("scientificName", "Picea"));
+		RecordGraph graph = new RecordGraph(core, Map.of("identification", List.of(idA, idB)));
+		RelationalIngestResult relational = new RelationalIngestResult(
+				List.of(graph),
+				new DatasetSchema(List.of(), List.of(), "fp"),
+				List.of());
+		DatasetView view = new DatasetView(
+				"occurrence",
+				"fp",
+				List.of(new DatasetViewJoin("identification", "identification", DatasetViewCardinalityPolicy.FIRST_ROW)),
+				List.of(new DatasetViewMapping("scientificName", "identification", "scientificName")));
+
+		ViewFlattenResult flattened = new ViewFlattener().flatten(relational, view);
+
+		assertThat(flattened.dataset().records().get(0).terms().get("scientificName")).isEmpty();
+		assertThat(flattened.dataset().records().get(0).provenanceByTerm().get("scientificName"))
+				.singleElement()
+				.extracting(SourceCell::rowRef)
+				.isEqualTo("id-1");
+	}
 }

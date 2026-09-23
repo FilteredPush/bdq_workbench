@@ -1849,13 +1849,39 @@ final class BdqWorkbenchGui {
 					JOptionPane.ERROR_MESSAGE);
 			return;
 		}
-		RelationalDatasetIngestor ingestor = new RelationalDatasetIngestor();
-		DatasetViewIO io = new DatasetViewIO();
-		var relational = ingestor.ingest(path, "");
-		DatasetSchema schema = relational.schema();
-		DatasetView suggested = suggestDatasetView(schema);
-		var preview = new org.filteredpush.bdq_workbench.ingest.ViewFlattener().flatten(relational, suggested);
+		SwingWorker<DatasetViewPreview, Void> worker = new SwingWorker<>() {
+			@Override
+			protected DatasetViewPreview doInBackground() {
+				RelationalDatasetIngestor ingestor = new RelationalDatasetIngestor();
+				var relational = ingestor.ingest(path, "");
+				DatasetSchema schema = relational.schema();
+				DatasetView suggested = suggestDatasetView(schema);
+				var preview = new org.filteredpush.bdq_workbench.ingest.ViewFlattener().flatten(relational, suggested);
+				return new DatasetViewPreview(schema, suggested, preview);
+			}
 
+			@Override
+			protected void done() {
+				try {
+					openDatasetViewDialog(frame, datasetViewField, get());
+				} catch (Exception e) {
+					Throwable cause = e.getCause() == null ? e : e.getCause();
+					JOptionPane.showMessageDialog(
+							frame,
+							"Unable to inspect dataset for dataset views: " + cause.getMessage(),
+							"Dataset view setup failed",
+							JOptionPane.ERROR_MESSAGE);
+				}
+			}
+		};
+		worker.execute();
+	}
+
+	private static void openDatasetViewDialog(JFrame frame, JTextField datasetViewField, DatasetViewPreview previewData) {
+		DatasetViewIO io = new DatasetViewIO();
+		DatasetSchema schema = previewData.schema();
+		DatasetView suggested = previewData.suggested();
+		var preview = previewData.preview();
 		JTextArea details = new JTextArea(18, 80);
 		details.setEditable(false);
 		details.setLineWrap(true);
@@ -1899,7 +1925,6 @@ final class BdqWorkbenchGui {
 			preview.diagnostics().forEach(message -> builder.append(" - ").append(message).append('\n'));
 		}
 		details.setText(builder.toString());
-
 		JButton save = new JButton("Save View...");
 		JButton load = new JButton("Load View...");
 		JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT));
@@ -1918,10 +1943,18 @@ final class BdqWorkbenchGui {
 			if (selected == null) {
 				return;
 			}
-			DatasetView view = io.load(Path.of(selected));
-			io.validateCompatibility(view, schema);
-			datasetViewField.setText(selected);
-			dialog.dispose();
+			try {
+				DatasetView view = io.load(Path.of(selected));
+				io.validateCompatibility(view, schema);
+				datasetViewField.setText(selected);
+				dialog.dispose();
+			} catch (AppException ex) {
+				JOptionPane.showMessageDialog(
+						frame,
+						"Unable to load dataset view: " + ex.getMessage(),
+						"Dataset view load failed",
+						JOptionPane.ERROR_MESSAGE);
+			}
 		});
 		save.addActionListener(e -> {
 			String selected = chooseSaveFile(frame, "Save dataset view JSON", "bdq-dataset-view.json");
@@ -1951,15 +1984,19 @@ final class BdqWorkbenchGui {
 						relationship.fromTable(),
 						DatasetViewCardinalityPolicy.REJECT))
 				.toList();
+		java.util.Set<String> allowedTables = new java.util.LinkedHashSet<>();
+		allowedTables.add(grain);
+		joins.forEach(join -> allowedTables.add(join.sourceTable()));
 		List<String> requestedTerms = List.of(
 				"occurrenceID", "scientificName", "eventDate", "decimalLatitude", "decimalLongitude");
 		List<DatasetViewMapping> mappings = new ArrayList<>();
 		for (String term : requestedTerms) {
 			String sourceTable = schema.tables().stream()
+					.filter(table -> allowedTables.contains(table.name()))
 					.filter(table -> table.columns().contains(term))
 					.findFirst()
 					.map(table -> table.name())
-					.orElse("core");
+					.orElse(grain);
 			mappings.add(new DatasetViewMapping(term, sourceTable, term));
 		}
 		return new DatasetView(grain, schema.schemaFingerprint(), joins, mappings);
@@ -3578,6 +3615,13 @@ final class BdqWorkbenchGui {
     /** One profiled value suggestion for a dataset term in the record-filter dialog. */
     private record RecordFilterValueOption(String value, long count) {
     }
+
+	/** Prepared schema/view/preview tuple for the dataset-view builder dialog. */
+	private record DatasetViewPreview(
+			DatasetSchema schema,
+			DatasetView suggested,
+			org.filteredpush.bdq_workbench.ingest.ViewFlattenResult preview) {
+	}
 
     /** Dataset-derived terms and value counts used to build record filters interactively. */
     private record RecordFilterDatasetProfile(
