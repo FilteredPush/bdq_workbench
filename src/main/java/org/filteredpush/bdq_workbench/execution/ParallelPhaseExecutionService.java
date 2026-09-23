@@ -34,12 +34,14 @@ import java.util.concurrent.Future;
 import org.filteredpush.bdq_workbench.model.BoundMethodParameter;
 import org.filteredpush.bdq_workbench.model.BuiltInMeasureSpec;
 import org.filteredpush.bdq_workbench.model.CanonicalRecord;
+import org.filteredpush.bdq_workbench.model.EvaluationSubject;
 import org.filteredpush.bdq_workbench.model.ImplementationBinding;
 import org.filteredpush.bdq_workbench.model.OutcomeStatus;
 import org.filteredpush.bdq_workbench.model.ParameterRole;
 import org.filteredpush.bdq_workbench.model.Phase;
 import org.filteredpush.bdq_workbench.model.RecordDataset;
 import org.filteredpush.bdq_workbench.model.Response;
+import org.filteredpush.bdq_workbench.model.SubjectRef;
 import org.filteredpush.bdq_workbench.model.TestType;
 import org.filteredpush.bdq_workbench.test_discovery.DiscoveredImplementation;
 import org.slf4j.Logger;
@@ -104,6 +106,7 @@ import org.slf4j.LoggerFactory;
  */
 public class ParallelPhaseExecutionService implements TestExecutionService {
     private static final Logger LOG = LoggerFactory.getLogger(ParallelPhaseExecutionService.class);
+    private static final String DERIVED_IMPLEMENTATION_METHOD = "deriveRollup";
     private final int threadCount;
     private final ExecutionAdapter executionAdapter;
     private final ExecutionProgressListener progressListener;
@@ -212,6 +215,8 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
                 .comparing(Response::phase)
                 .thenComparing(Response::testId)
                 .thenComparing(Response::recordId)
+                .thenComparing(response -> response.derived() ? 1 : 0)
+                .thenComparing(response -> response.subjectRef() == null ? "" : response.subjectRef().sortKey())
                 .thenComparing(Response::implementationClass)
                 .thenComparing(Response::implementationMethod));
         return results;
@@ -257,7 +262,10 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
         if (phaseBindings.isEmpty() && builtInMeasures.isEmpty()) {
             return List.of();
         }
-        int total = dataset.records().size() * phaseBindings.size() + builtInMeasures.size();
+        PhaseGroupCache groupCache = new PhaseGroupCache(dataset);
+        int total = phaseBindings.stream()
+                .mapToInt(binding -> expectedResponseCount(binding, groupCache))
+                .sum() + builtInMeasures.size();
         LOG.debug("Starting phase {} with {} records, {} direct bindings, {} built-in measures",
                 phase, dataset.records().size(), phaseBindings.size(), builtInMeasures.size());
         progressListener.onPhaseStarted(phase, total);
@@ -265,19 +273,25 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
         try {
             Map<String, CanonicalRecord> recordsById = new LinkedHashMap<>();
             dataset.records().forEach(record -> recordsById.put(record.id(), record));
-            PhaseGroupCache groupCache = new PhaseGroupCache(dataset.records());
 
             List<Response> responses = new ArrayList<>();
             int completed = 0;
             if (phase == Phase.AMENDMENT) {
                 for (ImplementationBinding binding : phaseBindings) {
-                    List<GroupInvocation> invocations = submitGroupedBinding(phase, binding, dataset.records(), groupCache, discoveredByKey, executor);
+                    BindingExecutionPlan plan = submitGroupedBinding(phase, binding, groupCache, discoveredByKey, executor);
+                    for (Response response : plan.preResponses()) {
+                        responses.add(response);
+                        completed++;
+                        progressListener.onResponse(phase, response, completed, total);
+                    }
                     Set<String> changedFields = new LinkedHashSet<>();
-                    for (GroupInvocation invocation : invocations) {
-                        for (Response response : collectAndFanOut(phase, invocation)) {
+                    List<Response> detailResponses = new ArrayList<>();
+                    for (GroupInvocation invocation : plan.invocations()) {
+                        for (SubjectResponse fanned : collectAndFanOut(phase, invocation)) {
+                            Response response = applyAmendments(recordsById, fanned.subject(), fanned.response());
                             responses.add(response);
+                            detailResponses.add(response);
                             completed++;
-                            applyAmendments(recordsById, response);
                             changedFields.addAll(response.amendments().keySet());
                             progressListener.onResponse(phase, response, completed, total);
                         }
@@ -285,12 +299,27 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
                     groupCache.invalidate(changedFields);
                 }
             } else {
-                List<GroupInvocation> invocations = new ArrayList<>();
+                List<BindingExecutionPlan> plans = new ArrayList<>();
                 for (ImplementationBinding binding : phaseBindings) {
-                    invocations.addAll(submitGroupedBinding(phase, binding, dataset.records(), groupCache, discoveredByKey, executor));
+                    plans.add(submitGroupedBinding(phase, binding, groupCache, discoveredByKey, executor));
                 }
-                for (GroupInvocation invocation : invocations) {
-                    for (Response response : collectAndFanOut(phase, invocation)) {
+                for (BindingExecutionPlan plan : plans) {
+                    List<Response> bindingResponses = new ArrayList<>(plan.preResponses());
+                    for (Response response : plan.preResponses()) {
+                        responses.add(response);
+                        completed++;
+                        progressListener.onResponse(phase, response, completed, total);
+                    }
+                    for (GroupInvocation invocation : plan.invocations()) {
+                        for (SubjectResponse fanned : collectAndFanOut(phase, invocation)) {
+                            Response response = fanned.response();
+                            responses.add(response);
+                            bindingResponses.add(response);
+                            completed++;
+                            progressListener.onResponse(phase, response, completed, total);
+                        }
+                    }
+                    for (Response response : deriveRollups(phase, plan.binding(), bindingResponses, plan.rollupCoreIds())) {
                         responses.add(response);
                         completed++;
                         progressListener.onResponse(phase, response, completed, total);
@@ -328,28 +357,28 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
     }
 
     /**
-     * Partitions {@code records} into groups for {@code binding} (via the shared
+     * Partitions expanded evaluation subjects into groups for {@code binding} (via the shared
      * {@code groupCache} when {@code binding} is dedup-eligible and {@link #dedupEnabled}, or one
-     * singleton group per record otherwise) and submits one {@link ExecutionAdapter#execute} task
-     * per group to {@code executor}.
+     * singleton group per subject otherwise) and submits one {@link ExecutionAdapter#execute} task
+     * per group to {@code executor}, together with any pre-execution subject-expansion diagnostics.
      *
      * @param phase the phase being executed, passed through to progress reporting
      * @param binding the binding to submit invocations for
-     * @param records the phase's records
      * @param groupCache the phase-scoped shared partition cache
      * @param discoveredByKey discovered implementations keyed by
      *     {@code "<implementationClass>#<implementationMethod>"}
      * @param executor the thread pool to submit invocations to
-     * @return one pending {@link GroupInvocation} per group, in group order
+     * @return the pending grouped invocations, any pre-execution diagnostic responses, and the
+     *     core records that should receive a derived rollup once detail responses are available
      */
-    private List<GroupInvocation> submitGroupedBinding(
+    private BindingExecutionPlan submitGroupedBinding(
             Phase phase,
             ImplementationBinding binding,
-            List<CanonicalRecord> records,
             PhaseGroupCache groupCache,
             Map<String, List<DiscoveredImplementation>> discoveredByKey,
             ExecutorService executor) {
-        List<RecordGroup> groups = groupsForBinding(binding, records, groupCache);
+        SubjectExpander.SubjectExpansionResult expansion = groupCache.expansionFor(canonicalFields(binding));
+        List<RecordGroup> groups = groupsForBinding(binding, expansion, groupCache);
         List<DiscoveredImplementation> discoveredCandidates = discoveredByKey.getOrDefault(binding.legacyImplementationKey(), List.of());
         DiscoveredImplementation implementation = discoveredCandidates.isEmpty()
                 ? null
@@ -363,14 +392,20 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
                 progressListener.onTaskStarted(phase);
                 try {
                     return resolutionError == null
-                            ? executionAdapter.execute(group.representative(), binding, implementation)
-                            : errorResponse(group.representative().id(), binding, resolutionError);
+                            ? executionAdapter.execute(group.representative().effectiveRecord(), binding, implementation)
+                            : errorResponse(group.representative().coreRecordId(), binding, resolutionError);
                 } finally {
                     progressListener.onTaskFinished(phase);
                 }
             })));
         }
-        return invocations;
+        return new BindingExecutionPlan(
+                binding,
+                invocations,
+                expansion.problems().stream()
+                        .map(problem -> errorResponse(problem.coreRecordId(), binding, new IllegalStateException(problem.detail())))
+                        .toList(),
+                rollupCoreIds(binding, expansion.subjects()));
     }
 
     /**
@@ -381,16 +416,60 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
      * behavior for ineligible bindings or when dedup is disabled.
      *
      * @param binding the binding to resolve groups for
-     * @param records the phase's records
      * @param groupCache the phase-scoped shared partition cache
      * @return the groups to invoke {@code binding} against
      */
-    private List<RecordGroup> groupsForBinding(ImplementationBinding binding, List<CanonicalRecord> records, PhaseGroupCache groupCache) {
+    private List<RecordGroup> groupsForBinding(
+            ImplementationBinding binding,
+            SubjectExpander.SubjectExpansionResult expansion,
+            PhaseGroupCache groupCache) {
         if (!dedupEnabled || !isDedupEligible(binding)) {
-            return records.stream().map(record -> new RecordGroup(record, List.of(record.id()))).toList();
+            return expansion.subjects().stream()
+                    .map(subject -> new RecordGroup(subject, List.of(subject)))
+                    .toList();
         }
         return groupCache.groupsFor(canonicalFields(binding));
     }
+
+	/**
+	 * Counts how many response rows {@code binding} is expected to emit in this phase: one per
+	 * expanded subject, one per subject-expansion failure, and (for VALIDATION/ISSUE only) one
+	 * derived core-record rollup wherever a record actually expanded into multiple structured
+	 * subjects.
+	 *
+	 * @param binding the binding to count
+	 * @param groupCache the phase-scoped expansion cache
+	 * @return the expected number of response rows for {@code binding}
+	 */
+	private static int expectedResponseCount(
+			ImplementationBinding binding,
+			PhaseGroupCache groupCache) {
+		SubjectExpander.SubjectExpansionResult expansion = groupCache.expansionFor(canonicalFields(binding));
+		return expansion.subjects().size()
+				+ expansion.problems().size()
+				+ rollupCoreIds(binding, expansion.subjects()).size();
+	}
+
+	private static Set<String> rollupCoreIds(
+			ImplementationBinding binding,
+			List<EvaluationSubject> subjects) {
+		if (binding.testType() != TestType.VALIDATION && binding.testType() != TestType.ISSUE) {
+			return Set.of();
+		}
+		Map<String, Long> counts = subjects.stream()
+				.filter(EvaluationSubject::hasStructuredReference)
+				.collect(java.util.stream.Collectors.groupingBy(
+						EvaluationSubject::coreRecordId,
+						LinkedHashMap::new,
+						java.util.stream.Collectors.counting()));
+		Set<String> rollupCoreIds = new LinkedHashSet<>();
+		counts.forEach((coreId, count) -> {
+			if (count > 1L) {
+				rollupCoreIds.add(coreId);
+			}
+		});
+		return java.util.Collections.unmodifiableSet(new LinkedHashSet<>(rollupCoreIds));
+	}
 
     /**
      * Determines whether a binding's declared inputs are precise enough to safely group records
@@ -418,7 +497,7 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
      *
      * @param binding the binding to extract fields from
      * @return the binding's canonical field set; empty if it declares no such terms, in which case
-     *     every record groups together since the binding is invariant across all of them
+     *     every subject groups together since the binding is invariant across all of them
      */
     private static List<String> canonicalFields(ImplementationBinding binding) {
         return binding.parameterBindings().stream()
@@ -437,10 +516,10 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
      *
      * @param phase the phase the invocation belongs to, used for error logging
      * @param invocation the pending group invocation to collect
-     * @return one response per {@link RecordGroup#memberRecordIds()} of {@code invocation}'s group,
-     *     all identical except for {@link Response#recordId()}
+     * @return one response per {@link RecordGroup#members()} of {@code invocation}'s group, all
+     *     copied onto the exact member subject they apply to
      */
-    private List<Response> collectAndFanOut(Phase phase, GroupInvocation invocation) {
+    private List<SubjectResponse> collectAndFanOut(Phase phase, GroupInvocation invocation) {
         Response representative;
         try {
             representative = invocation.future().get();
@@ -451,18 +530,18 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
                     invocation.binding().testId(),
                     invocation.binding().implementationClass(),
                     invocation.binding().implementationMethod(),
-                    invocation.group().representative().id(),
+                    invocation.group().representative().effectiveRecord().id(),
                     cause.getMessage(),
                     cause);
-            representative = errorResponse(invocation.group().representative().id(), invocation.binding(), cause);
+            representative = errorResponse(invocation.group().representative().effectiveRecord().id(), invocation.binding(), cause);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new RuntimeException("Execution interrupted in phase " + phase, e);
         }
-        List<String> memberIds = invocation.group().memberRecordIds();
-        List<Response> fanned = new ArrayList<>(memberIds.size());
-        for (String memberId : memberIds) {
-            fanned.add(memberId.equals(representative.recordId()) ? representative : withRecordId(representative, memberId));
+        List<EvaluationSubject> members = invocation.group().members();
+        List<SubjectResponse> fanned = new ArrayList<>(members.size());
+        for (EvaluationSubject member : members) {
+            fanned.add(new SubjectResponse(member, withSubject(representative, member)));
         }
         return fanned;
     }
@@ -475,9 +554,9 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
      * @param recordId the record ID the copy should carry
      * @return an identical response except for its record ID
      */
-    private static Response withRecordId(Response response, String recordId) {
+    private static Response withSubject(Response response, EvaluationSubject subject) {
         return new Response(
-                recordId,
+                subject.coreRecordId(),
                 response.testId(),
                 response.testType(),
                 response.implementationClass(),
@@ -491,8 +570,153 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
                 response.message(),
                 response.amendments(),
                 response.startedAt(),
-                response.finishedAt());
+                response.finishedAt(),
+                subject.hasStructuredReference() ? subject.subjectRef() : null,
+                response.derived(),
+                response.contributingSubjectRefs());
     }
+
+	private static List<Response> deriveRollups(
+			Phase phase,
+			ImplementationBinding binding,
+			List<Response> detailResponses,
+			Set<String> rollupCoreIds) {
+		if (rollupCoreIds.isEmpty()) {
+			return List.of();
+		}
+		Map<String, List<Response>> byCoreId = detailResponses.stream()
+				.filter(response -> !response.derived())
+				.filter(response -> response.subjectRef() != null)
+				.collect(java.util.stream.Collectors.groupingBy(
+						Response::recordId,
+						LinkedHashMap::new,
+						java.util.stream.Collectors.toList()));
+		List<Response> rollups = new ArrayList<>();
+		for (String coreId : rollupCoreIds) {
+			List<Response> contributors = byCoreId.getOrDefault(coreId, List.of());
+			if (contributors.size() <= 1) {
+				continue;
+			}
+			rollups.add(switch (binding.testType()) {
+				case VALIDATION -> deriveValidationRollup(phase, binding, coreId, contributors);
+				case ISSUE -> deriveIssueRollup(phase, binding, coreId, contributors);
+				default -> null;
+			});
+		}
+		return rollups.stream().filter(java.util.Objects::nonNull).toList();
+	}
+
+	private static Response deriveValidationRollup(
+			Phase phase,
+			ImplementationBinding binding,
+			String coreId,
+			List<Response> contributors) {
+		Response precedence = rollupPrecedence(binding, coreId, contributors);
+		if (precedence != null) {
+			return precedence;
+		}
+		if (contributors.stream().anyMatch(response -> "NOT_COMPLIANT".equals(response.responseResult()))) {
+			return derivedResponse(phase, binding, coreId, contributors, OutcomeStatus.FAILED, "RUN_HAS_RESULT",
+					"NOT_COMPLIANT", "Derived rollup: one or more contributing responses were NOT_COMPLIANT");
+		}
+		if (contributors.stream().allMatch(response -> "COMPLIANT".equals(response.responseResult()))) {
+			return derivedResponse(phase, binding, coreId, contributors, OutcomeStatus.PASSED, "RUN_HAS_RESULT",
+					"COMPLIANT", "Derived rollup: all contributing responses were COMPLIANT");
+		}
+		return derivedResponse(phase, binding, coreId, contributors, OutcomeStatus.UNABLE_TO_RUN, "UNABLE_TO_RUN",
+				"UNABLE_TO_RUN", "Derived validation rollup encountered mixed or unrecognized result values");
+	}
+
+	private static Response deriveIssueRollup(
+			Phase phase,
+			ImplementationBinding binding,
+			String coreId,
+			List<Response> contributors) {
+		Response precedence = rollupPrecedence(binding, coreId, contributors);
+		if (precedence != null) {
+			return precedence;
+		}
+		if (contributors.stream().anyMatch(response -> "POTENTIAL_ISSUE".equals(response.responseResult()))) {
+			return derivedResponse(phase, binding, coreId, contributors, OutcomeStatus.FAILED, "RUN_HAS_RESULT",
+					"POTENTIAL_ISSUE", "Derived rollup: one or more contributing responses reported POTENTIAL_ISSUE");
+		}
+		Set<String> remainingResults = contributors.stream()
+				.map(Response::responseResult)
+				.filter(result -> result != null && !result.isBlank())
+				.collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+		if (remainingResults.size() == 1) {
+			String result = remainingResults.iterator().next();
+			OutcomeStatus status = "NOT_ISSUE".equals(result) ? OutcomeStatus.PASSED : OutcomeStatus.FAILED;
+			return derivedResponse(phase, binding, coreId, contributors, status, "RUN_HAS_RESULT", result,
+					"Derived issue rollup from contributing structured responses");
+		}
+		return derivedResponse(phase, binding, coreId, contributors, OutcomeStatus.UNABLE_TO_RUN, "UNABLE_TO_RUN",
+				"UNABLE_TO_RUN", "Derived issue rollup encountered mixed or unrecognized result values");
+	}
+
+	private static Response rollupPrecedence(
+			ImplementationBinding binding,
+			String coreId,
+			List<Response> contributors) {
+		if (contributors.stream().anyMatch(response -> response.status() == OutcomeStatus.ERROR)) {
+			return derivedResponse(binding.phase(), binding, coreId, contributors, OutcomeStatus.ERROR, "ERROR", null,
+					"Derived rollup failed because one or more contributing responses were ERROR");
+		}
+		if (contributors.stream().anyMatch(response -> response.status() == OutcomeStatus.UNABLE_TO_RUN)) {
+			return derivedResponse(binding.phase(), binding, coreId, contributors, OutcomeStatus.UNABLE_TO_RUN,
+					"UNABLE_TO_RUN", "UNABLE_TO_RUN",
+					"Derived rollup could not be computed because one or more contributing responses were UNABLE_TO_RUN");
+		}
+		if (contributors.stream().anyMatch(response -> !"RUN_HAS_RESULT".equals(response.responseStatus()))) {
+			return derivedResponse(binding.phase(), binding, coreId, contributors, OutcomeStatus.UNABLE_TO_RUN,
+					"UNABLE_TO_RUN", "UNABLE_TO_RUN",
+					"Derived rollup encountered contributing responses without RUN_HAS_RESULT status");
+		}
+		return null;
+	}
+
+	private static Response derivedResponse(
+			Phase phase,
+			ImplementationBinding binding,
+			String coreId,
+			List<Response> contributors,
+			OutcomeStatus status,
+			String responseStatus,
+			String responseResult,
+			String message) {
+		java.time.Instant startedAt = contributors.stream()
+				.map(Response::startedAt)
+				.filter(java.util.Objects::nonNull)
+				.min(java.time.Instant::compareTo)
+				.orElseGet(java.time.Instant::now);
+		java.time.Instant finishedAt = contributors.stream()
+				.map(Response::finishedAt)
+				.filter(java.util.Objects::nonNull)
+				.max(java.time.Instant::compareTo)
+				.orElse(startedAt);
+		return new Response(
+				coreId,
+				binding.testId(),
+				binding.testType(),
+				ParallelPhaseExecutionService.class.getName(),
+				DERIVED_IMPLEMENTATION_METHOD,
+				phase,
+				binding.parameters(),
+				status,
+				responseStatus,
+				responseResult,
+				message,
+				message,
+				Map.of(),
+				startedAt,
+				finishedAt,
+				null,
+				true,
+				contributors.stream()
+						.map(Response::subjectRef)
+						.filter(java.util.Objects::nonNull)
+						.toList());
+	}
 
     /**
      * Selects and, where needed, re-phases the bindings applicable to {@code phase}.
@@ -865,6 +1089,7 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
      */
     private static List<Response> targetResponses(BuiltInMeasureSpec spec, List<Response> phaseResponses) {
         return phaseResponses.stream()
+                .filter(response -> !response.derived())
                 .filter(response -> spec.targetTestId().equals(response.testId()))
                 .toList();
     }
@@ -978,16 +1203,105 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
      *     updated in place
      * @param response the response whose {@link Response#amendments()} are to be applied
      */
-    private static void applyAmendments(Map<String, CanonicalRecord> recordsById, Response response) {
+    private static Response applyAmendments(
+            Map<String, CanonicalRecord> recordsById,
+            EvaluationSubject subject,
+            Response response) {
         if (response.amendments().isEmpty()) {
-            return;
+            return response;
         }
-        CanonicalRecord record = recordsById.get(response.recordId());
-        if (record == null) {
-            return;
+        try {
+            Map<CanonicalRecord, Map<String, String>> writes = resolveAmendmentTargets(subject, response.amendments(), recordsById);
+            LOG.debug("Applying amendments for record {} subject {}: {}",
+                    response.recordId(),
+                    response.subjectRef() == null ? "<core>" : response.subjectRef().sortKey(),
+                    response.amendments());
+            writes.forEach((record, updates) -> updates.forEach(record.terms()::put));
+            return response;
+        } catch (IllegalStateException e) {
+            return amendmentWriteBackError(response, e.getMessage());
         }
-        LOG.debug("Applying amendments for record {}: {}", response.recordId(), response.amendments());
-        response.amendments().forEach(record.terms()::put);
+    }
+
+    private static Map<CanonicalRecord, Map<String, String>> resolveAmendmentTargets(
+            EvaluationSubject subject,
+            Map<String, String> amendments,
+            Map<String, CanonicalRecord> recordsById) {
+        Map<CanonicalRecord, Map<String, String>> writes = new LinkedHashMap<>();
+        for (Map.Entry<String, String> amendment : amendments.entrySet()) {
+            CanonicalRecord target = resolveAmendmentTarget(subject, amendment.getKey(), recordsById);
+            writes.computeIfAbsent(target, ignored -> new LinkedHashMap<>())
+                    .put(amendment.getKey(), amendment.getValue());
+        }
+        return writes;
+    }
+
+    private static CanonicalRecord resolveAmendmentTarget(
+            EvaluationSubject subject,
+            String term,
+            Map<String, CanonicalRecord> recordsById) {
+        if (!subject.hasStructuredReference()) {
+            CanonicalRecord record = recordsById.get(subject.coreRecordId());
+            if (record == null) {
+                throw new IllegalStateException("No mutable record was available for core record " + subject.coreRecordId());
+            }
+            return record;
+        }
+        List<org.filteredpush.bdq_workbench.model.SourceCell> cells = subject.effectiveRecord().provenanceByTerm()
+                .getOrDefault(term, List.of());
+        if (cells.size() != 1) {
+            throw new IllegalStateException(
+                    "Refusing to write back amended term " + term + " for subject "
+                            + subject.subjectRef().sortKey()
+                            + " because its provenance is ambiguous");
+        }
+        org.filteredpush.bdq_workbench.model.SourceCell cell = cells.get(0);
+        if (matches(cell, subject.graph().core())) {
+            return subject.graph().core();
+        }
+        for (List<CanonicalRecord> related : subject.graph().relatedByRelation().values()) {
+            for (CanonicalRecord record : related) {
+                if (matches(cell, record)) {
+                    return record;
+                }
+            }
+        }
+        throw new IllegalStateException(
+                "Refusing to write back amended term " + term + " for subject "
+                        + subject.subjectRef().sortKey()
+                        + " because the source row could not be resolved");
+    }
+
+    private static boolean matches(
+            org.filteredpush.bdq_workbench.model.SourceCell cell,
+            CanonicalRecord record) {
+        return record.provenanceByTerm().values().stream()
+                .flatMap(List::stream)
+                .anyMatch(candidate -> java.util.Objects.equals(candidate.rowRef(), cell.rowRef())
+                        && java.util.Objects.equals(candidate.table(), cell.table())
+                        && java.util.Objects.equals(candidate.sourceLocation(), cell.sourceLocation()));
+    }
+
+    private static Response amendmentWriteBackError(Response response, String detail) {
+        return new Response(
+                response.recordId(),
+                response.testId(),
+                response.testType(),
+                response.implementationClass(),
+                response.implementationMethod(),
+                response.phase(),
+                response.parameters(),
+                OutcomeStatus.ERROR,
+                "ERROR",
+                null,
+                detail,
+                detail,
+                Map.of(),
+                response.startedAt(),
+                response.finishedAt(),
+                response.subjectRef(),
+                false,
+                List.of());
     }
 
     /**
@@ -1058,9 +1372,19 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
      *
      * @param binding the binding the invocation was submitted for
      * @param group the distinct-value group the invocation was submitted for (invoked against
-     *     {@link RecordGroup#representative()}, applicable to every {@link RecordGroup#memberRecordIds()})
+     *     {@link RecordGroup#representative()}, applicable to every {@link RecordGroup#members()})
      * @param future the pending result of the invocation
      */
     private record GroupInvocation(ImplementationBinding binding, RecordGroup group, Future<Response> future) {
+    }
+
+    private record SubjectResponse(EvaluationSubject subject, Response response) {
+    }
+
+    private record BindingExecutionPlan(
+            ImplementationBinding binding,
+            List<GroupInvocation> invocations,
+            List<Response> preResponses,
+            Set<String> rollupCoreIds) {
     }
 }

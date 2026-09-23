@@ -15,7 +15,9 @@ import org.filteredpush.bdq_workbench.model.ParameterRole;
 import org.filteredpush.bdq_workbench.model.ParameterizationCapability;
 import org.filteredpush.bdq_workbench.model.Phase;
 import org.filteredpush.bdq_workbench.model.RecordDataset;
+import org.filteredpush.bdq_workbench.model.RecordGraph;
 import org.filteredpush.bdq_workbench.model.Response;
+import org.filteredpush.bdq_workbench.model.SourceCell;
 import org.filteredpush.bdq_workbench.model.TestType;
 import org.filteredpush.bdq_workbench.model.CanonicalRecord;
 import org.filteredpush.bdq_workbench.model.OutcomeStatus;
@@ -183,6 +185,56 @@ class ParallelPhaseExecutionServiceTest {
                 .containsExactly(
                         org.assertj.core.groups.Tuple.tuple(Phase.PRE_AMENDMENT, "orig"),
                         org.assertj.core.groups.Tuple.tuple(Phase.POST_AMENDMENT, "changed"));
+    }
+
+    @Test
+    void structuredSubjectsDedupAcrossRepeatedSubrecordsAndEmitDerivedRollups() throws Exception {
+        StructuredCountingImpl impl = new StructuredCountingImpl();
+        Method validate = StructuredCountingImpl.class.getMethod("validate", String.class);
+        ParallelPhaseExecutionService service = new ParallelPhaseExecutionService(2, new ReflectionExecutionAdapter());
+
+        List<DiscoveredImplementation> discovered = List.of(
+                new DiscoveredImplementation("urn:test:structured", null, TestType.VALIDATION, Phase.POST_AMENDMENT,
+                        StructuredCountingImpl.class.getName(), "validate", null,
+                        List.of(parameter(0, ParameterRole.ACTED_UPON, "scientificName", String.class)), impl, validate));
+
+        List<ImplementationBinding> bindings = List.of(
+                bindingOnField("urn:test:structured", TestType.VALIDATION, StructuredCountingImpl.class.getName(),
+                        "validate", Phase.POST_AMENDMENT, "scientificName"));
+
+        RecordDataset dataset = structuredDataset();
+
+        List<Response> responses = service.execute(dataset, bindings, discovered);
+
+        assertThat(impl.invocationCount.get()).isEqualTo(2);
+        assertThat(responses).extracting(Response::recordId, Response::derived, Response::responseResult)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple("occ-1", false, "Aus bus"),
+                        org.assertj.core.groups.Tuple.tuple("occ-1", false, "Aus bus"),
+                        org.assertj.core.groups.Tuple.tuple("occ-1", true, "COMPLIANT"),
+                        org.assertj.core.groups.Tuple.tuple("occ-2", false, "Cus dus"));
+        assertThat(responses.get(0).subjectRef()).isNotNull();
+        assertThat(responses.get(2).contributingSubjectRefs()).hasSize(2);
+    }
+
+    @Test
+    void structuredDedupCanBeDisabledPerSubject() throws Exception {
+        StructuredCountingImpl impl = new StructuredCountingImpl();
+        Method validate = StructuredCountingImpl.class.getMethod("validate", String.class);
+        ParallelPhaseExecutionService service = new ParallelPhaseExecutionService(2, new ReflectionExecutionAdapter(), false);
+
+        List<DiscoveredImplementation> discovered = List.of(
+                new DiscoveredImplementation("urn:test:structured", null, TestType.VALIDATION, Phase.POST_AMENDMENT,
+                        StructuredCountingImpl.class.getName(), "validate", null,
+                        List.of(parameter(0, ParameterRole.ACTED_UPON, "scientificName", String.class)), impl, validate));
+
+        List<ImplementationBinding> bindings = List.of(
+                bindingOnField("urn:test:structured", TestType.VALIDATION, StructuredCountingImpl.class.getName(),
+                        "validate", Phase.POST_AMENDMENT, "scientificName"));
+
+        service.execute(structuredDataset(), bindings, discovered);
+
+        assertThat(impl.invocationCount.get()).isEqualTo(3);
     }
 
     @Test
@@ -686,6 +738,25 @@ class ParallelPhaseExecutionServiceTest {
         return new MethodParameter(index, "p" + index, role, source, type.getName(), true);
     }
 
+    private static RecordDataset structuredDataset() {
+        CanonicalRecord core1 = canonicalRecord("occ-1", "occurrence", Map.of("occurrenceID", "occ-1", "eventDate", "2020-01-01"));
+        CanonicalRecord core2 = canonicalRecord("occ-2", "occurrence", Map.of("occurrenceID", "occ-2", "eventDate", "2020-01-02"));
+        return new RecordDataset(
+                List.of(core1, core2),
+                List.of(
+                        new RecordGraph(core1, Map.of("identification", List.of(
+                                canonicalRecord("id-1", "identification", Map.of("scientificName", "Aus bus")),
+                                canonicalRecord("id-2", "identification", Map.of("scientificName", "Aus bus"))))),
+                        new RecordGraph(core2, Map.of("identification", List.of(
+                                canonicalRecord("id-3", "identification", Map.of("scientificName", "Cus dus")))))));
+    }
+
+    private static CanonicalRecord canonicalRecord(String id, String table, Map<String, String> terms) {
+        Map<String, List<SourceCell>> provenance = new java.util.LinkedHashMap<>();
+        terms.keySet().forEach(term -> provenance.put(term, List.of(new SourceCell(table, table, id, term, term))));
+        return new CanonicalRecord(id, terms, provenance);
+    }
+
     private static ImplementationBinding binding(String testId, TestType testType, String method, Phase phase) {
         return binding(testId, testType, Impl.class.getName(), method, phase);
     }
@@ -786,6 +857,19 @@ class ParallelPhaseExecutionServiceTest {
         public StubDQResponse validate(Map<String, String> record) {
             invocationCount.incrementAndGet();
             return new StubDQResponse("RUN_HAS_RESULT", "COMPLIANT", "ok", Map.of());
+        }
+
+        static class StructuredCountingImpl {
+            final AtomicInteger invocationCount = new AtomicInteger();
+
+            public StubDQResponse validate(String scientificName) {
+                invocationCount.incrementAndGet();
+                return new StubDQResponse(
+                        "RUN_HAS_RESULT",
+                        scientificName.startsWith("Aus") ? "COMPLIANT" : scientificName,
+                        scientificName,
+                        Map.of());
+            }
         }
     }
 

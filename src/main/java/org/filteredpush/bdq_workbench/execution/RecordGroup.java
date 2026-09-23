@@ -20,21 +20,21 @@
 package org.filteredpush.bdq_workbench.execution;
 
 import java.util.List;
-import org.filteredpush.bdq_workbench.model.CanonicalRecord;
+import org.filteredpush.bdq_workbench.model.EvaluationSubject;
 
 /**
- * One distinct-value group of records, produced by {@link RecordGroupPartitioner}.
+ * One distinct-value group of evaluation subjects, produced by {@link RecordGroupPartitioner}.
  *
- * <p>Every record in {@link #memberRecordIds()} (including {@link #representative()}'s own ID)
- * shares identical values for the field set the group was partitioned by; a test is invoked once
- * against {@link #representative()} and its {@link org.filteredpush.bdq_workbench.model.Response}
- * is then applied to every member record, on the assumption that a test is a pure function of its
+ * <p>Every subject in {@link #members()} (including {@link #representative()}) shares identical
+ * values for the field set the group was partitioned by; a test is invoked once against
+ * {@link #representative()} and its {@link org.filteredpush.bdq_workbench.model.Response} is then
+ * applied to every member subject, on the assumption that a test is a pure function of its
  * declared inputs.
  *
- * @param representative one member of the group, chosen (in original record order) as the record
- *     a test is actually invoked against
- * @param memberRecordIds every record ID sharing this group's values, including
- *     {@code representative}'s own ID, in original record order
+ * @param representative one member of the group, chosen (in original subject order) as the
+ *     subject a test is actually invoked against
+ * @param members every subject sharing this group's values, including {@code representative}, in
+ *     original order
  */
-record RecordGroup(CanonicalRecord representative, List<String> memberRecordIds) {
+record RecordGroup(EvaluationSubject representative, List<EvaluationSubject> members) {
 }

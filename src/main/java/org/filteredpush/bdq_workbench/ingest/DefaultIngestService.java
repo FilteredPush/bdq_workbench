@@ -154,7 +154,7 @@ public class DefaultIngestService implements IngestService {
         	List<org.filteredpush.bdq_workbench.model.CanonicalRecord> rows = relational.graphs().stream()
         			.map(org.filteredpush.bdq_workbench.model.RecordGraph::core)
         			.toList();
-        	return new RecordDataset(rows);
+            return new RecordDataset(rows, relational.graphs());
         }
         ViewFlattenResult flattened = viewFlattener.flatten(relational, builtIn.get());
         logDiagnostics(relational.diagnostics(), diagnostics, flattened.diagnostics());

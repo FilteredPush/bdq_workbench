@@ -64,7 +64,11 @@ run. `bdq.dataset.table` (CLI `--dataset-table`, GUI advanced options) names whi
 multi-table dataset to run against. Both entry points fetch and cache use-case/test-definition/
 ontology RDF from `bdq.tdwg.org` through `CachedResourceResolver`; RDF/XML, Turtle, and JSON-LD
 serializations are all supported. `bdq.dataset.view` (CLI `--dataset-view`, GUI "Build Dataset View...")
-names a standalone JSON DatasetView used to flatten relational inputs before execution. Logging is DEBUG-by-default to the
+names a standalone JSON DatasetView used to flatten relational inputs before execution. The GUI
+builder now shows the discovered schema/relationships on the left, the selected use case's
+information-element terms and suggested term→column mappings on the right, and a flattened preview
+plus cardinality warnings below; views are still saved/loaded as standalone JSON keyed by the
+schema fingerprint. Logging is DEBUG-by-default to the
 console via `src/main/resources/logback.xml`.
 
 ## Architecture
@@ -146,30 +150,34 @@ understanding how the stages connect — read its class Javadoc first. The pipel
      the GUI's preflight review grid before execution.
 5. **`execution`** — `ParallelPhaseExecutionService` runs bound tests across records in phase
    order (`PRE_AMENDMENT` → `AMENDMENT` → `POST_AMENDMENT`) with deterministic ordering but
-   parallel execution within a phase (`bdq.threads` workers). Rather than invoking a binding once
-   per record, it partitions the phase's records into distinct-value groups per binding (one group
-   per distinct combination of the Darwin Core term values the binding declares as
-   `ACTED_UPON`/`CONSULTED` input, via `RecordGroupPartitioner`), invokes the binding once per
-   group, and copies that one response to every record in the group — relying on a BDQ test being
-   a pure function of its declared inputs. Two bindings that declare the same field set (regardless
-   of test type, or whether a term is `ACTED_UPON` for one and `CONSULTED` for the other) share the
-   same partitioning work via a `PhaseGroupCache` scoped to the phase, rather than each
-   recomputing it. Bindings with a `LEGACY_RECORD`/`LEGACY_PARAMETERS` parameter (whole
+   parallel execution within a phase (`bdq.threads` workers). Flat inputs still execute once per
+   core `CanonicalRecord`, but structured inputs now expand each core `RecordGraph` into one or
+   more `EvaluationSubject`s: one core-grain subject when all declared inputs come from the core,
+   or one subject per governing related row when any declared input term is supplied by a child
+   relation. The governing relation is the deepest relation referenced by the binding's declared
+   `ACTED_UPON`/`CONSULTED` terms; a binding that needs incomparable sibling relations is rejected
+   with a surfaced diagnostic rather than silently choosing one. Distinct-value deduplication then
+   partitions those evaluation subjects (via `RecordGroupPartitioner`) by the exact declared-input
+   values they expose, so repeated related-row tuples can share one invocation even across several
+   core records. Bindings with a `LEGACY_RECORD`/`LEGACY_PARAMETERS` parameter (whole
    record/parameter map, not specific declared terms) are never dedup-eligible and always run once
-   per record, as does every binding when `bdq.execution.dedup` is `false` (default `true`).
+   per subject, as does every binding when `bdq.execution.dedup` is `false` (default `true`).
    Because one binding's amendment can change values a later binding in the same phase groups or
    reads by, AMENDMENT-phase bindings are processed one at a time — each binding's groups are
-   computed, invoked, applied to every group member, and any cached partition touching the changed
-   fields is invalidated, before the next binding's groups are computed; PRE_AMENDMENT and
-   POST_AMENDMENT never mutate records mid-phase, so their bindings' groups are all submitted
-   together. `ReflectionExecutionAdapter` is the actual per-invocation adapter: it builds a
-   reflective argument array from the record's bound parameters, invokes the target method, and
-   reads back an ffdq-style result purely reflectively (`getResultState()`, `getValue().getObject()`,
-   `getComment()`) so this module has no compile-time dependency on ffdq result types. Amendments
-   are detected two ways — a `Map` returned as the result's value, and (for AMENDMENT phase only) a
-   before/after diff of the record's term map, since some implementations mutate the record in
-   place instead of returning changed values. Any exception during argument binding or invocation
-   is caught and turned into an `OutcomeStatus.ERROR` response rather than propagated.
+   computed, invoked, applied back to the precise source row(s) identified by retained
+   `SourceCell` provenance, and any cached partition touching the changed fields is invalidated,
+   before the next binding's groups are computed; PRE_AMENDMENT and POST_AMENDMENT never mutate
+   records mid-phase, so their bindings' groups are all submitted together. Ambiguous write-backs
+   (for example aggregated or multi-source provenance) are refused and surfaced as error responses
+   rather than silently writing to an arbitrary row. `ReflectionExecutionAdapter` is the actual
+   per-invocation adapter: it builds a reflective argument array from the effective subject's bound
+   parameters, invokes the target method, and reads back an ffdq-style result purely reflectively
+   (`getResultState()`, `getValue().getObject()`, `getComment()`) so this module has no
+   compile-time dependency on ffdq result types. After structured detail responses are available,
+   VALIDATION and ISSUE tests additionally synthesize explicit derived per-core rollups (marked on
+   `Response` as derived, with contributing `SubjectRef`s retained) while MEASURE and AMENDMENT
+   remain detail-only. Any exception during argument binding, invocation, subject expansion, or
+   amendment write-back is caught and turned into a normalized response rather than propagated.
 6. **`reporting`** — `ReportingService`/`ReportExporter` implementations turn the final
    `ExecutionSummary` (normalized `Response` stream + `ExecutionSummaryMetadata`) into
    `reports/bdq-report-summary.txt` (human-readable summary), `reports/bdq-report-responses.txt`
@@ -193,7 +201,11 @@ understanding how the stages connect — read its class Javadoc first. The pipel
    kurator-ffdq's `Issue` context class has no no-arg constructor (unlike `Measure`/`Validation`/
    `Amendment`), so RDFBeans cannot deserialize an `IssueResponse` that carries one —
    `XlsxReportExporter` leaves it unset, so ISSUE-type responses round-trip correctly but without
-   per-field coloring on the Issues sheet.
+   per-field coloring on the Issues sheet. Structured-response metadata (`subjectRef`, derived
+   rollups, contributing subjects) currently flows through the normalized response stream and the
+   tab-delimited detailed export; the flat XLSX exporter deliberately projects only core-grain
+   rows/derived rollups and ignores structured detail rows until a dedicated structured
+   human-readable exporter lands.
 
 `WorkbenchFacade.prepare(AppConfig)` runs ingestion → policy resolution → discovery → binding and
 returns a `PreparedRun` without executing anything — this is what backs the GUI's preflight
@@ -260,16 +272,13 @@ run.
    `Issue` context class is missing the no-arg constructor its sibling context classes
    (`Measure`/`Validation`/`Amendment`) have, which breaks RDFBeans deserialization if it's ever
    attached to a saved `IssueResponse`.
-3. Non-flat data. `CoreTableSelector` picks one table and reads it on its own; it does not follow
-   a DwC-A extension's `coreid` or a data package's foreign keys back to the related rows. This
-   matters because DwC-DP normalizes a star schema — `basisOfRecord` on occurrence,
-   `scientificName` on identification/taxon, coordinates on event — so tests whose information
-   elements span tables see only what the selected table carries. Flattening is not just an
-   ingest question: an occurrence core with a related taxon record may call for evaluating taxon
-   terms in the core *and* a multiplicity of related terms in the related table, which the RDF
-   report can express but a flat XLSX sheet cannot. The bdqffdq ontology supports this
-   conceptually and leaves the representation to implementations, so this needs a decision about
-   how the workbench models and reports non-flat data before any ingest work follows from it.
+3. Non-flat data reporting and deeper relational modelling. The workbench now ingests direct
+   child relations into `RecordGraph`, can flatten them through reusable provenance-tracked dataset
+   views, and can execute bindings over structured `EvaluationSubject`s with subject-grain
+   diagnostics, deduplication, write-back, and VALIDATION/ISSUE rollups. Remaining work is in the
+   reporting/modeling boundary: RDF/Web Annotation selectors for subrecords, a dedicated
+   structured HTML/Markdown human-readable report, and any future ingest/model changes needed if
+   datasets require more than the current core + direct-child relation graph.
 
 ## Development
 

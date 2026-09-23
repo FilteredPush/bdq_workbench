@@ -20,6 +20,7 @@
 package org.filteredpush.bdq_workbench.model;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -45,6 +46,11 @@ import java.util.Map;
  *     other test types
  * @param startedAt the instant execution of this test began
  * @param finishedAt the instant execution of this test completed
+ * @param subjectRef optional structured-subject reference for subrecord-grain detail responses
+ * @param derived whether this response is a workbench-derived rollup rather than a direct
+ *     implementation invocation
+ * @param contributingSubjectRefs structured detail subjects rolled into this response, empty for
+ *     flat/direct responses
  */
 public record Response(
         String recordId,
@@ -61,5 +67,57 @@ public record Response(
         String message,
         Map<String, String> amendments,
         Instant startedAt,
-        Instant finishedAt) {
+        Instant finishedAt,
+        SubjectRef subjectRef,
+        boolean derived,
+        List<SubjectRef> contributingSubjectRefs) {
+
+	/**
+	 * Creates a backward-compatible flat/direct response.
+	 */
+	public Response(
+			String recordId,
+			String testId,
+			TestType testType,
+			String implementationClass,
+			String implementationMethod,
+			Phase phase,
+			Map<String, String> parameters,
+			OutcomeStatus status,
+			String responseStatus,
+			String responseResult,
+			String comment,
+			String message,
+			Map<String, String> amendments,
+			Instant startedAt,
+			Instant finishedAt) {
+		this(
+				recordId,
+				testId,
+				testType,
+				implementationClass,
+				implementationMethod,
+				phase,
+				parameters,
+				status,
+				responseStatus,
+				responseResult,
+				comment,
+				message,
+				amendments,
+				startedAt,
+				finishedAt,
+				null,
+				false,
+				List.of());
+	}
+
+	/**
+	 * Canonical constructor; copies collection components defensively.
+	 */
+	public Response {
+		parameters = Map.copyOf(parameters == null ? Map.of() : parameters);
+		amendments = Map.copyOf(amendments == null ? Map.of() : amendments);
+		contributingSubjectRefs = List.copyOf(contributingSubjectRefs == null ? List.of() : contributingSubjectRefs);
+	}
 }

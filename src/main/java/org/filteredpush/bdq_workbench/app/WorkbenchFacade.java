@@ -493,7 +493,9 @@ public class WorkbenchFacade {
         responses.sort(java.util.Comparator
                 .comparing(Response::phase)
                 .thenComparing(Response::testId)
-                .thenComparing(Response::recordId));
+                .thenComparing(Response::recordId)
+                .thenComparing(response -> response.derived() ? 1 : 0)
+                .thenComparing(response -> response.subjectRef() == null ? "" : response.subjectRef().sortKey()));
         ExecutionSummary summary = new ExecutionSummary(
                 List.copyOf(responses),
                 buildSummaryMetadata(preparedRun, responses),
@@ -612,6 +614,8 @@ public class WorkbenchFacade {
     private static Set<String> collectAvailableTerms(org.filteredpush.bdq_workbench.model.RecordDataset dataset) {
         Set<String> terms = new LinkedHashSet<>();
         dataset.records().forEach(record -> terms.addAll(record.terms().keySet()));
+        dataset.recordGraphs().forEach(graph -> graph.relatedByRelation().values().forEach(related ->
+                related.forEach(record -> terms.addAll(record.terms().keySet()))));
         return terms;
     }
 }

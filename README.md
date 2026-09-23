@@ -84,7 +84,8 @@ Dataset input
    |
    +--> Load DwC-A zip / Data Package CSV
    |
-   +--> [optional] Build dataset view and/or record filters from dataset terms/values (GUI)
+   +--> [optional] Build dataset view and/or record filters from dataset terms/values (GUI:
+   |               schema/relationship pane, use-case-driven term mapping pane, flattened preview)
    |
    +--> [optional] Apply record filters
    |

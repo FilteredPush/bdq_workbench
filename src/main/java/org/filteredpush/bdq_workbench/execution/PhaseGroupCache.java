@@ -24,7 +24,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import org.filteredpush.bdq_workbench.model.CanonicalRecord;
+import org.filteredpush.bdq_workbench.model.RecordDataset;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -54,17 +54,31 @@ import org.slf4j.LoggerFactory;
 final class PhaseGroupCache {
     private static final Logger LOG = LoggerFactory.getLogger(PhaseGroupCache.class);
 
-    private final List<CanonicalRecord> records;
+    private final SubjectExpander subjectExpander;
+    private final Map<List<String>, SubjectExpander.SubjectExpansionResult> expansionCache = new HashMap<>();
     private final Map<List<String>, List<RecordGroup>> cache = new HashMap<>();
 
     /**
      * Creates a cache over the given phase's records.
      *
-     * @param records the phase's records to partition on demand; not copied, so later mutations
-     *     (e.g. amendments applied elsewhere) are visible to any partition computed afterward
+     * @param dataset the phase's dataset to expand and partition on demand; not copied, so later
+     *     mutations (e.g. amendments applied elsewhere) are visible to any partition computed
+     *     afterward
      */
-    PhaseGroupCache(List<CanonicalRecord> records) {
-        this.records = records;
+    PhaseGroupCache(RecordDataset dataset) {
+        this.subjectExpander = new SubjectExpander(dataset);
+    }
+
+    /**
+     * Returns the structured-subject expansion for {@code fields}, computing and caching it on
+     * first request for that exact field set and returning the cached result on every subsequent
+     * request, until {@link #invalidate} discards it.
+     *
+     * @param fields the canonical (sorted, deduplicated) Darwin Core term names to partition by
+     * @return the structured-subject expansion for {@code fields}
+     */
+    SubjectExpander.SubjectExpansionResult expansionFor(List<String> fields) {
+        return expansionCache.computeIfAbsent(fields, subjectExpander::expand);
     }
 
     /**
@@ -77,8 +91,9 @@ final class PhaseGroupCache {
      */
     List<RecordGroup> groupsFor(List<String> fields) {
         return cache.computeIfAbsent(fields, f -> {
-            List<RecordGroup> groups = RecordGroupPartitioner.partition(records, f);
-            LOG.debug("Partitioned {} records into {} distinct groups for fields {}", records.size(), groups.size(), f);
+            List<RecordGroup> groups = RecordGroupPartitioner.partition(expansionFor(f).subjects(), f);
+            LOG.debug("Partitioned {} subjects into {} distinct groups for fields {}",
+                    expansionFor(f).subjects().size(), groups.size(), f);
             return groups;
         });
     }
@@ -97,6 +112,7 @@ final class PhaseGroupCache {
         }
         int before = cache.size();
         cache.keySet().removeIf(fields -> !Collections.disjoint(fields, changedFields));
+        expansionCache.keySet().removeIf(fields -> !Collections.disjoint(fields, changedFields));
         int removed = before - cache.size();
         if (removed > 0) {
             LOG.debug("Invalidated {} cached partition(s) touching changed fields {}", removed, changedFields);
