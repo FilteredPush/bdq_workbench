@@ -65,6 +65,7 @@ class BdqWorkbenchGuiTest {
                 false,
                 List.of())));
 
+        assertThat(model.getValueAt(0, 3)).isEqualTo("BOUND");
         assertThat(model.getValueAt(0, 5)).isEqualTo("example#method");
         model.setValueAt("bdq:limit=25; bdq:flag=true", 0, 7);
         assertThat(model.editedParametersFor("urn:test"))
@@ -86,6 +87,21 @@ class BdqWorkbenchGuiTest {
         BindingReviewTableModel model = new BindingReviewTableModel(List.of(review));
 
         assertThat(model.reviewAt(0)).isEqualTo(review);
+    }
+
+    @Test
+    void bindingReviewTableModelShowsRunnableForMissingInputFallbackBindings() {
+        BindingReviewTableModel model = new BindingReviewTableModel(List.of(new BindingReview(
+                new TestDefinition("urn:test", "Test", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of()),
+                ImplementationStatus.FOUND,
+                BindingStatus.BOUND,
+                ParameterizationCapability.DEFAULT_ONLY,
+                "example#method",
+                Map.of(),
+                true,
+                List.of("Term acted_upon/consulted absent in input data: dwc:eventDate"))));
+
+        assertThat(model.getValueAt(0, 3)).isEqualTo("RUNNABLE");
     }
 
     @Test
