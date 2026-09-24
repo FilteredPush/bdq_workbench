@@ -434,6 +434,61 @@ class DataPackageDialectIngestTest {
 		assertThat(dataset.records().get(0).terms()).containsEntry("scientificName", "Abies balsamea");
 	}
 
+	@Test
+	void defaultIngestServiceUsesDatasetViewGrainTableDownstream(@TempDir Path tempDir) throws Exception {
+		writeFile(tempDir, "event.csv", StandardCharsets.UTF_8,
+				"eventID,eventDate\nEV-1,2020-01-01\nEV-2,2020-01-02\n");
+		writeFile(tempDir, "occurrence.csv", StandardCharsets.UTF_8,
+				"occurrenceID,eventID,scientificName\n"
+						+ "occ-1,EV-1,Abies balsamea\n"
+						+ "occ-2,EV-1,Abies balsamea\n"
+						+ "occ-3,EV-2,Picea glauca\n");
+		Path manifest = writeManifest(tempDir, """
+				{
+				  "resources": [
+				    {
+				      "name": "event",
+				      "path": "event.csv",
+				      "schema": {
+				        "fields": [ { "name": "eventID" }, { "name": "eventDate" } ],
+				        "primaryKey": "eventID"
+				      }
+				    },
+				    {
+				      "name": "occurrence",
+				      "path": "occurrence.csv",
+				      "schema": {
+				        "fields": [ { "name": "occurrenceID" }, { "name": "eventID" }, { "name": "scientificName" } ],
+				        "primaryKey": "occurrenceID"
+				      }
+				    }
+				  ]
+				}
+				""");
+
+		RelationalIngestResult relational = new RelationalDatasetIngestor().ingest(manifest, "occurrence");
+		DatasetView view = new DatasetView(
+				"occurrence",
+				relational.schema().schemaFingerprint(),
+				List.of(new DatasetViewJoin("event", "event", DatasetViewCardinalityPolicy.FIRST_ROW)),
+				List.of(
+						new DatasetViewMapping("occurrenceID", "occurrence", "occurrenceID"),
+						new DatasetViewMapping("scientificName", "occurrence", "scientificName"),
+						new DatasetViewMapping("eventDate", "event", "eventDate")));
+		Path viewPath = tempDir.resolve("view.json");
+		new DatasetViewIO().save(viewPath, view);
+
+		RecordDataset dataset = new DefaultIngestService().ingest(manifest, "event", viewPath.toString());
+
+		assertThat(dataset.records()).hasSize(3);
+		assertThat(dataset.records())
+				.extracting(record -> record.terms().get("eventDate"))
+				.containsExactly("2020-01-01", "2020-01-01", "2020-01-02");
+		assertThat(dataset.records())
+				.extracting(record -> record.terms().get("occurrenceID"))
+				.containsExactly("occ-1", "occ-2", "occ-3");
+	}
+
 	/**
 	 * Writes a {@code datapackage.json} manifest into a directory.
 	 *

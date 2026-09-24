@@ -338,6 +338,9 @@ final class BdqWorkbenchGui {
         JButton clearDatasetView = new JButton("Clear View");
         clearRecordFilters.setEnabled(!configuredRecordFilters[0].isBlank());
         clearDatasetView.setEnabled(!datasetView.field().getText().isBlank());
+        buildRecordFilters.setEnabled(canBuildRecordFilters(
+			dataset.field().getText().trim(),
+			datasetView.field().getText().trim()));
         recordFilterButtons.add(buildDatasetView);
         recordFilterButtons.add(clearDatasetView);
         recordFilterButtons.add(buildRecordFilters);
@@ -502,6 +505,8 @@ final class BdqWorkbenchGui {
         buildRecordFilters.addActionListener(e -> loadRecordFilterDialog(
                 frame,
                 dataset.field().getText().trim(),
+                datasetTable.getText().trim(),
+                datasetView.field().getText().trim(),
                 configuredRecordFilters,
                 recordFilterSummary,
                 clearRecordFilters,
@@ -520,21 +525,62 @@ final class BdqWorkbenchGui {
         clearDatasetView.addActionListener(e -> {
             datasetView.field().setText("");
             clearDatasetView.setEnabled(false);
+            updateRecordFilterBuilderState(
+				buildRecordFilters,
+				dataset.field().getText().trim(),
+				datasetView.field().getText().trim());
         });
         datasetView.field().getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
             @Override
             public void insertUpdate(javax.swing.event.DocumentEvent e) {
                 clearDatasetView.setEnabled(!datasetView.field().getText().isBlank());
+                updateRecordFilterBuilderState(
+					buildRecordFilters,
+					dataset.field().getText().trim(),
+					datasetView.field().getText().trim());
             }
 
             @Override
             public void removeUpdate(javax.swing.event.DocumentEvent e) {
                 clearDatasetView.setEnabled(!datasetView.field().getText().isBlank());
+                updateRecordFilterBuilderState(
+					buildRecordFilters,
+					dataset.field().getText().trim(),
+					datasetView.field().getText().trim());
             }
 
             @Override
             public void changedUpdate(javax.swing.event.DocumentEvent e) {
                 clearDatasetView.setEnabled(!datasetView.field().getText().isBlank());
+                updateRecordFilterBuilderState(
+					buildRecordFilters,
+					dataset.field().getText().trim(),
+					datasetView.field().getText().trim());
+            }
+        });
+        dataset.field().getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+            @Override
+            public void insertUpdate(javax.swing.event.DocumentEvent e) {
+                updateRecordFilterBuilderState(
+					buildRecordFilters,
+					dataset.field().getText().trim(),
+					datasetView.field().getText().trim());
+            }
+
+            @Override
+            public void removeUpdate(javax.swing.event.DocumentEvent e) {
+                updateRecordFilterBuilderState(
+					buildRecordFilters,
+					dataset.field().getText().trim(),
+					datasetView.field().getText().trim());
+            }
+
+            @Override
+            public void changedUpdate(javax.swing.event.DocumentEvent e) {
+                updateRecordFilterBuilderState(
+					buildRecordFilters,
+					dataset.field().getText().trim(),
+					datasetView.field().getText().trim());
             }
         });
         clearRecordFilters.addActionListener(e -> {
@@ -1836,18 +1882,22 @@ final class BdqWorkbenchGui {
      *
      * @param frame owner frame for dialogs
      * @param datasetPath selected dataset path
+     * @param datasetTable selected dataset table, if any
+     * @param datasetViewPath saved dataset-view path, if any
      * @param configuredRecordFilters single-element holder for the serialized filter string
      * @param recordFilterSummary read-only setup summary updated after Apply
      * @param clearRecordFilters clear button enabled state to refresh after Apply
      * @param buildRecordFilters build button temporarily disabled while profiling
      */
     private static void loadRecordFilterDialog(
-	JFrame frame,
-	String datasetPath,
-	String[] configuredRecordFilters,
-	JTextArea recordFilterSummary,
-	JButton clearRecordFilters,
-	JButton buildRecordFilters) {
+    JFrame frame,
+    String datasetPath,
+    String datasetTable,
+    String datasetViewPath,
+    String[] configuredRecordFilters,
+    JTextArea recordFilterSummary,
+    JButton clearRecordFilters,
+    JButton buildRecordFilters) {
         if (datasetPath == null || datasetPath.isBlank()) {
 	JOptionPane.showMessageDialog(
 	frame,
@@ -1864,7 +1914,7 @@ final class BdqWorkbenchGui {
                 if (!Files.exists(path)) {
 	throw new AppException("Dataset input not found: " + datasetPath);
                 }
-                return profileRecordFilters(new DefaultIngestService().ingest(path));
+                return profileRecordFilters(new DefaultIngestService().ingest(path, datasetTable, datasetViewPath));
 	}
 
 	@Override
@@ -1885,7 +1935,7 @@ final class BdqWorkbenchGui {
 			"Record filter setup failed",
 			JOptionPane.ERROR_MESSAGE);
                 } finally {
-	buildRecordFilters.setEnabled(true);
+	buildRecordFilters.setEnabled(canBuildRecordFilters(datasetPath, datasetViewPath));
                 }
 	}
         };
@@ -1893,7 +1943,52 @@ final class BdqWorkbenchGui {
     }
 
 	/**
-	 * Loads relational schema metadata and helps the user create/save a dataset view file.
+         * Updates the Build Record Filters button state so related-table datasets require a saved
+         * dataset view before filter profiling runs against them.
+         *
+         * @param buildRecordFilters the button to enable/disable
+         * @param datasetPath selected dataset path
+         * @param datasetViewPath saved dataset-view path, if any
+         */
+        private static void updateRecordFilterBuilderState(
+	JButton buildRecordFilters,
+	String datasetPath,
+	String datasetViewPath) {
+	buildRecordFilters.setEnabled(canBuildRecordFilters(datasetPath, datasetViewPath));
+        }
+
+        /**
+         * Determines whether the current dataset selection can safely open the record-filter builder.
+         *
+         * <p>Flat datasets can always be profiled directly. Related-table datasets require a saved
+         * dataset view so the filter choices match the flattened dataset the execution pipeline will
+         * actually use downstream.
+         *
+         * @param datasetPath selected dataset path
+         * @param datasetViewPath saved dataset-view path, if any
+         * @return {@code true} when the filter builder should be enabled
+         */
+        private static boolean canBuildRecordFilters(String datasetPath, String datasetViewPath) {
+	if (datasetPath == null || datasetPath.isBlank()) {
+		return false;
+	}
+	if (datasetViewPath != null && !datasetViewPath.isBlank()) {
+		return true;
+	}
+	Path path = Path.of(datasetPath);
+	if (!Files.exists(path)) {
+		return false;
+	}
+	try {
+		return new DatasetSchemaInspector().inspect(path).tables().size() <= 1;
+	} catch (RuntimeException e) {
+		LOG.debug("Unable to determine whether record filters require a dataset view for {}", datasetPath, e);
+		return true;
+	}
+        }
+
+        /**
+         * Loads relational schema metadata and helps the user create/save a dataset view file.
 	 *
 	 * @param frame owner frame
 	 * @param datasetPath selected dataset path

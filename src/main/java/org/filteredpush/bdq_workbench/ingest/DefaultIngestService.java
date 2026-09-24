@@ -134,8 +134,9 @@ public class DefaultIngestService implements IngestService {
     }
 
     private RecordDataset ingestThroughView(Path inputPath, String requestedTable, String datasetViewPath) {
-        RelationalIngestResult relational = relationalDatasetIngestor.ingest(inputPath, requestedTable);
         DatasetView view = datasetViewIO.load(Path.of(datasetViewPath));
+        String effectiveTable = view.grainTable().isBlank() ? requestedTable : view.grainTable();
+        RelationalIngestResult relational = relationalDatasetIngestor.ingest(inputPath, effectiveTable);
         datasetViewIO.validateCompatibility(view, relational.schema());
         ViewFlattenResult flattened = viewFlattener.flatten(relational, view);
         logDiagnostics(relational.diagnostics(), flattened.diagnostics());
