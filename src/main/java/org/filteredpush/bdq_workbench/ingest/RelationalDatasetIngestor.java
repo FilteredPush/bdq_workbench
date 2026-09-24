@@ -25,13 +25,16 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.zip.ZipFile;
 import org.filteredpush.bdq_workbench.app.AppException;
 import org.filteredpush.bdq_workbench.model.CanonicalRecord;
 import org.filteredpush.bdq_workbench.model.DatasetSchema;
+import org.filteredpush.bdq_workbench.model.DarwinCoreTermResolver;
 import org.filteredpush.bdq_workbench.model.RecordGraph;
 import org.filteredpush.bdq_workbench.model.RelationshipSchema;
 import org.filteredpush.bdq_workbench.model.SourceCell;
@@ -145,7 +148,7 @@ public class RelationalDatasetIngestor {
 		for (CoreTableCandidate<DataPackageResourceMeta> table : tables) {
 			for (DataPackageForeignKey key : table.descriptor().foreignKeys()) {
 				String referencedTableLabel = resolveReferencedTableLabel(tables, table, key);
-				if (referencedTableLabel == null || !referencedTableLabel.equals(selected.label())) {
+				if (referencedTableLabel == null) {
 					continue;
 				}
 				relationships.add(new RelationshipSchema(
@@ -156,6 +159,7 @@ public class RelationalDatasetIngestor {
 						table.label()));
 			}
 		}
+		relationships.addAll(inferImplicitRelationships(tables, relationships));
 		return assembleResult(selected.label(), rowsByTable, tables.stream()
 				.map(table -> new TableSchema(
 						table.label(),
@@ -184,31 +188,32 @@ public class RelationalDatasetIngestor {
 	private RelationalIngestResult assembleResult(String coreTable, Map<String, List<CanonicalRecord>> rowsByTable,
 			List<TableSchema> tables, List<RelationshipSchema> relationships) {
 		List<String> diagnostics = new ArrayList<>();
-		Map<String, Map<String, List<CanonicalRecord>>> relatedByTableByCoreId = new LinkedHashMap<>();
-		for (RelationshipSchema relation : relationships) {
-			Map<String, List<CanonicalRecord>> byCore = new LinkedHashMap<>();
-			for (CanonicalRecord related : rowsByTable.getOrDefault(relation.fromTable(), List.of())) {
-				String key = related.terms().getOrDefault(relation.fromColumn(), "");
-				byCore.computeIfAbsent(key, ignored -> new ArrayList<>()).add(related);
-			}
-			relatedByTableByCoreId.put(relation.relationName(), byCore);
+		List<ResolvedRelation> resolvedRelations = relationships.stream()
+				.map(relation -> resolveRelationForCore(coreTable, relation))
+				.filter(java.util.Objects::nonNull)
+				.toList();
+		Map<ResolvedRelation, Map<String, List<CanonicalRecord>>> relatedByLookup = new LinkedHashMap<>();
+		for (ResolvedRelation resolved : resolvedRelations) {
+			relatedByLookup.put(resolved, indexByColumn(
+					rowsByTable.getOrDefault(resolved.relatedTable(), List.of()),
+					resolved.relatedColumn()));
 		}
 		List<RecordGraph> graphs = new ArrayList<>();
 		for (CanonicalRecord core : rowsByTable.getOrDefault(coreTable, List.of())) {
 			Map<String, List<CanonicalRecord>> relatedByRelation = new LinkedHashMap<>();
-			for (RelationshipSchema relation : relationships) {
-				String coreValue = core.terms().getOrDefault(relation.toColumn(), "");
+			for (ResolvedRelation resolved : resolvedRelations) {
+				String coreValue = core.terms().getOrDefault(resolved.coreColumn(), "");
 				if (coreValue.isBlank()) {
 					continue;
 				}
-				List<CanonicalRecord> related = relatedByTableByCoreId
-						.getOrDefault(relation.relationName(), Map.of())
+				List<CanonicalRecord> related = relatedByLookup
+						.getOrDefault(resolved, Map.of())
 						.getOrDefault(coreValue, List.of());
 				if (related.isEmpty()) {
-					diagnostics.add("No related rows found for relation " + relation.relationName()
+					diagnostics.add("No related rows found for relation " + resolved.relationName()
 							+ " and core record " + core.id());
 				}
-				relatedByRelation.put(relation.relationName(), related);
+				relatedByRelation.put(resolved.relationName(), related);
 			}
 			graphs.add(new RecordGraph(core, relatedByRelation));
 		}
@@ -216,10 +221,165 @@ public class RelationalDatasetIngestor {
 		return new RelationalIngestResult(graphs, new DatasetSchema(tables, relationships, fingerprint), diagnostics);
 	}
 
+	/**
+	 * Infers simple identifier-based relationships that a Data Package manifest omitted.
+	 *
+	 * <p>The first non-flat datasets in this project commonly relate an occurrence table to its
+	 * event table via a shared Darwin Core identifier column such as {@code eventID} even when the
+	 * manifest declares no explicit foreign key. Recognizing those links lets the dataset-view
+	 * builder offer occurrence-grain mappings across the full relational graph instead of only the
+	 * handful of columns on the selected table.
+	 *
+	 * @param tables discovered Data Package tables
+	 * @param existing explicitly declared relationships
+	 * @return inferred relationships that do not duplicate the explicit ones
+	 */
+	private List<RelationshipSchema> inferImplicitRelationships(
+			List<CoreTableCandidate<DataPackageResourceMeta>> tables,
+			List<RelationshipSchema> existing) {
+		Set<String> existingKeys = new LinkedHashSet<>();
+		existing.forEach(relation -> existingKeys.add(relationshipKey(
+				relation.fromTable(), relation.fromColumn(), relation.toTable(), relation.toColumn())));
+		List<RelationshipSchema> inferred = new ArrayList<>();
+		for (CoreTableCandidate<DataPackageResourceMeta> source : tables) {
+			Set<String> explicitSourceFields = source.descriptor().foreignKeys().stream()
+					.map(DataPackageForeignKey::field)
+					.map(RelationalDatasetIngestor::normalizedName)
+					.collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+			for (CoreTableCandidate<DataPackageResourceMeta> target : tables) {
+				String targetIdentifier = identifierColumn(target);
+				if (targetIdentifier.isBlank()) {
+					continue;
+				}
+				String sourceIdentifier = identifierColumn(source);
+				for (String sourceColumn : source.descriptor().columnNames()) {
+					if (source.label().equalsIgnoreCase(target.label())
+							&& normalizedName(sourceColumn).equals(normalizedName(targetIdentifier))) {
+						continue;
+					}
+					if (normalizedName(sourceColumn).equals(normalizedName(sourceIdentifier))) {
+						continue;
+					}
+					if (!normalizedName(sourceColumn).equals(normalizedName(targetIdentifier))) {
+						continue;
+					}
+					if (explicitSourceFields.contains(normalizedName(sourceColumn))) {
+						continue;
+					}
+					String key = relationshipKey(source.label(), sourceColumn, target.label(), targetIdentifier);
+					if (existingKeys.contains(key)) {
+						continue;
+					}
+					existingKeys.add(key);
+					inferred.add(new RelationshipSchema(
+							source.label(),
+							sourceColumn,
+							target.label(),
+							targetIdentifier,
+							source.label()));
+					break;
+				}
+			}
+		}
+		return inferred;
+	}
+
+	/**
+	 * Resolves how one schema relationship should be traversed from the selected core table.
+	 *
+	 * @param coreTable selected relational-graph core table
+	 * @param relation relationship schema
+	 * @return the orientation to use, or {@code null} when the relationship does not touch the core
+	 */
+	private ResolvedRelation resolveRelationForCore(String coreTable, RelationshipSchema relation) {
+		if (relation.toTable().equals(coreTable)) {
+			return new ResolvedRelation(
+					relation.fromTable(),
+					relation.toColumn(),
+					relation.fromColumn(),
+					relation.fromTable());
+		}
+		if (relation.fromTable().equals(coreTable)) {
+			return new ResolvedRelation(
+					relation.toTable(),
+					relation.fromColumn(),
+					relation.toColumn(),
+					relation.toTable());
+		}
+		return null;
+	}
+
+	/**
+	 * Indexes rows by one join column.
+	 *
+	 * @param rows rows to index
+	 * @param column join column
+	 * @return rows grouped by their join-column values
+	 */
+	private Map<String, List<CanonicalRecord>> indexByColumn(List<CanonicalRecord> rows, String column) {
+		Map<String, List<CanonicalRecord>> indexed = new LinkedHashMap<>();
+		for (CanonicalRecord row : rows) {
+			String key = row.terms().getOrDefault(column, "");
+			indexed.computeIfAbsent(key, ignored -> new ArrayList<>()).add(row);
+		}
+		return indexed;
+	}
+
+	/**
+	 * Returns the identifier column a table exposes, using the row-type fallback when necessary.
+	 *
+	 * @param table table candidate
+	 * @return identifier column name, or {@code ""} when none can be inferred
+	 */
+	private String identifierColumn(CoreTableCandidate<DataPackageResourceMeta> table) {
+		return table.descriptor().idColumn().isBlank()
+				? table.rowType().identifierTerm()
+				: table.descriptor().idColumn();
+	}
+
+	/**
+	 * Builds a normalized relationship key for deduplication.
+	 *
+	 * @param fromTable source table
+	 * @param fromColumn source column
+	 * @param toTable target table
+	 * @param toColumn target column
+	 * @return normalized relationship key
+	 */
+	private String relationshipKey(String fromTable, String fromColumn, String toTable, String toColumn) {
+		return normalizedName(fromTable) + "->" + normalizedName(fromColumn) + "->"
+				+ normalizedName(toTable) + "->" + normalizedName(toColumn);
+	}
+
+	/**
+	 * Normalizes a table or column name for case-insensitive relationship matching.
+	 *
+	 * @param value raw table or column name
+	 * @return normalized local name
+	 */
+	private static String normalizedName(String value) {
+		return DarwinCoreTermResolver.normalizeTerm(DarwinCoreTermResolver.localName(value));
+	}
+
 	private CanonicalRecord withTableProvenance(CanonicalRecord row, String tableName) {
 		Map<String, List<SourceCell>> provenance = new LinkedHashMap<>();
 		row.terms().forEach((term, value) -> provenance.put(term, List.of(
 				new SourceCell(tableName, tableName, row.id(), term, term))));
 		return new CanonicalRecord(row.id(), row.terms(), provenance);
+	}
+
+	/**
+	 * Relationship traversal resolved relative to the selected graph core.
+	 *
+	 * @param relatedTable table whose rows will appear under the relation key
+	 * @param coreColumn core-table column used to look up related rows
+	 * @param relatedColumn related-table column used to match the core value
+	 * @param relationName relation key stored on the graph
+	 */
+	private record ResolvedRelation(
+			String relatedTable,
+			String coreColumn,
+			String relatedColumn,
+			String relationName) {
 	}
 }

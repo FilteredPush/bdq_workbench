@@ -42,6 +42,7 @@ import java.util.List;
 import java.util.Map;
 import javax.swing.BorderFactory;
 import javax.swing.BoxLayout;
+import javax.swing.DefaultCellEditor;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
@@ -64,6 +65,7 @@ import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
 import javax.swing.event.PopupMenuEvent;
 import javax.swing.event.PopupMenuListener;
+import javax.swing.table.DefaultTableModel;
 import javax.swing.table.TableCellRenderer;
 import org.filteredpush.bdq_workbench.execution.ExecutionProgressListener;
 import org.filteredpush.bdq_workbench.execution.ParallelPhaseExecutionService;
@@ -71,7 +73,9 @@ import org.filteredpush.bdq_workbench.execution.ReflectionExecutionAdapter;
 import org.filteredpush.bdq_workbench.ingest.DatasetViewIO;
 import org.filteredpush.bdq_workbench.ingest.DefaultIngestService;
 import org.filteredpush.bdq_workbench.ingest.DatasetSchemaInspector;
+import org.filteredpush.bdq_workbench.ingest.DatasetViewSuggester;
 import org.filteredpush.bdq_workbench.ingest.RelationalDatasetIngestor;
+import org.filteredpush.bdq_workbench.ingest.RelationalIngestResult;
 import org.filteredpush.bdq_workbench.model.RecordFilterSummary;
 import org.filteredpush.bdq_workbench.model.BindingReview;
 import org.filteredpush.bdq_workbench.model.BuiltInMeasureSpec;
@@ -507,6 +511,7 @@ final class BdqWorkbenchGui {
                 dataset.field().getText().trim(),
                 datasetView.field(),
                 datasetTable.getText().trim(),
+                availableUseCaseChoices(useCaseChoice),
                 selectedUseCaseId(useCaseChoice),
                 useCaseSource.getText().trim(),
                 testDefinitionsSource.getText().trim(),
@@ -1894,6 +1899,7 @@ final class BdqWorkbenchGui {
 	 * @param datasetPath selected dataset path
 	 * @param datasetViewField dataset-view path field to update
 	 * @param datasetTable selected dataset table, if any
+	 * @param availableUseCases use cases currently loaded in the setup combo box
 	 * @param selectedUseCaseId selected use-case identifier, if any
 	 * @param useCaseSource configured use-case RDF source
 	 * @param testDefinitionsSource configured primary test-definition source
@@ -1905,6 +1911,7 @@ final class BdqWorkbenchGui {
 			String datasetPath,
 			JTextField datasetViewField,
 			String datasetTable,
+			List<UseCaseChoice> availableUseCases,
 			String selectedUseCaseId,
 			String useCaseSource,
 			String testDefinitionsSource,
@@ -1940,17 +1947,35 @@ final class BdqWorkbenchGui {
 			@Override
 			protected DatasetViewPreview doInBackground() {
 				RelationalDatasetIngestor ingestor = new RelationalDatasetIngestor();
-				var relational = ingestor.ingest(path, datasetTable);
+				RelationalIngestResult relational = ingestor.ingest(path, datasetTable);
 				DatasetSchema schema = relational.schema();
-				List<String> requestedTerms = requestedDatasetViewTerms(
-						selectedUseCaseId,
+				List<String> selectedTerms = requestedDatasetViewTerms(
+						selectedUseCaseId == null || selectedUseCaseId.isBlank() ? List.of() : List.of(selectedUseCaseId),
 						useCaseSource,
 						testDefinitionsSource,
 						additionalTestDefinitions,
 						ontologySource);
-				DatasetView suggested = suggestDatasetView(schema, requestedTerms);
-				var preview = new org.filteredpush.bdq_workbench.ingest.ViewFlattener().flatten(relational, suggested);
-				return new DatasetViewPreview(schema, suggested, preview, requestedTerms);
+				List<String> allTerms = requestedDatasetViewTerms(
+						availableUseCases.stream().map(UseCaseChoice::id).toList(),
+						useCaseSource,
+						testDefinitionsSource,
+						additionalTestDefinitions,
+						ontologySource);
+				DatasetViewSuggester suggester = new DatasetViewSuggester();
+				String initialGrain = schema.tables().stream()
+						.map(org.filteredpush.bdq_workbench.model.TableSchema::name)
+						.anyMatch(name -> name.equalsIgnoreCase(datasetTable))
+								? datasetTable
+								: suggester.defaultGrainTable(schema);
+				DatasetView suggested = suggester.suggest(schema, initialGrain, selectedTerms);
+				return new DatasetViewPreview(
+						relational,
+						schema,
+						suggested,
+						availableUseCases,
+						selectedUseCaseId == null ? "" : selectedUseCaseId,
+						selectedTerms,
+						allTerms);
 			}
 
 			@Override
@@ -1975,38 +2000,133 @@ final class BdqWorkbenchGui {
 	 *
 	 * @param frame owner frame
 	 * @param datasetViewField dataset-view path field to update when the user loads or saves a view
-	 * @param previewData prepared schema, suggestion, and flattened preview data
+	 * @param previewData prepared relational schema, use-case term scope, and starter suggestion
 	 */
 	private static void openDatasetViewDialog(JFrame frame, JTextField datasetViewField, DatasetViewPreview previewData) {
 		DatasetViewIO io = new DatasetViewIO();
+		DatasetViewSuggester suggester = new DatasetViewSuggester();
+		RelationalIngestResult relational = previewData.relational();
 		DatasetSchema schema = previewData.schema();
-		DatasetView suggested = previewData.suggested();
-		var preview = previewData.preview();
 		JTextArea schemaDetails = readOnlyTextArea(renderDatasetViewSchemaText(schema));
-		JTextArea mappingDetails = readOnlyTextArea(renderDatasetViewMappingText(previewData.requestedTerms(), suggested));
-		JTextArea previewDetails = readOnlyTextArea(renderDatasetViewPreviewText(preview));
+		DatasetView[] currentView = {previewData.suggested()};
+		List<DatasetViewUseCaseScope> scopes = datasetViewScopes(previewData);
+		JComboBox<DatasetViewUseCaseScope> scopeChoice = new JComboBox<>(scopes.toArray(DatasetViewUseCaseScope[]::new));
+		JComboBox<String> grainChoice = new JComboBox<>(schema.tables().stream()
+				.map(org.filteredpush.bdq_workbench.model.TableSchema::name)
+				.toArray(String[]::new));
+		grainChoice.setSelectedItem(previewData.suggested().grainTable());
+		JTextArea requestedTermsDetails = readOnlyTextArea("");
+		DefaultTableModel joinsModel = new DefaultTableModel(
+				new Object[] {"Include", "Source table", "Join path", "Multiplicity"}, 0) {
+			@Override
+			public Class<?> getColumnClass(int columnIndex) {
+				return columnIndex == 0
+						? Boolean.class
+						: columnIndex == 3 ? DatasetViewCardinalityPolicy.class : String.class;
+			}
+
+			@Override
+			public boolean isCellEditable(int row, int column) {
+				return column == 0 || column == 3;
+			}
+		};
+		JTable joinsTable = new JTable(joinsModel);
+		joinsTable.getColumnModel().getColumn(3).setCellEditor(new DefaultCellEditor(
+				new JComboBox<>(DatasetViewCardinalityPolicy.values())));
+		DefaultTableModel mappingsModel = new DefaultTableModel(
+				new Object[] {"Darwin Core term", "Source table", "Source column"}, 0) {
+			@Override
+			public boolean isCellEditable(int row, int column) {
+				return true;
+			}
+		};
+		JTable mappingsTable = new JTable(mappingsModel);
+		mappingsTable.getColumnModel().getColumn(1).setCellEditor(new DefaultCellEditor(
+				new JComboBox<>(schema.tables().stream()
+						.map(org.filteredpush.bdq_workbench.model.TableSchema::name)
+						.toArray(String[]::new))));
+		DefaultTableModel previewTableModel = new DefaultTableModel();
+		JTable previewTable = new JTable(previewTableModel);
+		previewTable.setAutoResizeMode(JTable.AUTO_RESIZE_OFF);
+		JTextArea previewDiagnostics = readOnlyTextArea("");
+		JButton autoMap = new JButton("Auto Map");
+		JButton addMapping = new JButton("Add Mapping");
+		JButton removeMapping = new JButton("Remove Mapping");
+		JButton refreshPreview = new JButton("Refresh Preview");
 		JButton save = new JButton("Save View...");
 		JButton load = new JButton("Load View...");
+		JPanel controls = new JPanel(new FlowLayout(FlowLayout.LEFT));
+		controls.add(new JLabel("Requested terms"));
+		controls.add(scopeChoice);
+		controls.add(new JLabel("Grain table"));
+		controls.add(grainChoice);
+		controls.add(autoMap);
+		controls.add(addMapping);
+		controls.add(removeMapping);
+		controls.add(refreshPreview);
 		JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT));
 		buttons.add(load);
 		buttons.add(save);
 		JPanel panel = new JPanel(new BorderLayout(8, 8));
-		JSplitPane upper = new JSplitPane(
-				JSplitPane.HORIZONTAL_SPLIT,
-				new JScrollPane(schemaDetails),
-				new JScrollPane(mappingDetails));
-		upper.setResizeWeight(0.5d);
-		JSplitPane layout = new JSplitPane(
+		JPanel mappingPanel = new JPanel(new BorderLayout(6, 6));
+		mappingPanel.add(new JScrollPane(requestedTermsDetails), BorderLayout.NORTH);
+		JSplitPane mappingSplit = new JSplitPane(
 				JSplitPane.VERTICAL_SPLIT,
-				upper,
-				new JScrollPane(previewDetails));
-		layout.setResizeWeight(0.6d);
+				new JScrollPane(joinsTable),
+				new JScrollPane(mappingsTable));
+		mappingSplit.setResizeWeight(0.35d);
+		mappingPanel.add(mappingSplit, BorderLayout.CENTER);
+		JSplitPane upper = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, new JScrollPane(schemaDetails), mappingPanel);
+		upper.setResizeWeight(0.35d);
+		JSplitPane previewSplit = new JSplitPane(
+				JSplitPane.VERTICAL_SPLIT,
+				new JScrollPane(previewTable),
+				new JScrollPane(previewDiagnostics));
+		previewSplit.setResizeWeight(0.75d);
+		JSplitPane layout = new JSplitPane(JSplitPane.VERTICAL_SPLIT, upper, previewSplit);
+		layout.setResizeWeight(0.58d);
+		panel.add(controls, BorderLayout.NORTH);
 		panel.add(layout, BorderLayout.CENTER);
 		panel.add(buttons, BorderLayout.SOUTH);
 		JDialog dialog = new JDialog(frame, "Build Dataset View", true);
 		dialog.setContentPane(panel);
-		dialog.pack();
+		dialog.setSize(1200, 760);
 		dialog.setLocationRelativeTo(frame);
+
+		Runnable applySuggestedDraft = () -> {
+			DatasetViewUseCaseScope scope = (DatasetViewUseCaseScope) scopeChoice.getSelectedItem();
+			String grain = String.valueOf(grainChoice.getSelectedItem());
+			List<String> requestedTerms = scope == null ? List.of() : scope.requestedTerms();
+			DatasetView suggested = suggester.suggest(schema, grain, requestedTerms);
+			populateDatasetViewJoinRows(joinsModel, suggester, schema, grain, suggested);
+			populateDatasetViewMappingRows(mappingsModel, suggested, requestedTerms);
+			requestedTermsDetails.setText(renderDatasetViewRequestedTermsText(
+					scope == null ? "Selected use case" : scope.label(),
+					scope == null ? List.of() : scope.applicableUseCases(),
+					requestedTerms));
+			currentView[0] = suggested;
+			updateDatasetViewPreview(relational, previewTableModel, previewDiagnostics, currentView[0]);
+		};
+		Runnable refreshFromCurrentDraft = () -> {
+			currentView[0] = buildDatasetViewFromTables(
+					schema,
+					String.valueOf(grainChoice.getSelectedItem()),
+					joinsModel,
+					mappingsModel);
+			updateDatasetViewPreview(relational, previewTableModel, previewDiagnostics, currentView[0]);
+		};
+		scopeChoice.addActionListener(e -> applySuggestedDraft.run());
+		grainChoice.addActionListener(e -> applySuggestedDraft.run());
+		autoMap.addActionListener(e -> applySuggestedDraft.run());
+		addMapping.addActionListener(e -> mappingsModel.addRow(new Object[] {"", "", ""}));
+		removeMapping.addActionListener(e -> {
+			int row = mappingsTable.getSelectedRow();
+			if (row >= 0) {
+				mappingsModel.removeRow(row);
+				refreshFromCurrentDraft.run();
+			}
+		});
+		refreshPreview.addActionListener(e -> refreshFromCurrentDraft.run());
 
 		load.addActionListener(e -> {
 			String selected = chooseFile(frame, "Select dataset view JSON");
@@ -2016,8 +2136,14 @@ final class BdqWorkbenchGui {
 			try {
 				DatasetView view = io.load(Path.of(selected));
 				io.validateCompatibility(view, schema);
-				datasetViewField.setText(selected);
-				dialog.dispose();
+				grainChoice.setSelectedItem(view.grainTable());
+				populateDatasetViewJoinRows(joinsModel, suggester, schema, view.grainTable(), view);
+				populateDatasetViewMappingRows(
+					mappingsModel,
+					view,
+					((DatasetViewUseCaseScope) scopeChoice.getSelectedItem()).requestedTerms());
+				currentView[0] = view;
+				updateDatasetViewPreview(relational, previewTableModel, previewDiagnostics, currentView[0]);
 			} catch (AppException ex) {
 				JOptionPane.showMessageDialog(
 						frame,
@@ -2031,67 +2157,33 @@ final class BdqWorkbenchGui {
 			if (selected == null) {
 				return;
 			}
-			io.save(Path.of(selected), suggested);
+			refreshFromCurrentDraft.run();
+			io.save(Path.of(selected), currentView[0]);
 			datasetViewField.setText(selected);
 			dialog.dispose();
 		});
+		applySuggestedDraft.run();
 		dialog.setVisible(true);
 	}
 
 	/**
-	 * Creates a simple direct-mapping view suggestion from discovered schema and requested terms.
-	 */
-	private static DatasetView suggestDatasetView(DatasetSchema schema, List<String> requestedTerms) {
-		String grain = schema.tables().stream()
-				.filter(table -> "OCCURRENCE".equalsIgnoreCase(table.rowType()))
-				.findFirst()
-				.map(table -> table.name())
-				.orElse(schema.tables().isEmpty() ? "core" : schema.tables().get(0).name());
-		List<DatasetViewJoin> joins = schema.relationships().stream()
-				.filter(relationship -> relationship.toTable().equals(grain))
-				.map(relationship -> new DatasetViewJoin(
-						relationship.relationName(),
-						relationship.fromTable(),
-						DatasetViewCardinalityPolicy.REJECT))
-				.toList();
-		java.util.Set<String> allowedTables = new java.util.LinkedHashSet<>();
-		allowedTables.add(grain);
-		joins.forEach(join -> allowedTables.add(join.sourceTable()));
-		List<DatasetViewMapping> mappings = new ArrayList<>();
-		for (String term : requestedTerms.isEmpty()
-				? List.of("occurrenceID", "scientificName", "eventDate", "decimalLatitude", "decimalLongitude")
-				: requestedTerms) {
-			String sourceTable = schema.tables().stream()
-					.filter(table -> allowedTables.contains(table.name()))
-					.filter(table -> table.columns().contains(term))
-					.findFirst()
-					.map(table -> table.name())
-					.orElse(null);
-			if (sourceTable != null) {
-				mappings.add(new DatasetViewMapping(term, sourceTable, term));
-			}
-		}
-		return new DatasetView(grain, schema.schemaFingerprint(), joins, mappings);
-	}
-
-	/**
-	 * Resolves the information-element terms the selected use case's tests actually reference.
+	 * Resolves the information-element terms the chosen use cases' tests actually reference.
 	 *
-	 * @param selectedUseCaseId selected use-case identifier
+	 * @param selectedUseCaseIds use-case identifiers whose information elements should be merged
 	 * @param useCaseSource configured use-case RDF source
 	 * @param testDefinitionsSource configured primary test-definition source
 	 * @param additionalTestDefinitions configured extra test-definition sources
 	 * @param ontologySource configured ontology source
-	 * @return the requested Darwin Core term names, or a small default list when they cannot be
-	 *     resolved
+	 * @return requested Darwin Core terms for the chosen use cases, or starter terms when
+	 *     resolution fails
 	 */
 	private static List<String> requestedDatasetViewTerms(
-			String selectedUseCaseId,
+			List<String> selectedUseCaseIds,
 			String useCaseSource,
 			String testDefinitionsSource,
 			String additionalTestDefinitions,
 			String ontologySource) {
-		if (selectedUseCaseId == null || selectedUseCaseId.isBlank()) {
+		if (selectedUseCaseIds.isEmpty()) {
 			return List.of();
 		}
 		try {
@@ -2103,11 +2195,20 @@ final class BdqWorkbenchGui {
 			for (String extra : splitCsv(additionalTestDefinitions)) {
 				rdfSources.add(resolver.resolve(extra, cacheNameFor(extra)));
 			}
-			ExecutionPlan plan = new RdfPolicyResolverService(useCaseXml, rdfSources).resolve(selectedUseCaseId);
-			List<String> terms = new InformationElementIndex(rdfSources).termsFor(plan.tests());
+			RdfPolicyResolverService resolverService = new RdfPolicyResolverService(useCaseXml, rdfSources);
+			InformationElementIndex index = new InformationElementIndex(rdfSources);
+			java.util.Set<String> terms = new java.util.LinkedHashSet<>();
+			for (String selectedUseCaseId : selectedUseCaseIds) {
+				try {
+					ExecutionPlan plan = resolverService.resolve(selectedUseCaseId);
+					terms.addAll(index.termsFor(plan.tests()));
+				} catch (RuntimeException e) {
+					LOG.warn("Unable to resolve use case {} while building dataset-view suggestions", selectedUseCaseId, e);
+				}
+			}
 			return terms.isEmpty()
 					? List.of("occurrenceID", "scientificName", "eventDate", "decimalLatitude", "decimalLongitude")
-					: terms;
+					: List.copyOf(terms);
 		} catch (RuntimeException e) {
 			LOG.warn("Unable to resolve use-case information elements for dataset-view suggestion", e);
 			return List.of("occurrenceID", "scientificName", "eventDate", "decimalLatitude", "decimalLongitude");
@@ -2150,77 +2251,224 @@ final class BdqWorkbenchGui {
 	}
 
 	/**
-	 * Renders the requested-term and suggested-mapping pane of the dataset-view builder.
+	 * Renders the requested-term and use-case summary for the editable dataset-view builder.
 	 *
-	 * @param requestedTerms the Darwin Core terms requested by the selected use case
-	 * @param view the suggested view definition
-	 * @return the rendered requested-term and mapping summary
+	 * @param scopeLabel human-readable requested-term scope label
+	 * @param applicableUseCases use cases whose information elements are being shown
+	 * @param requestedTerms requested Darwin Core terms for the current scope
+	 * @return rendered requested-term summary
 	 */
-	private static String renderDatasetViewMappingText(List<String> requestedTerms, DatasetView view) {
+	private static String renderDatasetViewRequestedTermsText(
+			String scopeLabel,
+			List<UseCaseChoice> applicableUseCases,
+			List<String> requestedTerms) {
 		StringBuilder builder = new StringBuilder();
-		builder.append("Selected use-case information elements:\n");
+		builder.append("Requested terms source: ").append(scopeLabel).append('\n');
+		builder.append("Applicable use cases:\n");
+		if (applicableUseCases.isEmpty()) {
+			builder.append(" - none resolved; using starter occurrence terms\n");
+		} else {
+			applicableUseCases.forEach(choice -> builder.append(" - ")
+					.append(choice.label())
+					.append(" (")
+					.append(choice.id())
+					.append(")\n"));
+		}
+		builder.append("Information elements to map:\n");
 		if (requestedTerms.isEmpty()) {
-			builder.append(" - none resolved; showing the default occurrence-oriented starter terms\n");
+			builder.append(" - occurrenceID\n")
+					.append(" - scientificName\n")
+					.append(" - eventDate\n")
+					.append(" - decimalLatitude\n")
+					.append(" - decimalLongitude\n");
 		} else {
 			requestedTerms.forEach(term -> builder.append(" - ").append(term).append('\n'));
-		}
-		builder.append("Suggested joins:\n");
-		if (view.joins().isEmpty()) {
-			builder.append(" - none\n");
-		} else {
-			view.joins().forEach(join -> builder.append(" - ")
-					.append(join.sourceTable())
-					.append(" via relation ")
-					.append(join.relationName())
-					.append(" [")
-					.append(join.cardinalityPolicy())
-					.append("]\n"));
-		}
-		builder.append("Suggested mappings:\n");
-		view.mappings().forEach(mapping -> builder.append(" - ")
-				.append(mapping.term())
-				.append(" <- ")
-				.append(mapping.sourceTable())
-				.append('.')
-				.append(mapping.sourceColumn())
-				.append('\n'));
-		List<String> mappedTerms = view.mappings().stream().map(DatasetViewMapping::term).toList();
-		List<String> unresolvedTerms = requestedTerms.stream()
-				.filter(term -> !mappedTerms.contains(term))
-				.toList();
-		if (!unresolvedTerms.isEmpty()) {
-			builder.append("Unresolved requested terms:\n");
-			unresolvedTerms.forEach(term -> builder.append(" - ").append(term).append('\n'));
 		}
 		return builder.toString();
 	}
 
 	/**
-	 * Renders the flattened preview and any cardinality diagnostics for the dataset-view builder.
+	 * Populates the join table from the schema and the current draft view.
 	 *
-	 * @param preview the flattened preview result
-	 * @return the rendered preview text
+	 * @param joinsModel editable join-table model
+	 * @param suggester schema-based dataset-view suggester
+	 * @param schema discovered schema
+	 * @param grainTable currently selected grain table
+	 * @param view current draft view
 	 */
-	private static String renderDatasetViewPreviewText(org.filteredpush.bdq_workbench.ingest.ViewFlattenResult preview) {
+	private static void populateDatasetViewJoinRows(
+			DefaultTableModel joinsModel,
+			DatasetViewSuggester suggester,
+			DatasetSchema schema,
+			String grainTable,
+			DatasetView view) {
+		joinsModel.setRowCount(0);
+		Map<String, DatasetViewJoin> configured = new LinkedHashMap<>();
+		view.joins().forEach(join -> configured.put(join.sourceTable().toLowerCase(), join));
+		for (DatasetViewSuggester.JoinCandidate candidate : suggester.joinCandidates(schema, grainTable)) {
+			DatasetViewJoin configuredJoin = configured.get(candidate.sourceTable().toLowerCase());
+			joinsModel.addRow(new Object[] {
+					configuredJoin != null,
+					candidate.sourceTable(),
+					candidate.sourceTable() + "." + candidate.sourceColumn()
+							+ " -> " + candidate.targetTable() + "." + candidate.targetColumn(),
+					configuredJoin == null ? DatasetViewCardinalityPolicy.REJECT : configuredJoin.cardinalityPolicy()});
+		}
+	}
+
+	/**
+	 * Populates the mapping table from the current draft view and the requested-term set.
+	 *
+	 * @param mappingsModel editable mapping-table model
+	 * @param view current draft view
+	 * @param requestedTerms requested Darwin Core terms for the current scope
+	 */
+	private static void populateDatasetViewMappingRows(
+			DefaultTableModel mappingsModel,
+			DatasetView view,
+			List<String> requestedTerms) {
+		mappingsModel.setRowCount(0);
+		Map<String, DatasetViewMapping> configured = new LinkedHashMap<>();
+		view.mappings().forEach(mapping -> configured.put(mapping.term(), mapping));
+		java.util.Set<String> terms = new java.util.LinkedHashSet<>(requestedTerms);
+		terms.addAll(configured.keySet());
+		for (String term : terms) {
+			DatasetViewMapping mapping = configured.get(term);
+			mappingsModel.addRow(new Object[] {
+					term,
+					mapping == null ? "" : mapping.sourceTable(),
+					mapping == null ? "" : mapping.sourceColumn()});
+		}
+	}
+
+	/**
+	 * Builds a dataset view from the currently edited join and mapping tables.
+	 *
+	 * @param schema discovered schema
+	 * @param grainTable selected grain table
+	 * @param joinsModel editable join-table model
+	 * @param mappingsModel editable mapping-table model
+	 * @return the current dataset-view draft
+	 */
+	private static DatasetView buildDatasetViewFromTables(
+			DatasetSchema schema,
+			String grainTable,
+			DefaultTableModel joinsModel,
+			DefaultTableModel mappingsModel) {
+		List<DatasetViewJoin> joins = new ArrayList<>();
+		for (int row = 0; row < joinsModel.getRowCount(); row++) {
+			if (!Boolean.TRUE.equals(joinsModel.getValueAt(row, 0))) {
+				continue;
+			}
+			String sourceTable = String.valueOf(joinsModel.getValueAt(row, 1)).trim();
+			Object policy = joinsModel.getValueAt(row, 3);
+			if (sourceTable.isBlank() || !(policy instanceof DatasetViewCardinalityPolicy cardinalityPolicy)) {
+				continue;
+			}
+			joins.add(new DatasetViewJoin(sourceTable, sourceTable, cardinalityPolicy));
+		}
+		List<DatasetViewMapping> mappings = new ArrayList<>();
+		for (int row = 0; row < mappingsModel.getRowCount(); row++) {
+			String term = String.valueOf(mappingsModel.getValueAt(row, 0)).trim();
+			String sourceTable = String.valueOf(mappingsModel.getValueAt(row, 1)).trim();
+			String sourceColumn = String.valueOf(mappingsModel.getValueAt(row, 2)).trim();
+			if (term.isBlank() || sourceTable.isBlank() || sourceColumn.isBlank()) {
+				continue;
+			}
+			mappings.add(new DatasetViewMapping(term, sourceTable, sourceColumn));
+		}
+		return new DatasetView(grainTable, schema.schemaFingerprint(), joins, mappings);
+	}
+
+	/**
+	 * Updates the preview table and diagnostics for the current dataset-view draft.
+	 *
+	 * @param relational relational ingest result used for previewing
+	 * @param previewTableModel preview table model to refresh
+	 * @param diagnosticsArea diagnostics area to refresh
+	 * @param view current dataset-view draft
+	 */
+	private static void updateDatasetViewPreview(
+			RelationalIngestResult relational,
+			DefaultTableModel previewTableModel,
+			JTextArea diagnosticsArea,
+			DatasetView view) {
+		org.filteredpush.bdq_workbench.ingest.ViewFlattenResult preview =
+				new org.filteredpush.bdq_workbench.ingest.ViewFlattener().flatten(relational, view);
+		java.util.Set<String> columns = new java.util.LinkedHashSet<>();
+		columns.add("recordId");
+		preview.dataset().records().stream().limit(5).forEach(row -> columns.addAll(row.terms().keySet()));
+		previewTableModel.setColumnIdentifiers(columns.toArray());
+		previewTableModel.setRowCount(0);
+		preview.dataset().records().stream().limit(5).forEach(row -> {
+			List<Object> values = new ArrayList<>();
+			values.add(row.id());
+			columns.stream().skip(1).forEach(column -> values.add(row.terms().getOrDefault(column, "")));
+			previewTableModel.addRow(values.toArray());
+		});
+		diagnosticsArea.setText(renderDatasetViewPreviewDiagnosticsText(preview));
+	}
+
+	/**
+	 * Renders preview diagnostics beneath the preview table.
+	 *
+	 * @param preview current flattening preview
+	 * @return rendered diagnostics
+	 */
+	private static String renderDatasetViewPreviewDiagnosticsText(
+			org.filteredpush.bdq_workbench.ingest.ViewFlattenResult preview) {
 		StringBuilder builder = new StringBuilder();
-		builder.append("Preview rows: ").append(Math.min(5, preview.dataset().records().size())).append('\n');
-		preview.dataset().records().stream().limit(5).forEach(row -> builder.append(" - ")
-				.append(row.id())
-				.append(" => ")
-				.append(row.terms())
-				.append('\n'));
+		builder.append("Preview rows shown: ").append(Math.min(5, preview.dataset().records().size())).append('\n');
 		if (!preview.diagnostics().isEmpty()) {
-			builder.append("Cardinality warnings:\n");
+			builder.append("Warnings and diagnostics:\n");
 			preview.diagnostics().forEach(message -> builder.append(" - ").append(message).append('\n'));
+		} else {
+			builder.append("No preview warnings.");
 		}
 		return builder.toString();
+	}
+
+	/**
+	 * Builds the available requested-term scopes for the dataset-view builder.
+	 *
+	 * @param previewData prepared dataset-view preview payload
+	 * @return available requested-term scope choices
+	 */
+	private static List<DatasetViewUseCaseScope> datasetViewScopes(DatasetViewPreview previewData) {
+		List<DatasetViewUseCaseScope> scopes = new ArrayList<>();
+		List<UseCaseChoice> selected = previewData.availableUseCases().stream()
+				.filter(choice -> choice.id().equals(previewData.selectedUseCaseId()))
+				.toList();
+		scopes.add(new DatasetViewUseCaseScope("Selected use case", previewData.selectedTerms(), selected));
+		if (previewData.availableUseCases().size() > 1) {
+			scopes.add(new DatasetViewUseCaseScope("All loaded use cases", previewData.allTerms(),
+					previewData.availableUseCases()));
+		}
+		return scopes;
+	}
+
+	/**
+	 * Returns the currently loaded use cases from the GUI combo box.
+	 *
+	 * @param combo use-case combo box
+	 * @return currently loaded use cases
+	 */
+	private static List<UseCaseChoice> availableUseCaseChoices(JComboBox<UseCaseChoice> combo) {
+		List<UseCaseChoice> choices = new ArrayList<>();
+		for (int index = 0; index < combo.getItemCount(); index++) {
+			UseCaseChoice choice = combo.getItemAt(index);
+			if (choice != null) {
+				choices.add(choice);
+			}
+		}
+		return choices;
 	}
 
 	/**
 	 * Creates a standard read-only text area for dataset-view builder panes.
 	 *
 	 * @param text the text to display
-	 * @return the configured text area
+	 * @return configured read-only text area
 	 */
 	private static JTextArea readOnlyTextArea(String text) {
 		JTextArea textArea = new JTextArea(text, 18, 40);
@@ -3878,12 +4126,26 @@ final class BdqWorkbenchGui {
     private record RecordFilterValueOption(String value, long count) {
     }
 
-	/** Prepared schema/view/preview tuple for the dataset-view builder dialog. */
+	/** One requested-term scope option for the dataset-view builder dialog. */
+	private record DatasetViewUseCaseScope(
+			String label,
+			List<String> requestedTerms,
+			List<UseCaseChoice> applicableUseCases) {
+		@Override
+		public String toString() {
+			return label;
+		}
+	}
+
+	/** Prepared relational schema and suggestion payload for the dataset-view builder dialog. */
 	private record DatasetViewPreview(
+			RelationalIngestResult relational,
 			DatasetSchema schema,
 			DatasetView suggested,
-			org.filteredpush.bdq_workbench.ingest.ViewFlattenResult preview,
-			List<String> requestedTerms) {
+			List<UseCaseChoice> availableUseCases,
+			String selectedUseCaseId,
+			List<String> selectedTerms,
+			List<String> allTerms) {
 	}
 
     /** Dataset-derived terms and value counts used to build record filters interactively. */

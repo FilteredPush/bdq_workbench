@@ -14,6 +14,10 @@ import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import org.filteredpush.bdq_workbench.app.AppException;
+import org.filteredpush.bdq_workbench.model.DatasetView;
+import org.filteredpush.bdq_workbench.model.DatasetViewCardinalityPolicy;
+import org.filteredpush.bdq_workbench.model.DatasetViewJoin;
+import org.filteredpush.bdq_workbench.model.DatasetViewMapping;
 import org.filteredpush.bdq_workbench.model.RecordDataset;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -329,6 +333,66 @@ class DataPackageDialectIngestTest {
 		assertThat(relational.graphs()).hasSize(1);
 		assertThat(relational.graphs().get(0).relatedByRelation()).containsKey("identification");
 		assertThat(relational.graphs().get(0).relatedByRelation().get("identification")).hasSize(1);
+	}
+
+	@Test
+	void relationalIngestInfersOccurrenceToEventRelationshipWithoutDeclaredForeignKey(@TempDir Path tempDir)
+			throws Exception {
+		writeFile(tempDir, "event.csv", StandardCharsets.UTF_8,
+				"eventID,eventDate\nEV-1,2020-01-01\n");
+		writeFile(tempDir, "occurrence.csv", StandardCharsets.UTF_8,
+				"occurrenceID,eventID,scientificName\nocc-1,EV-1,Abies balsamea\n");
+		Path manifest = writeManifest(tempDir, """
+				{
+				  "resources": [
+				    {
+				      "name": "event",
+				      "path": "event.csv",
+				      "schema": {
+				        "fields": [ { "name": "eventID" }, { "name": "eventDate" } ],
+				        "primaryKey": "eventID"
+				      }
+				    },
+				    {
+				      "name": "occurrence",
+				      "path": "occurrence.csv",
+				      "schema": {
+				        "fields": [ { "name": "occurrenceID" }, { "name": "eventID" }, { "name": "scientificName" } ],
+				        "primaryKey": "occurrenceID"
+				      }
+				    }
+				  ]
+				}
+				""");
+
+		RelationalIngestResult relational = new RelationalDatasetIngestor().ingest(manifest, "occurrence");
+
+		assertThat(relational.schema().relationships())
+				.anySatisfy(relationship -> {
+					assertThat(relationship.fromTable()).isEqualTo("occurrence");
+					assertThat(relationship.fromColumn()).isEqualTo("eventID");
+					assertThat(relationship.toTable()).isEqualTo("event");
+					assertThat(relationship.toColumn()).isEqualTo("eventID");
+				});
+		assertThat(relational.graphs()).singleElement().satisfies(graph -> {
+			assertThat(graph.relatedByRelation()).containsKey("event");
+			assertThat(graph.relatedByRelation().get("event")).singleElement()
+					.extracting(row -> row.terms().get("eventDate"))
+					.isEqualTo("2020-01-01");
+		});
+
+		DatasetView view = new DatasetView(
+				"occurrence",
+				relational.schema().schemaFingerprint(),
+				List.of(new DatasetViewJoin("event", "event", DatasetViewCardinalityPolicy.FIRST_ROW)),
+				List.of(
+						new DatasetViewMapping("occurrenceID", "occurrence", "occurrenceID"),
+						new DatasetViewMapping("eventDate", "event", "eventDate")));
+
+		assertThat(new ViewFlattener().flatten(relational, view).dataset().records())
+				.singleElement()
+				.extracting(row -> row.terms().get("eventDate"))
+				.isEqualTo("2020-01-01");
 	}
 
 	@Test
