@@ -202,10 +202,11 @@ understanding how the stages connect — read its class Javadoc first. The pipel
    `Amendment`), so RDFBeans cannot deserialize an `IssueResponse` that carries one —
    `XlsxReportExporter` leaves it unset, so ISSUE-type responses round-trip correctly but without
    per-field coloring on the Issues sheet. Structured-response metadata (`subjectRef`, derived
-   rollups, contributing subjects) currently flows through the normalized response stream and the
-   tab-delimited detailed export; the flat XLSX exporter deliberately projects only core-grain
-   rows/derived rollups and ignores structured detail rows until a dedicated structured
-   human-readable exporter lands.
+   rollups, contributing subjects) now flows through the normalized response stream, the
+   tab-delimited detailed export, the RDF/Turtle exporter (which emits OA-style row selectors for
+   structured subject targets and explicit rollup→detail links), and the standalone structured
+   Markdown report. The flat XLSX exporter still deliberately projects only core-grain
+   rows/derived rollups and ignores structured detail rows.
 
 `WorkbenchFacade.prepare(AppConfig)` runs ingestion → policy resolution → discovery → binding and
 returns a `PreparedRun` without executing anything — this is what backs the GUI's preflight
@@ -272,13 +273,14 @@ run.
    `Issue` context class is missing the no-arg constructor its sibling context classes
    (`Measure`/`Validation`/`Amendment`) have, which breaks RDFBeans deserialization if it's ever
    attached to a saved `IssueResponse`.
-3. Non-flat data reporting and deeper relational modelling. The workbench now ingests direct
-   child relations into `RecordGraph`, can flatten them through reusable provenance-tracked dataset
-   views, and can execute bindings over structured `EvaluationSubject`s with subject-grain
-   diagnostics, deduplication, write-back, and VALIDATION/ISSUE rollups. Remaining work is in the
-   reporting/modeling boundary: RDF/Web Annotation selectors for subrecords, a dedicated
-   structured HTML/Markdown human-readable report, and any future ingest/model changes needed if
-   datasets require more than the current core + direct-child relation graph.
+3. Deeper relational modelling beyond the current reporting boundary. The workbench now ingests
+   direct child relations into `RecordGraph`, can flatten them through reusable
+   provenance-tracked dataset views, can execute bindings over structured `EvaluationSubject`s
+   with subject-grain diagnostics, deduplication, write-back, and VALIDATION/ISSUE rollups, and
+   can report those structured subjects through OA-style RDF row selectors plus a dedicated
+   structured Markdown report. Remaining work is any future ingest/model changes needed if
+   datasets require more than the current core + direct-child relation graph, along with richer
+   future presentation formats if maintainers want something beyond the current Markdown export.
 
 ## Development
 
