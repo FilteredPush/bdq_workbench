@@ -23,8 +23,8 @@ class StructuredMarkdownReportExporterTest {
 	@Test
 	void rendersStructuredRecordSectionsWithNestedDetailSelectors() throws Exception {
 		StructuredMarkdownReportExporter exporter = new StructuredMarkdownReportExporter();
-		Response detailOne = structuredDetail("identification.txt", "row-2", "COMPLIANT", "first detail");
-		Response detailTwo = structuredDetail("flattened-view.csv", "row-7", "NOT_COMPLIANT", "second detail");
+		Response detailOne = structuredDetail("identification", "identification.txt", "row-2", "COMPLIANT", "first detail");
+		Response detailTwo = structuredDetail("measurement", "flattened-view.csv", "row-7", "NOT_COMPLIANT", "second detail");
 		Response rollup = new Response(
 				"record-1",
 				"urn:test:structured",
@@ -65,7 +65,7 @@ class StructuredMarkdownReportExporterTest {
 		assertThat(report).contains("Contributing subjects: identification.txt#row=2, flattened-view.csv#row=7");
 		assertThat(report).contains("<details>");
 		assertThat(report).contains("Subject `identification` at `identification.txt#row=2`");
-		assertThat(report).contains("Subject `identification` at `flattened-view.csv#row=7`");
+		assertThat(report).contains("Subject `measurement` at `flattened-view.csv#row=7`");
 	}
 
 	@Test
@@ -103,7 +103,12 @@ class StructuredMarkdownReportExporterTest {
 		assertThat(report).doesNotContain("<details>");
 	}
 
-	private static Response structuredDetail(String sourceLocation, String rowRef, String result, String comment) {
+	private static Response structuredDetail(
+			String relationName,
+			String sourceLocation,
+			String rowRef,
+			String result,
+			String comment) {
 		return new Response(
 				"record-1",
 				"urn:test:structured",
@@ -120,7 +125,7 @@ class StructuredMarkdownReportExporterTest {
 				Map.of(),
 				Instant.now(),
 				Instant.now(),
-				new SubjectRef("record-1", "identification", "identification", sourceLocation, rowRef),
+				new SubjectRef("record-1", relationName, relationName, sourceLocation, rowRef),
 				false,
 				List.of());
 	}

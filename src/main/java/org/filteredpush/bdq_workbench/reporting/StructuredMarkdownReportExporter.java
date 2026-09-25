@@ -30,8 +30,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.filteredpush.bdq_workbench.model.CanonicalRecord;
 import org.filteredpush.bdq_workbench.model.ExecutionSummary;
@@ -51,7 +49,6 @@ public class StructuredMarkdownReportExporter implements ReportExporter {
 
 	private static final String MULTIRECORD_SENTINEL = "MULTIRECORD";
 	private static final String UNRESOLVED_SENTINEL = "*";
-	private static final Pattern SYNTHETIC_ROW_REF_PATTERN = Pattern.compile("row-(\\d+)");
 
 	/**
 	 * @return {@code "structured"}, the format identifier for this exporter
@@ -203,7 +200,7 @@ public class StructuredMarkdownReportExporter implements ReportExporter {
 		if (rollup != null && !rollup.contributingSubjectRefs().isEmpty()) {
 			builder.append("- Contributing subjects: ")
 					.append(rollup.contributingSubjectRefs().stream()
-							.map(StructuredMarkdownReportExporter::selectorLabel)
+							.map(StructuredSubjectSelectors::selectorLabel)
 							.collect(Collectors.joining(", ")))
 					.append('\n');
 		}
@@ -274,9 +271,9 @@ public class StructuredMarkdownReportExporter implements ReportExporter {
 	 */
 	private static void appendDetailResponse(StringBuilder builder, Response response) {
 		builder.append("- Subject `")
-				.append(escape(response.subjectRef().relationName()))
+				.append(escape(StructuredSubjectSelectors.subjectLabel(response.subjectRef())))
 				.append("` at `")
-				.append(escape(selectorLabel(response.subjectRef())))
+				.append(escape(StructuredSubjectSelectors.selectorLabel(response.subjectRef())))
 				.append("`: ")
 				.append(escape(responseLine(response)))
 				.append('\n');
@@ -359,30 +356,6 @@ public class StructuredMarkdownReportExporter implements ReportExporter {
 	 * @param subjectRef the structured subject reference to render
 	 * @return a concise source-location-plus-selector label
 	 */
-	private static String selectorLabel(SubjectRef subjectRef) {
-		String source = subjectRef.sourceLocation() == null || subjectRef.sourceLocation().isBlank()
-				? "<unknown source>"
-				: subjectRef.sourceLocation();
-		String row = subjectRef.rowRef() == null || subjectRef.rowRef().isBlank()
-				? "<selector unavailable>"
-				: selectorValue(subjectRef.rowRef());
-		return source + "#" + row;
-	}
-
-	/**
-	 * Converts a stored row reference into a row selector string.
-	 *
-	 * @param rowRef the stored provenance row reference
-	 * @return a position-style row selector when possible, otherwise a row-ref selector
-	 */
-	private static String selectorValue(String rowRef) {
-		Matcher matcher = SYNTHETIC_ROW_REF_PATTERN.matcher(rowRef);
-		if (matcher.matches()) {
-			return "row=" + matcher.group(1);
-		}
-		return "rowRef=" + rowRef;
-	}
-
 	/**
 	 * Reports whether a response belongs to a concrete core record section.
 	 *

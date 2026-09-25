@@ -188,11 +188,32 @@ class RdfResponseExporterTest {
         		null,
         		true,
         		List.of(detailOne.subjectRef(), detailTwo.subjectRef()));
+        Response secondRecordDetail = new Response(
+        		"record-2",
+        		"urn:test:structured",
+        		TestType.VALIDATION,
+        		"org.example.StructuredValidator",
+        		"validate",
+        		Phase.POST_AMENDMENT,
+        		Map.of(),
+        		OutcomeStatus.PASSED,
+        		"RUN_HAS_RESULT",
+        		"COMPLIANT",
+        		"third detail",
+        		"third detail",
+        		Map.of(),
+        		Instant.now(),
+        		Instant.now(),
+        		new SubjectRef("record-2", "identification", "identification", "identification.txt", "row-2"),
+        		false,
+        		List.of());
 
         ExecutionSummary summary = new ExecutionSummary(
-        		List.of(detailOne, detailTwo, rollup),
+        		List.of(detailOne, detailTwo, rollup, secondRecordDetail),
         		new ExecutionSummaryMetadata("urn:usecase:1", "Use Case One", "/tmp/input.csv", 3, 1, Map.of(), Map.of()),
-        		new RecordDataset(List.of(new CanonicalRecord("record-1", Map.of("dwc:countryCode", "GL")))));
+        		new RecordDataset(List.of(
+        				new CanonicalRecord("record-1", Map.of("dwc:countryCode", "GL")),
+        				new CanonicalRecord("record-2", Map.of("dwc:countryCode", "CA")))));
 
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         exporter.export(summary, output);
@@ -216,7 +237,18 @@ class RdfResponseExporterTest {
         		  ?source <http://www.w3.org/2000/01/rdf-schema#label> "identification.txt" .
         		  ?selector rdf:value "row=2" .
         		}
-        		""")).isEqualTo(1);
+        		""")).isEqualTo(2);
+
+        assertThat(selectCount(exported, """
+        		PREFIX oa: <http://www.w3.org/ns/oa#>
+        		PREFIX dcterms: <http://purl.org/dc/terms/>
+        		SELECT ?target WHERE {
+        		  ?target oa:hasSource ?source ;
+        		          dcterms:isPartOf ?record .
+        		  ?source <http://www.w3.org/2000/01/rdf-schema#label> "identification.txt" .
+        		  FILTER(?record IN (<urn:bdq-workbench:record:record-1>, <urn:bdq-workbench:record:record-2>))
+        		}
+        		""")).isEqualTo(2);
 
         assertThat(selectCount(exported, """
         		PREFIX bdqwb: <https://github.com/FilteredPush/bdq_workbench/terms/>

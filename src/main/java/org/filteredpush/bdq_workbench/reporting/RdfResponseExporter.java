@@ -33,8 +33,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.apache.jena.rdf.model.Model;
 import org.apache.jena.rdf.model.ModelFactory;
@@ -100,7 +98,6 @@ public class RdfResponseExporter implements ReportExporter {
     private static final String DWC_TERM_KEY_PREFIX = "dwc:";
     private static final String MULTIRECORD_SENTINEL = "MULTIRECORD";
     private static final String UNRESOLVED_SENTINEL = "*";
-    private static final Pattern SYNTHETIC_ROW_REF_PATTERN = Pattern.compile("row-(\\d+)");
 
     private static final Set<String> VALIDATION_ISSUE_MEASURE_STATUSES =
             Set.of("RUN_HAS_RESULT", "INTERNAL_PREREQUISITES_NOT_MET", "EXTERNAL_PREREQUISITES_NOT_MET");
@@ -269,7 +266,7 @@ public class RdfResponseExporter implements ReportExporter {
         resource.addLiteral(model.createProperty(BDQWB, "derived"), response.derived());
         if (response.subjectRef() != null) {
             addSubjectRefMetadata(model, resource, response.subjectRef(), "subjectRef");
-            if (!hasStructuredSelector(response.subjectRef())) {
+            if (!StructuredSubjectSelectors.hasStructuredSelector(response.subjectRef())) {
             	resource.addProperty(
             			model.createProperty(BDQWB, "selectorDiagnostic"),
             			"Structured subject lacked unambiguous source-location and row provenance; exported at core-record granularity.");
@@ -356,15 +353,16 @@ public class RdfResponseExporter implements ReportExporter {
             org.filteredpush.bdq_workbench.model.SubjectRef subjectRef,
             Map<String, CanonicalRecord> recordsById,
             Map<String, Resource> subjectTargets) {
-        if (!hasStructuredSelector(subjectRef)) {
+        if (!StructuredSubjectSelectors.hasStructuredSelector(subjectRef)) {
             return Optional.empty();
         }
-        return Optional.of(subjectTargets.computeIfAbsent(subjectRef.sortKey(), ignored -> {
+        String ownerRecordId = StructuredSubjectSelectors.ownerRecordId(recordId, subjectRef);
+        return Optional.of(subjectTargets.computeIfAbsent(structuredTargetCacheKey(ownerRecordId, subjectRef), ignored -> {
             Resource target = model.createResource()
                 	.addProperty(RDF.type, model.createResource(OA + "SpecificResource"))
                 	.addProperty(RDF.type, model.createResource(BDQWB + "StructuredRecordTarget"));
             addSubjectRefMetadata(model, target, subjectRef, "targetSubjectRef");
-            recordResourceFor(model, recordId, recordsById)
+            recordResourceFor(model, ownerRecordId, recordsById)
                 	.ifPresent(recordResource -> target.addProperty(model.createProperty(DCTERMS, "isPartOf"), recordResource));
 
             Resource source = model.createResource()
@@ -406,34 +404,23 @@ public class RdfResponseExporter implements ReportExporter {
     private Resource buildRowSelector(Model model, org.filteredpush.bdq_workbench.model.SubjectRef subjectRef) {
         Resource selector = model.createResource()
                 .addProperty(RDF.type, model.createResource(OA + "FragmentSelector"))
-                .addProperty(RDF.value, selectorValue(subjectRef.rowRef()));
+                .addProperty(RDF.value, StructuredSubjectSelectors.selectorValue(subjectRef.rowRef()));
         addIfPresent(selector, model.createProperty(BDQWB, "rowRef"), subjectRef.rowRef());
         return selector;
     }
 
     /**
-     * Derives a stable selector fragment from a row reference.
+     * Builds a cache key for one record-scoped structured target.
      *
-     * @param rowRef the stored provenance row reference
-     * @return a row-position fragment when the reference is synthetic, otherwise a row-ref fragment
+     * @param recordId the owning core record ID when known
+     * @param subjectRef the subject reference being rendered
+     * @return the cache key for that record-scoped structured target
      */
-    private String selectorValue(String rowRef) {
-        Matcher matcher = SYNTHETIC_ROW_REF_PATTERN.matcher(rowRef);
-        if (matcher.matches()) {
-            return "row=" + matcher.group(1);
-        }
-        return "rowRef=" + rowRef;
-    }
-
-    /**
-     * Reports whether a subject reference carries enough provenance to mint an unambiguous selector.
-     *
-     * @param subjectRef the subject reference to inspect
-     * @return {@code true} when both source location and row reference are present
-     */
-    private static boolean hasStructuredSelector(org.filteredpush.bdq_workbench.model.SubjectRef subjectRef) {
-        return subjectRef.sourceLocation() != null && !subjectRef.sourceLocation().isBlank()
-                && subjectRef.rowRef() != null && !subjectRef.rowRef().isBlank();
+    private static String structuredTargetCacheKey(
+        	String recordId,
+        	org.filteredpush.bdq_workbench.model.SubjectRef subjectRef) {
+        String owner = recordId == null || recordId.isBlank() ? subjectRef.coreRecordId() : recordId;
+        return (owner == null ? "" : owner) + "\u0002" + subjectRef.sortKey();
     }
 
     /**
