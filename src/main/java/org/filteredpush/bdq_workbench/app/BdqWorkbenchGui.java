@@ -103,6 +103,7 @@ import org.filteredpush.bdq_workbench.rdf_policy.UseCaseXmlParser;
 import org.filteredpush.bdq_workbench.reporting.DetailedResponseStreamExporter;
 import org.filteredpush.bdq_workbench.reporting.RdfResponseExporter;
 import org.filteredpush.bdq_workbench.reporting.ReportingService;
+import org.filteredpush.bdq_workbench.reporting.StructuredMarkdownReportExporter;
 import org.filteredpush.bdq_workbench.reporting.SummaryReportExporter;
 import org.filteredpush.bdq_workbench.reporting.TestResultsSummaryService;
 import org.filteredpush.bdq_workbench.reporting.UnresolvedResponsesExporter;
@@ -1439,7 +1440,8 @@ final class BdqWorkbenchGui {
     /**
      * Builds a {@link WorkbenchFacade} wired with the standard set of services (ingest, RDF
      * policy resolution, classpath test discovery, default test binding, parallel-phase
-     * execution, and the summary/detailed/xls-compatibility/rdf report exporters) for
+     * execution, and the summary/detailed/structured-markdown/xls-compatibility/rdf report
+     * exporters) for
      * {@code config}.
      *
      * @param config application configuration specifying RDF sources, dataset, discovery
@@ -1455,7 +1457,8 @@ final class BdqWorkbenchGui {
     /**
      * Builds a {@link WorkbenchFacade} wired with the standard set of services (ingest, RDF
      * policy resolution, classpath test discovery, default test binding, parallel-phase
-     * execution, and the summary/detailed/xls-compatibility/rdf report exporters) for
+     * execution, and the summary/detailed/structured-markdown/xls-compatibility/rdf report
+     * exporters) for
      * {@code config}.
      *
      * @param config application configuration specifying RDF sources, dataset, discovery
@@ -1477,6 +1480,7 @@ final class BdqWorkbenchGui {
                 new ReportingService(List.of(
                         new SummaryReportExporter(),
                         new DetailedResponseStreamExporter(),
+                        new StructuredMarkdownReportExporter(),
                         new XlsxReportExporter(),
                         new UnresolvedResponsesExporter(),
                         new RdfResponseExporter(config.rdfDefinitions())), reportingProgressListener));

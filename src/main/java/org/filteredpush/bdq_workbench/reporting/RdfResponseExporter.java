@@ -26,12 +26,15 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.apache.jena.rdf.model.Model;
 import org.apache.jena.rdf.model.ModelFactory;
@@ -68,7 +71,10 @@ import org.slf4j.LoggerFactory;
  * the record's {@code dwc:}-prefixed term values from {@link ExecutionSummary#dataset()}, and each
  * response carries a {@code bdqwb:phase} literal (a workbench-local extension property, since
  * execution phase has no equivalent in the ratified ontology) so that a test bound in more than
- * one phase has its responses distinguishable by phase when queried.
+ * one phase has its responses distinguishable by phase when queried. Structured detail responses
+ * additionally target OA-style specific resources backed by source-location and row selectors,
+ * while derived rollups are marked explicitly and linked to the detail responses and subject
+ * targets that contributed to them.
  *
  * <p>Registered under format {@code "rdf"}, written as Turtle to {@code bdq-report-rdf.ttl} (see
  * {@link #fileExtension()}).
@@ -79,6 +85,7 @@ public class RdfResponseExporter implements ReportExporter {
     private static final String BDQFFDQ = "https://rs.tdwg.org/bdqffdq/terms/";
     private static final String DWC = "http://rs.tdwg.org/dwc/terms/";
     private static final String DCTERMS = "http://purl.org/dc/terms/";
+    private static final String OA = "http://www.w3.org/ns/oa#";
     private static final String XSD = "http://www.w3.org/2001/XMLSchema#";
 
     /**
@@ -93,6 +100,7 @@ public class RdfResponseExporter implements ReportExporter {
     private static final String DWC_TERM_KEY_PREFIX = "dwc:";
     private static final String MULTIRECORD_SENTINEL = "MULTIRECORD";
     private static final String UNRESOLVED_SENTINEL = "*";
+    private static final Pattern SYNTHETIC_ROW_REF_PATTERN = Pattern.compile("row-(\\d+)");
 
     private static final Set<String> VALIDATION_ISSUE_MEASURE_STATUSES =
             Set.of("RUN_HAS_RESULT", "INTERNAL_PREREQUISITES_NOT_MET", "EXTERNAL_PREREQUISITES_NOT_MET");
@@ -146,6 +154,7 @@ public class RdfResponseExporter implements ReportExporter {
         model.setNsPrefix("bdqffdq", BDQFFDQ);
         model.setNsPrefix("dwc", DWC);
         model.setNsPrefix("dcterms", DCTERMS);
+        model.setNsPrefix("oa", OA);
         model.setNsPrefix("rdfs", rdfs(""));
         model.setNsPrefix("xsd", XSD);
         model.setNsPrefix("bdqwb", BDQWB);
@@ -164,14 +173,24 @@ public class RdfResponseExporter implements ReportExporter {
 
         Property containsResponse = model.createProperty(BDQFFDQ, "containsResponse");
         Map<ImplementationKey, Resource> implementations = new LinkedHashMap<>();
+        Map<String, Resource> subjectTargets = new LinkedHashMap<>();
+        Map<DetailResponseKey, Resource> detailResponses = new LinkedHashMap<>();
+        List<DerivedResponseLinkage> derivedResponses = new ArrayList<>();
         for (Response response : summary.responses()) {
             Resource implementation = implementations.computeIfAbsent(
                     ImplementationKey.of(response),
                     key -> buildImplementation(model, key));
-            Resource responseResource = buildResponse(model, response, recordsById);
+            Resource responseResource = buildResponse(model, response, recordsById, subjectTargets);
             implementation.addProperty(model.createProperty(BDQFFDQ, "producesResponse"), responseResource);
             reportInstance.addProperty(containsResponse, responseResource);
+            if (!response.derived() && response.subjectRef() != null) {
+            	detailResponses.putIfAbsent(DetailResponseKey.of(response), responseResource);
+            }
+            if (response.derived() && !response.contributingSubjectRefs().isEmpty()) {
+            	derivedResponses.add(new DerivedResponseLinkage(response, responseResource));
+            }
         }
+        linkDerivedResponses(model, derivedResponses, detailResponses, recordsById, subjectTargets);
 
         RDFDataMgr.write(outputStream, model, Lang.TURTLE);
     }
@@ -215,9 +234,14 @@ public class RdfResponseExporter implements ReportExporter {
      * @param response the response to render
      * @param recordsById the run's input records, keyed by ID, used to enrich the response's
      *     record resource with term values
+     * @param subjectTargets cache of structured subject targets already minted in the model
      * @return the new {@code Response} resource
      */
-    private Resource buildResponse(Model model, Response response, Map<String, CanonicalRecord> recordsById) {
+    private Resource buildResponse(
+        	Model model,
+        	Response response,
+        	Map<String, CanonicalRecord> recordsById,
+        	Map<String, Resource> subjectTargets) {
         Resource resource = model.createResource();
         String subtype = subtypeClassFor(response.testType());
         Set<String> allowedStatuses = allowedStatusesFor(response.testType());
@@ -242,10 +266,174 @@ public class RdfResponseExporter implements ReportExporter {
         if (response.phase() != null) {
             resource.addProperty(model.createProperty(BDQWB, "phase"), response.phase().name());
         }
+        resource.addLiteral(model.createProperty(BDQWB, "derived"), response.derived());
+        if (response.subjectRef() != null) {
+            addSubjectRefMetadata(model, resource, response.subjectRef(), "subjectRef");
+            if (!hasStructuredSelector(response.subjectRef())) {
+            	resource.addProperty(
+            			model.createProperty(BDQWB, "selectorDiagnostic"),
+            			"Structured subject lacked unambiguous source-location and row provenance; exported at core-record granularity.");
+            }
+        }
 
-        recordResourceFor(model, response.recordId(), recordsById)
+        resolveTargetResource(model, response, recordsById, subjectTargets)
                 .ifPresent(recordResource -> resource.addProperty(model.createProperty(BDQFFDQ, "appliesTo"), recordResource));
         return resource;
+    }
+
+    /**
+     * Adds explicit rollup/detail linkage for derived core-record responses.
+     *
+     * @param model the model receiving linkage triples
+     * @param derivedResponses derived responses collected during export
+     * @param detailResponses structured detail responses keyed by record/test/phase/subject
+     * @param recordsById the run's input records, keyed by ID
+     * @param subjectTargets cache of structured subject targets already minted in the model
+     */
+    private void linkDerivedResponses(
+            Model model,
+            List<DerivedResponseLinkage> derivedResponses,
+            Map<DetailResponseKey, Resource> detailResponses,
+            Map<String, CanonicalRecord> recordsById,
+            Map<String, Resource> subjectTargets) {
+        Property rollsUpResponse = model.createProperty(BDQWB, "rollsUpResponse");
+        Property contributingSubject = model.createProperty(BDQWB, "contributingSubject");
+        for (DerivedResponseLinkage linkage : derivedResponses) {
+            Response response = linkage.response();
+            for (org.filteredpush.bdq_workbench.model.SubjectRef subjectRef : response.contributingSubjectRefs()) {
+                Resource detailResource = detailResponses.get(new DetailResponseKey(
+                		response.recordId(),
+                		response.testId(),
+                		response.phase(),
+                		subjectRef.sortKey()));
+                if (detailResource != null) {
+                	linkage.resource().addProperty(rollsUpResponse, detailResource);
+                }
+                structuredTargetFor(model, subjectRef.coreRecordId(), subjectRef, recordsById, subjectTargets)
+                		.ifPresent(target -> linkage.resource().addProperty(contributingSubject, target));
+            }
+        }
+    }
+
+    /**
+     * Resolves the resource that a response applies to, preferring a structured subject target when
+     * unambiguous provenance is available and otherwise degrading to the core record resource.
+     *
+     * @param model the model to create resources in
+     * @param response the response being exported
+     * @param recordsById the run's input records, keyed by ID
+     * @param subjectTargets cache of structured subject targets already minted in the model
+     * @return the response target resource, if any
+     */
+    private Optional<Resource> resolveTargetResource(
+            Model model,
+            Response response,
+            Map<String, CanonicalRecord> recordsById,
+            Map<String, Resource> subjectTargets) {
+        if (response.subjectRef() != null) {
+            Optional<Resource> structuredTarget = structuredTargetFor(
+                	model, response.recordId(), response.subjectRef(), recordsById, subjectTargets);
+            if (structuredTarget.isPresent()) {
+                return structuredTarget;
+            }
+        }
+        return recordResourceFor(model, response.recordId(), recordsById);
+    }
+
+    /**
+     * Resolves or mints a structured target resource for one subject reference.
+     *
+     * @param model the model to create resources in
+     * @param recordId the core record ID owning the subject
+     * @param subjectRef the structured subject reference to render
+     * @param recordsById the run's input records, keyed by ID
+     * @param subjectTargets cache of structured subject targets already minted in the model
+     * @return the target resource, or empty when the subject lacks unambiguous selector provenance
+     */
+    private Optional<Resource> structuredTargetFor(
+            Model model,
+            String recordId,
+            org.filteredpush.bdq_workbench.model.SubjectRef subjectRef,
+            Map<String, CanonicalRecord> recordsById,
+            Map<String, Resource> subjectTargets) {
+        if (!hasStructuredSelector(subjectRef)) {
+            return Optional.empty();
+        }
+        return Optional.of(subjectTargets.computeIfAbsent(subjectRef.sortKey(), ignored -> {
+            Resource target = model.createResource()
+                	.addProperty(RDF.type, model.createResource(OA + "SpecificResource"))
+                	.addProperty(RDF.type, model.createResource(BDQWB + "StructuredRecordTarget"));
+            addSubjectRefMetadata(model, target, subjectRef, "targetSubjectRef");
+            recordResourceFor(model, recordId, recordsById)
+                	.ifPresent(recordResource -> target.addProperty(model.createProperty(DCTERMS, "isPartOf"), recordResource));
+
+            Resource source = model.createResource()
+                	.addProperty(model.createProperty(rdfs("label")), subjectRef.sourceLocation());
+            target.addProperty(model.createProperty(OA, "hasSource"), source);
+            target.addProperty(model.createProperty(OA, "hasSelector"), buildRowSelector(model, subjectRef));
+            return target;
+        }));
+    }
+
+    /**
+     * Adds workbench-local metadata describing a structured subject reference.
+     *
+     * @param model the model receiving metadata
+     * @param resource the resource to annotate
+     * @param subjectRef the subject reference to describe
+     * @param prefix the local-name prefix for the emitted properties
+     */
+    private void addSubjectRefMetadata(
+            Model model,
+            Resource resource,
+            org.filteredpush.bdq_workbench.model.SubjectRef subjectRef,
+            String prefix) {
+        resource.addProperty(model.createProperty(BDQWB, prefix + "SortKey"), subjectRef.sortKey());
+        addIfPresent(resource, model.createProperty(BDQWB, prefix + "CoreRecordId"), subjectRef.coreRecordId());
+        addIfPresent(resource, model.createProperty(BDQWB, prefix + "RelationName"), subjectRef.relationName());
+        addIfPresent(resource, model.createProperty(BDQWB, prefix + "SourceTable"), subjectRef.sourceTable());
+        addIfPresent(resource, model.createProperty(BDQWB, prefix + "SourceLocation"), subjectRef.sourceLocation());
+        addIfPresent(resource, model.createProperty(BDQWB, prefix + "RowRef"), subjectRef.rowRef());
+    }
+
+    /**
+     * Builds a W3C-Annotation-style row selector from a subject reference.
+     *
+     * @param model the model to create resources in
+     * @param subjectRef the subject reference whose selector should be rendered
+     * @return a selector resource naming the row or row-ref within the source file
+     */
+    private Resource buildRowSelector(Model model, org.filteredpush.bdq_workbench.model.SubjectRef subjectRef) {
+        Resource selector = model.createResource()
+                .addProperty(RDF.type, model.createResource(OA + "FragmentSelector"))
+                .addProperty(RDF.value, selectorValue(subjectRef.rowRef()));
+        addIfPresent(selector, model.createProperty(BDQWB, "rowRef"), subjectRef.rowRef());
+        return selector;
+    }
+
+    /**
+     * Derives a stable selector fragment from a row reference.
+     *
+     * @param rowRef the stored provenance row reference
+     * @return a row-position fragment when the reference is synthetic, otherwise a row-ref fragment
+     */
+    private String selectorValue(String rowRef) {
+        Matcher matcher = SYNTHETIC_ROW_REF_PATTERN.matcher(rowRef);
+        if (matcher.matches()) {
+            return "row=" + matcher.group(1);
+        }
+        return "rowRef=" + rowRef;
+    }
+
+    /**
+     * Reports whether a subject reference carries enough provenance to mint an unambiguous selector.
+     *
+     * @param subjectRef the subject reference to inspect
+     * @return {@code true} when both source location and row reference are present
+     */
+    private static boolean hasStructuredSelector(org.filteredpush.bdq_workbench.model.SubjectRef subjectRef) {
+        return subjectRef.sourceLocation() != null && !subjectRef.sourceLocation().isBlank()
+                && subjectRef.rowRef() != null && !subjectRef.rowRef().isBlank();
     }
 
     /**
@@ -280,12 +468,26 @@ public class RdfResponseExporter implements ReportExporter {
         }
     }
 
+    /**
+     * Adds a controlled-vocabulary response result when one is present and allowed.
+     *
+     * @param model the model receiving statements
+     * @param resource the response resource being built
+     * @param result the response result value to check
+     * @param allowed the allowed controlled-vocabulary result values for the response type
+     */
     private void addControlledResult(Model model, Resource resource, String result, Set<String> allowed) {
         if (result != null && allowed.contains(result)) {
             resource.addProperty(model.createProperty(BDQFFDQ, "hasResponseResult"), model.createResource(BDQFFDQ + result));
         }
     }
 
+    /**
+     * Serializes amendment outputs to a stable JSON string for RDF export.
+     *
+     * @param amendments the amendment map to serialize
+     * @return the serialized amendment map
+     */
     private String amendmentsAsJson(Map<String, String> amendments) {
         try {
             return objectMapper.writeValueAsString(amendments == null ? Map.of() : amendments);
@@ -295,6 +497,12 @@ public class RdfResponseExporter implements ReportExporter {
         }
     }
 
+    /**
+     * Parses a measurement result as a numeric literal when possible.
+     *
+     * @param value the raw result value
+     * @return the parsed numeric value, or empty when the value is absent or non-numeric
+     */
     private static Optional<Double> tryParseNumeric(String value) {
         if (value == null || value.isBlank()) {
             return Optional.empty();
@@ -341,6 +549,12 @@ public class RdfResponseExporter implements ReportExporter {
         return Optional.of(recordResource);
     }
 
+    /**
+     * Resolves the bdqffdq response subclass corresponding to a test type.
+     *
+     * @param testType the test type to map
+     * @return the bdqffdq response subclass local name, or {@code null} for unknown types
+     */
     private static String subtypeClassFor(TestType testType) {
         return switch (testType) {
             case VALIDATION -> "ValidationResponse";
@@ -351,12 +565,25 @@ public class RdfResponseExporter implements ReportExporter {
         };
     }
 
+    /**
+     * Resolves the controlled-vocabulary response statuses valid for a given test type.
+     *
+     * @param testType the test type to map
+     * @return the allowed response statuses for that type
+     */
     private static Set<String> allowedStatusesFor(TestType testType) {
         return testType == TestType.AMENDMENT ? AMENDMENT_STATUSES
                 : testType == TestType.UNKNOWN ? ALL_KNOWN_STATUSES
                 : VALIDATION_ISSUE_MEASURE_STATUSES;
     }
 
+    /**
+     * Returns the first non-blank string from two candidates.
+     *
+     * @param first the first candidate
+     * @param second the fallback candidate
+     * @return the first non-blank candidate, or {@code null} when both are blank
+     */
     private static String firstNonBlank(String first, String second) {
         if (first != null && !first.isBlank()) {
             return first;
@@ -364,14 +591,40 @@ public class RdfResponseExporter implements ReportExporter {
         return second != null && !second.isBlank() ? second : null;
     }
 
+    /**
+     * Returns the union of two sets while preserving first-seen encounter order.
+     *
+     * @param first the first set
+     * @param second the second set
+     * @return the ordered union of both sets
+     */
     private static Set<String> union(Set<String> first, Set<String> second) {
         LinkedHashSet<String> combined = new LinkedHashSet<>(first);
         combined.addAll(second);
         return Set.copyOf(combined);
     }
 
+    /**
+     * Resolves one RDF Schema namespace IRI.
+     *
+     * @param localName the local name to append to the RDF Schema namespace
+     * @return the full RDF Schema IRI
+     */
     private static String rdfs(String localName) {
         return "http://www.w3.org/2000/01/rdf-schema#" + localName;
+    }
+
+    /**
+     * Adds a literal property only when its value is present.
+     *
+     * @param resource the resource to add the property to
+     * @param property the property to add
+     * @param value the literal value to add when non-blank
+     */
+    private static void addIfPresent(Resource resource, Property property, String value) {
+        if (value != null && !value.isBlank()) {
+        	resource.addProperty(property, value);
+        }
     }
 
     /**
@@ -388,5 +641,32 @@ public class RdfResponseExporter implements ReportExporter {
             return new ImplementationKey(
                     response.testId(), response.testType(), response.implementationClass(), response.implementationMethod());
         }
+    }
+
+    /**
+     * Identity of one structured detail response for rollup linkage.
+     *
+     * @param recordId the core record ID
+     * @param testId the test identifier
+     * @param phase the execution phase
+     * @param subjectSortKey the contributing subject's stable sort key
+     */
+    private record DetailResponseKey(String recordId, String testId, org.filteredpush.bdq_workbench.model.Phase phase, String subjectSortKey) {
+        private static DetailResponseKey of(Response response) {
+            return new DetailResponseKey(
+                    response.recordId(),
+                    response.testId(),
+                    response.phase(),
+                    response.subjectRef().sortKey());
+        }
+    }
+
+    /**
+     * Pair of a derived response and its exported RDF resource for a second-pass linkage step.
+     *
+     * @param response the derived response
+     * @param resource the exported RDF resource representing it
+     */
+    private record DerivedResponseLinkage(Response response, Resource resource) {
     }
 }
