@@ -134,8 +134,9 @@ public class DefaultIngestService implements IngestService {
     }
 
     private RecordDataset ingestThroughView(Path inputPath, String requestedTable, String datasetViewPath) {
-        RelationalIngestResult relational = relationalDatasetIngestor.ingest(inputPath, requestedTable);
         DatasetView view = datasetViewIO.load(Path.of(datasetViewPath));
+        String effectiveTable = view.grainTable().isBlank() ? requestedTable : view.grainTable();
+        RelationalIngestResult relational = relationalDatasetIngestor.ingest(inputPath, effectiveTable);
         datasetViewIO.validateCompatibility(view, relational.schema());
         ViewFlattenResult flattened = viewFlattener.flatten(relational, view);
         logDiagnostics(relational.diagnostics(), flattened.diagnostics());
@@ -154,7 +155,7 @@ public class DefaultIngestService implements IngestService {
         	List<org.filteredpush.bdq_workbench.model.CanonicalRecord> rows = relational.graphs().stream()
         			.map(org.filteredpush.bdq_workbench.model.RecordGraph::core)
         			.toList();
-        	return new RecordDataset(rows);
+            return new RecordDataset(rows, relational.graphs());
         }
         ViewFlattenResult flattened = viewFlattener.flatten(relational, builtIn.get());
         logDiagnostics(relational.diagnostics(), diagnostics, flattened.diagnostics());

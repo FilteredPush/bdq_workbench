@@ -14,6 +14,10 @@ import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import org.filteredpush.bdq_workbench.app.AppException;
+import org.filteredpush.bdq_workbench.model.DatasetView;
+import org.filteredpush.bdq_workbench.model.DatasetViewCardinalityPolicy;
+import org.filteredpush.bdq_workbench.model.DatasetViewJoin;
+import org.filteredpush.bdq_workbench.model.DatasetViewMapping;
 import org.filteredpush.bdq_workbench.model.RecordDataset;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -332,6 +336,66 @@ class DataPackageDialectIngestTest {
 	}
 
 	@Test
+	void relationalIngestInfersOccurrenceToEventRelationshipWithoutDeclaredForeignKey(@TempDir Path tempDir)
+			throws Exception {
+		writeFile(tempDir, "event.csv", StandardCharsets.UTF_8,
+				"eventID,eventDate\nEV-1,2020-01-01\n");
+		writeFile(tempDir, "occurrence.csv", StandardCharsets.UTF_8,
+				"occurrenceID,eventID,scientificName\nocc-1,EV-1,Abies balsamea\n");
+		Path manifest = writeManifest(tempDir, """
+				{
+				  "resources": [
+				    {
+				      "name": "event",
+				      "path": "event.csv",
+				      "schema": {
+				        "fields": [ { "name": "eventID" }, { "name": "eventDate" } ],
+				        "primaryKey": "eventID"
+				      }
+				    },
+				    {
+				      "name": "occurrence",
+				      "path": "occurrence.csv",
+				      "schema": {
+				        "fields": [ { "name": "occurrenceID" }, { "name": "eventID" }, { "name": "scientificName" } ],
+				        "primaryKey": "occurrenceID"
+				      }
+				    }
+				  ]
+				}
+				""");
+
+		RelationalIngestResult relational = new RelationalDatasetIngestor().ingest(manifest, "occurrence");
+
+		assertThat(relational.schema().relationships())
+				.anySatisfy(relationship -> {
+					assertThat(relationship.fromTable()).isEqualTo("occurrence");
+					assertThat(relationship.fromColumn()).isEqualTo("eventID");
+					assertThat(relationship.toTable()).isEqualTo("event");
+					assertThat(relationship.toColumn()).isEqualTo("eventID");
+				});
+		assertThat(relational.graphs()).singleElement().satisfies(graph -> {
+			assertThat(graph.relatedByRelation()).containsKey("event");
+			assertThat(graph.relatedByRelation().get("event")).singleElement()
+					.extracting(row -> row.terms().get("eventDate"))
+					.isEqualTo("2020-01-01");
+		});
+
+		DatasetView view = new DatasetView(
+				"occurrence",
+				relational.schema().schemaFingerprint(),
+				List.of(new DatasetViewJoin("event", "event", DatasetViewCardinalityPolicy.FIRST_ROW)),
+				List.of(
+						new DatasetViewMapping("occurrenceID", "occurrence", "occurrenceID"),
+						new DatasetViewMapping("eventDate", "event", "eventDate")));
+
+		assertThat(new ViewFlattener().flatten(relational, view).dataset().records())
+				.singleElement()
+				.extracting(row -> row.terms().get("eventDate"))
+				.isEqualTo("2020-01-01");
+	}
+
+	@Test
 	void defaultIngestServiceReadsZippedDataPackageWithMultipleTables(@TempDir Path tempDir) throws Exception {
 		Map<String, byte[]> entries = new LinkedHashMap<>();
 		entries.put("datapackage.json", """
@@ -368,6 +432,61 @@ class DataPackageDialectIngestTest {
 
 		assertThat(dataset.records()).hasSize(1);
 		assertThat(dataset.records().get(0).terms()).containsEntry("scientificName", "Abies balsamea");
+	}
+
+	@Test
+	void defaultIngestServiceUsesDatasetViewGrainTableDownstream(@TempDir Path tempDir) throws Exception {
+		writeFile(tempDir, "event.csv", StandardCharsets.UTF_8,
+				"eventID,eventDate\nEV-1,2020-01-01\nEV-2,2020-01-02\n");
+		writeFile(tempDir, "occurrence.csv", StandardCharsets.UTF_8,
+				"occurrenceID,eventID,scientificName\n"
+						+ "occ-1,EV-1,Abies balsamea\n"
+						+ "occ-2,EV-1,Abies balsamea\n"
+						+ "occ-3,EV-2,Picea glauca\n");
+		Path manifest = writeManifest(tempDir, """
+				{
+				  "resources": [
+				    {
+				      "name": "event",
+				      "path": "event.csv",
+				      "schema": {
+				        "fields": [ { "name": "eventID" }, { "name": "eventDate" } ],
+				        "primaryKey": "eventID"
+				      }
+				    },
+				    {
+				      "name": "occurrence",
+				      "path": "occurrence.csv",
+				      "schema": {
+				        "fields": [ { "name": "occurrenceID" }, { "name": "eventID" }, { "name": "scientificName" } ],
+				        "primaryKey": "occurrenceID"
+				      }
+				    }
+				  ]
+				}
+				""");
+
+		RelationalIngestResult relational = new RelationalDatasetIngestor().ingest(manifest, "occurrence");
+		DatasetView view = new DatasetView(
+				"occurrence",
+				relational.schema().schemaFingerprint(),
+				List.of(new DatasetViewJoin("event", "event", DatasetViewCardinalityPolicy.FIRST_ROW)),
+				List.of(
+						new DatasetViewMapping("occurrenceID", "occurrence", "occurrenceID"),
+						new DatasetViewMapping("scientificName", "occurrence", "scientificName"),
+						new DatasetViewMapping("eventDate", "event", "eventDate")));
+		Path viewPath = tempDir.resolve("view.json");
+		new DatasetViewIO().save(viewPath, view);
+
+		RecordDataset dataset = new DefaultIngestService().ingest(manifest, "event", viewPath.toString());
+
+		assertThat(dataset.records()).hasSize(3);
+		assertThat(dataset.records())
+				.extracting(record -> record.terms().get("eventDate"))
+				.containsExactly("2020-01-01", "2020-01-01", "2020-01-02");
+		assertThat(dataset.records())
+				.extracting(record -> record.terms().get("occurrenceID"))
+				.containsExactly("occ-1", "occ-2", "occ-3");
 	}
 
 	/**

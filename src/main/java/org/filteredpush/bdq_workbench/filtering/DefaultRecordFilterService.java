@@ -31,6 +31,7 @@ import org.filteredpush.bdq_workbench.model.DarwinCoreTermResolver;
 import org.filteredpush.bdq_workbench.model.RecordDataset;
 import org.filteredpush.bdq_workbench.model.RecordFilterSpec;
 import org.filteredpush.bdq_workbench.model.RecordFilterSummary;
+import org.filteredpush.bdq_workbench.model.RecordGraph;
 
 /**
  * Applies pre-execution record filters to canonical datasets.
@@ -79,10 +80,21 @@ public class DefaultRecordFilterService implements RecordFilterService {
 		Map<String, List<String>> immutableCriteria = new LinkedHashMap<>();
 		resolvedCriteria.forEach((field, values) -> immutableCriteria.put(field, List.copyOf(values)));
 
-		List<CanonicalRecord> kept = safeDataset.records().stream()
-				.filter(record -> matches(record, immutableCriteria))
+		List<CanonicalRecord> kept = safeDataset.hasStructuredGraphs()
+				? safeDataset.recordGraphs().stream()
+						.filter(graph -> matches(graph, immutableCriteria))
+						.map(org.filteredpush.bdq_workbench.model.RecordGraph::core)
+						.toList()
+				: safeDataset.records().stream()
+						.filter(record -> matches(record, immutableCriteria))
+						.toList();
+		Set<String> keptIds = kept.stream().map(CanonicalRecord::id).collect(java.util.stream.Collectors.toSet());
+		List<RecordGraph> keptGraphs = safeDataset.recordGraphs().stream()
+				.filter(graph -> keptIds.contains(graph.core().id()))
 				.toList();
-		RecordDataset filteredDataset = new RecordDataset(kept);
+		RecordDataset filteredDataset = keptGraphs.isEmpty()
+				? new RecordDataset(kept)
+				: new RecordDataset(kept, keptGraphs);
 		if (kept.isEmpty()) {
 			diagnostics.add("No records matched the configured record filters");
 		}
@@ -115,6 +127,52 @@ public class DefaultRecordFilterService implements RecordFilterService {
 	}
 
 	/**
+	 * Checks whether a structured record graph contains any effective subject whose values satisfy
+	 * every configured field criterion.
+	 *
+	 * @param graph the structured graph to inspect
+	 * @param criteria resolved field criteria keyed by actual dataset field name
+	 * @return {@code true} if the core record itself or any directly related row overlay matches
+	 *     all configured fields
+	 */
+	private static boolean matches(org.filteredpush.bdq_workbench.model.RecordGraph graph, Map<String, List<String>> criteria) {
+		if (matches(graph.core(), criteria)) {
+			return true;
+		}
+		for (List<CanonicalRecord> related : graph.relatedByRelation().values()) {
+			for (CanonicalRecord row : related) {
+				if (matchesOverlay(graph.core(), row, criteria)) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Checks one effective core+related overlay against the configured criteria.
+	 *
+	 * @param core the core row for the graph
+	 * @param related the related row being overlaid onto the core
+	 * @param criteria resolved field criteria keyed by actual dataset field name
+	 * @return {@code true} if the overlaid effective subject matches all configured fields
+	 */
+	private static boolean matchesOverlay(
+			CanonicalRecord core,
+			CanonicalRecord related,
+			Map<String, List<String>> criteria) {
+		for (Map.Entry<String, List<String>> entry : criteria.entrySet()) {
+			String value = related.terms().containsKey(entry.getKey())
+					? related.terms().get(entry.getKey())
+					: core.terms().get(entry.getKey());
+			if (value == null || value.isBlank() || !entry.getValue().contains(value)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
 	 * Collects distinct dataset term names while preserving encounter order.
 	 *
 	 * @param dataset the dataset to inspect
@@ -123,6 +181,8 @@ public class DefaultRecordFilterService implements RecordFilterService {
 	private static Set<String> collectAvailableTerms(RecordDataset dataset) {
 		Set<String> terms = new java.util.LinkedHashSet<>();
 		dataset.records().forEach(record -> terms.addAll(record.terms().keySet()));
+		dataset.recordGraphs().forEach(graph -> graph.relatedByRelation().values().forEach(related ->
+				related.forEach(record -> terms.addAll(record.terms().keySet()))));
 		return terms;
 	}
 }

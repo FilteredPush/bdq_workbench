@@ -29,10 +29,11 @@ import org.filteredpush.bdq_workbench.model.Response;
  * Exports the full, normalized response stream for downstream processing.
  *
  * <p>Writes one tab-delimited line per {@link Response} in the {@link ExecutionSummary},
- * preceded by a header line naming the columns: {@code recordId}, {@code testId},
- * {@code testType}, {@code phase}, {@code responseStatus}, {@code responseResult},
- * {@code comment}, {@code implementation} (the implementation class and method joined by
- * {@code #}), {@code parameters}, and {@code amendments} (the latter two rendered via
+ * preceded by a header line naming the columns: {@code recordId}, {@code subjectRef},
+ * {@code derived}, {@code contributingSubjects}, {@code testId}, {@code testType},
+ * {@code phase}, {@code responseStatus}, {@code responseResult}, {@code comment},
+ * {@code implementation} (the implementation class and method joined by {@code #}),
+ * {@code parameters}, and {@code amendments} (the latter two rendered via
  * {@link java.util.Map#toString()}). Registered under format {@code "responses"}.
  */
 public class DetailedResponseStreamExporter implements ReportExporter {
@@ -57,9 +58,14 @@ public class DetailedResponseStreamExporter implements ReportExporter {
     @Override
     public void export(ExecutionSummary summary, OutputStream outputStream) throws IOException {
         StringBuilder builder = new StringBuilder();
-        builder.append("recordId\ttestId\ttestType\tphase\tresponseStatus\tresponseResult\tcomment\timplementation\tparameters\tamendments\n");
+        builder.append("recordId\tsubjectRef\tderived\tcontributingSubjects\ttestId\ttestType\tphase\tresponseStatus\tresponseResult\tcomment\timplementation\tparameters\tamendments\n");
         for (Response response : summary.responses()) {
             builder.append(value(response.recordId())).append('\t')
+                    .append(value(response.subjectRef() == null ? null : response.subjectRef().sortKey())).append('\t')
+                    .append(Boolean.toString(response.derived())).append('\t')
+                    .append(value(response.contributingSubjectRefs().stream()
+                            .map(org.filteredpush.bdq_workbench.model.SubjectRef::sortKey)
+                            .collect(java.util.stream.Collectors.joining(" | ")))).append('\t')
                     .append(value(response.testId())).append('\t')
                     .append(value(response.testType() == null ? null : response.testType().name())).append('\t')
                     .append(value(response.phase() == null ? null : response.phase().name())).append('\t')

@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import org.filteredpush.bdq_workbench.model.CanonicalRecord;
+import org.filteredpush.bdq_workbench.model.RecordDataset;
 import org.junit.jupiter.api.Test;
 
 class PhaseGroupCacheTest {
@@ -16,7 +17,7 @@ class PhaseGroupCacheTest {
                 new CanonicalRecord("r1", Map.of("country", "Greenland")),
                 new CanonicalRecord("r2", Map.of("country", "Greenland")),
                 new CanonicalRecord("r3", Map.of("country", "Denmark")));
-        PhaseGroupCache cache = new PhaseGroupCache(records);
+        PhaseGroupCache cache = new PhaseGroupCache(new RecordDataset(records));
 
         List<RecordGroup> first = cache.groupsFor(List.of("country"));
         List<RecordGroup> second = cache.groupsFor(List.of("country"));
@@ -30,7 +31,7 @@ class PhaseGroupCacheTest {
         List<CanonicalRecord> records = List.of(
                 new CanonicalRecord("r1", Map.of("country", "Greenland", "stateProvince", "A")),
                 new CanonicalRecord("r2", Map.of("country", "Greenland", "stateProvince", "B")));
-        PhaseGroupCache cache = new PhaseGroupCache(records);
+        PhaseGroupCache cache = new PhaseGroupCache(new RecordDataset(records));
 
         List<RecordGroup> byCountry = cache.groupsFor(List.of("country"));
         List<RecordGroup> byState = cache.groupsFor(List.of("stateProvince"));
@@ -42,7 +43,7 @@ class PhaseGroupCacheTest {
     @Test
     void invalidateDiscardsOnlyPartitionsTouchingChangedFields() {
         List<CanonicalRecord> records = List.of(new CanonicalRecord("r1", Map.of("country", "Greenland", "stateProvince", "A")));
-        PhaseGroupCache cache = new PhaseGroupCache(records);
+        PhaseGroupCache cache = new PhaseGroupCache(new RecordDataset(records));
         List<RecordGroup> byCountry = cache.groupsFor(List.of("country"));
         List<RecordGroup> byState = cache.groupsFor(List.of("stateProvince"));
 
@@ -55,7 +56,7 @@ class PhaseGroupCacheTest {
     @Test
     void invalidateDiscardsAMultiFieldPartitionThatOverlapsAChangedField() {
         List<CanonicalRecord> records = List.of(new CanonicalRecord("r1", Map.of("country", "Greenland", "stateProvince", "A")));
-        PhaseGroupCache cache = new PhaseGroupCache(records);
+        PhaseGroupCache cache = new PhaseGroupCache(new RecordDataset(records));
         List<RecordGroup> combined = cache.groupsFor(List.of("country", "stateProvince"));
 
         cache.invalidate(Set.of("stateProvince"));
@@ -66,7 +67,7 @@ class PhaseGroupCacheTest {
     @Test
     void invalidateWithNoOverlapLeavesCacheUntouched() {
         List<CanonicalRecord> records = List.of(new CanonicalRecord("r1", Map.of("country", "Greenland")));
-        PhaseGroupCache cache = new PhaseGroupCache(records);
+        PhaseGroupCache cache = new PhaseGroupCache(new RecordDataset(records));
         List<RecordGroup> byCountry = cache.groupsFor(List.of("country"));
 
         cache.invalidate(Set.of("eventDate"));
@@ -77,12 +78,12 @@ class PhaseGroupCacheTest {
     @Test
     void invalidateReflectsRecordMutationsMadeAfterTheFirstPartition() {
         CanonicalRecord record = new CanonicalRecord("r1", Map.of("country", "Greenland"));
-        PhaseGroupCache cache = new PhaseGroupCache(List.of(record));
+        PhaseGroupCache cache = new PhaseGroupCache(new RecordDataset(List.of(record)));
         cache.groupsFor(List.of("country"));
 
         record.terms().put("country", "Denmark");
         cache.invalidate(Set.of("country"));
 
-        assertThat(cache.groupsFor(List.of("country")).get(0).representative().terms()).containsEntry("country", "Denmark");
+        assertThat(cache.groupsFor(List.of("country")).get(0).representative().effectiveRecord().terms()).containsEntry("country", "Denmark");
     }
 }

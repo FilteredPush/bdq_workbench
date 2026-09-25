@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.awt.CardLayout;
 import java.lang.reflect.Method;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -64,6 +65,7 @@ class BdqWorkbenchGuiTest {
                 false,
                 List.of())));
 
+        assertThat(model.getValueAt(0, 3)).isEqualTo("BOUND");
         assertThat(model.getValueAt(0, 5)).isEqualTo("example#method");
         model.setValueAt("bdq:limit=25; bdq:flag=true", 0, 7);
         assertThat(model.editedParametersFor("urn:test"))
@@ -85,6 +87,21 @@ class BdqWorkbenchGuiTest {
         BindingReviewTableModel model = new BindingReviewTableModel(List.of(review));
 
         assertThat(model.reviewAt(0)).isEqualTo(review);
+    }
+
+    @Test
+    void bindingReviewTableModelShowsRunnableForMissingInputFallbackBindings() {
+        BindingReviewTableModel model = new BindingReviewTableModel(List.of(new BindingReview(
+                new TestDefinition("urn:test", "Test", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of()),
+                ImplementationStatus.FOUND,
+                BindingStatus.BOUND,
+                ParameterizationCapability.DEFAULT_ONLY,
+                "example#method",
+                Map.of(),
+                true,
+                List.of("Term acted_upon/consulted absent in input data: dwc:eventDate"))));
+
+        assertThat(model.getValueAt(0, 3)).isEqualTo("RUNNABLE");
     }
 
     @Test
@@ -759,6 +776,61 @@ class BdqWorkbenchGuiTest {
 
         assertThat(suggestions).contains("dwc:genus");
         assertThat(suggestions).contains("Choose a dataset field or remove this row.");
+    }
+
+    @Test
+    void canBuildRecordFiltersRequiresSavedViewForRelatedDataset(@TempDir Path tempDir) throws Exception {
+        Method helper = BdqWorkbenchGui.class.getDeclaredMethod("canBuildRecordFilters", String.class, String.class);
+        helper.setAccessible(true);
+        Files.writeString(tempDir.resolve("event.csv"), "eventID,eventDate\nEV-1,2020-01-01\n");
+        Files.writeString(tempDir.resolve("occurrence.csv"),
+			"occurrenceID,eventID,scientificName\nocc-1,EV-1,Abies balsamea\n");
+        Path relationalManifest = tempDir.resolve("datapackage.json");
+        Files.writeString(relationalManifest, """
+			{
+			  "resources": [
+			    {
+			      "name": "event",
+			      "path": "event.csv",
+			      "schema": {
+			        "fields": [ { "name": "eventID" }, { "name": "eventDate" } ],
+			        "primaryKey": "eventID"
+			      }
+			    },
+			    {
+			      "name": "occurrence",
+			      "path": "occurrence.csv",
+			      "schema": {
+			        "fields": [ { "name": "occurrenceID" }, { "name": "eventID" }, { "name": "scientificName" } ],
+			        "primaryKey": "occurrenceID"
+			      }
+			    }
+			  ]
+			}
+			""");
+        Path flatManifest = tempDir.resolve("flat-datapackage.json");
+        Files.writeString(flatManifest, """
+			{
+			  "resources": [
+			    {
+			      "name": "occurrence",
+			      "path": "occurrence.csv",
+			      "schema": {
+			        "fields": [ { "name": "occurrenceID" }, { "name": "eventID" }, { "name": "scientificName" } ],
+			        "primaryKey": "occurrenceID"
+			      }
+			    }
+			  ]
+			}
+			""");
+
+        boolean relationalWithoutView = (boolean) helper.invoke(null, relationalManifest.toString(), "");
+        boolean relationalWithView = (boolean) helper.invoke(null, relationalManifest.toString(), tempDir.resolve("view.json").toString());
+        boolean flatWithoutView = (boolean) helper.invoke(null, flatManifest.toString(), "");
+
+        assertThat(relationalWithoutView).isFalse();
+        assertThat(relationalWithView).isTrue();
+        assertThat(flatWithoutView).isTrue();
     }
 
     @Test

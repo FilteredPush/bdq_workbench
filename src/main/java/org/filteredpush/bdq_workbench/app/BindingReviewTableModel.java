@@ -134,7 +134,7 @@ public class BindingReviewTableModel extends AbstractTableModel {
             case 0 -> row.review.test().label() + " / " + row.review.test().id();
             case 1 -> row.review.test().type().name();
             case 2 -> row.review.implementationStatus().name();
-            case 3 -> row.review.bindingStatus().name();
+            case 3 -> bindingDisplayValue(row.review);
             case 4 -> row.review.parameterizationCapability() == org.filteredpush.bdq_workbench.model.ParameterizationCapability.BOTH
                     ? "PARAMETERIZED_VERSION_AVAILABLE"
                     : row.review.parameterizationCapability().name();
@@ -145,6 +145,37 @@ public class BindingReviewTableModel extends AbstractTableModel {
             case 9 -> row.postAmendmentOutput;
             default -> "";
         };
+    }
+
+    /**
+     * Returns the user-facing binding/input marker shown in the setup table.
+     *
+     * <p>Rows whose information-element terms are all present in the input dataset continue to
+     * show their actual {@link org.filteredpush.bdq_workbench.model.BindingStatus}, while rows
+     * that remain executable only because absent acted-upon/consulted terms were substituted with
+     * empty strings are labeled {@code RUNNABLE} to distinguish them from truly input-bound rows.
+     *
+     * @param review the review row being displayed
+     * @return the setup-table marker for the review
+     */
+    private static String bindingDisplayValue(BindingReview review) {
+        return review.bindingStatus() == org.filteredpush.bdq_workbench.model.BindingStatus.BOUND
+                && hasMissingInputTermWarning(review)
+                        ? "RUNNABLE"
+                        : review.bindingStatus().name();
+    }
+
+    /**
+     * Reports whether a review carries the empty-string fallback warning for an absent Darwin Core
+     * input term.
+     *
+     * @param review the binding review to inspect
+     * @return {@code true} if the review diagnostics show absent acted-upon/consulted terms were
+     *     bound as empty strings
+     */
+    private static boolean hasMissingInputTermWarning(BindingReview review) {
+        return review.diagnostics().stream()
+                .anyMatch(diagnostic -> diagnostic.startsWith("Term acted_upon/consulted absent in input data:"));
     }
 
     /**
