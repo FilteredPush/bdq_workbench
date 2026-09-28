@@ -205,7 +205,7 @@ understanding how the stages connect — read its class Javadoc first. The pipel
    rollups, contributing subjects) now flows through the normalized response stream, the
    tab-delimited detailed export, the RDF/Turtle exporter (which emits OA-style row selectors for
    structured subject targets and explicit rollup→detail links), and the standalone structured
-   Markdown report. The flat XLSX exporter still deliberately projects only core-grain
+   HTML/Markdown reports. The flat XLSX exporter still deliberately projects only core-grain
    rows/derived rollups and ignores structured detail rows.
 
 `WorkbenchFacade.prepare(AppConfig)` runs ingestion → policy resolution → discovery → binding and
@@ -277,8 +277,8 @@ run.
    direct child relations into `RecordGraph`, can flatten them through reusable
    provenance-tracked dataset views, can execute bindings over structured `EvaluationSubject`s
    with subject-grain diagnostics, deduplication, write-back, and VALIDATION/ISSUE rollups, and
-   can report those structured subjects through OA-style RDF row selectors plus a dedicated
-   structured Markdown report. Remaining work is any future ingest/model changes needed if
+   can report those structured subjects through OA-style RDF row selectors plus dedicated
+   structured HTML/Markdown reports. Remaining work is any future ingest/model changes needed if
    datasets require more than the current core + direct-child relation graph, along with richer
    future presentation formats if maintainers want something beyond the current Markdown export.
 

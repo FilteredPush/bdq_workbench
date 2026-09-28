@@ -103,6 +103,7 @@ import org.filteredpush.bdq_workbench.rdf_policy.UseCaseXmlParser;
 import org.filteredpush.bdq_workbench.reporting.DetailedResponseStreamExporter;
 import org.filteredpush.bdq_workbench.reporting.RdfResponseExporter;
 import org.filteredpush.bdq_workbench.reporting.ReportingService;
+import org.filteredpush.bdq_workbench.reporting.StructuredHtmlReportExporter;
 import org.filteredpush.bdq_workbench.reporting.StructuredMarkdownReportExporter;
 import org.filteredpush.bdq_workbench.reporting.SummaryReportExporter;
 import org.filteredpush.bdq_workbench.reporting.TestResultsSummaryService;
@@ -1440,7 +1441,7 @@ final class BdqWorkbenchGui {
     /**
      * Builds a {@link WorkbenchFacade} wired with the standard set of services (ingest, RDF
      * policy resolution, classpath test discovery, default test binding, parallel-phase
-     * execution, and the summary/detailed/structured-markdown/xls-compatibility/rdf report
+     * execution, and the summary/detailed/structured-html/structured-markdown/xls-compatibility/rdf report
      * exporters) for
      * {@code config}.
      *
@@ -1457,7 +1458,7 @@ final class BdqWorkbenchGui {
     /**
      * Builds a {@link WorkbenchFacade} wired with the standard set of services (ingest, RDF
      * policy resolution, classpath test discovery, default test binding, parallel-phase
-     * execution, and the summary/detailed/structured-markdown/xls-compatibility/rdf report
+     * execution, and the summary/detailed/structured-html/structured-markdown/xls-compatibility/rdf report
      * exporters) for
      * {@code config}.
      *
@@ -1480,6 +1481,7 @@ final class BdqWorkbenchGui {
                 new ReportingService(List.of(
                         new SummaryReportExporter(),
                         new DetailedResponseStreamExporter(),
+                        new StructuredHtmlReportExporter(),
                         new StructuredMarkdownReportExporter(),
                         new XlsxReportExporter(),
                         new UnresolvedResponsesExporter(),
