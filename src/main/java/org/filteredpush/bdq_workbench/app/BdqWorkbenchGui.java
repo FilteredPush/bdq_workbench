@@ -139,6 +139,30 @@ import org.slf4j.LoggerFactory;
 final class BdqWorkbenchGui {
     private static final Logger LOG = LoggerFactory.getLogger(BdqWorkbenchGui.class);
     private static final int RECORD_FILTER_SUGGESTION_LIMIT = 20;
+	/** Dataset-view builder dialog's default width. */
+	private static final int DATASET_VIEW_DIALOG_WIDTH = 1240;
+	/** Dataset-view builder dialog's default height. */
+	private static final int DATASET_VIEW_DIALOG_HEIGHT = 820;
+	/** Preferred width of the dataset-view join grid. */
+	private static final int DATASET_VIEW_JOINS_WIDTH = 860;
+	/** Join-grid rows kept visible at the dialog's default size. */
+	private static final int DATASET_VIEW_VISIBLE_JOIN_ROWS = 5;
+	/** Extra height for the join grid's scroll-pane border. */
+	private static final int DATASET_VIEW_SCROLL_PADDING = 6;
+	/** Preferred width of the dataset-view builder's schema/requested-terms tabs. */
+	private static final int DATASET_VIEW_SCHEMA_WIDTH = 300;
+	/** Narrowest preview column width. */
+	private static final int DATASET_VIEW_PREVIEW_MIN_COLUMN_WIDTH = 70;
+	/** Widest preview column width. */
+	private static final int DATASET_VIEW_PREVIEW_MAX_COLUMN_WIDTH = 280;
+	/** Horizontal padding added to a preview column's widest cell. */
+	private static final int DATASET_VIEW_PREVIEW_COLUMN_PADDING = 12;
+	/** Join-grid column holding the include checkbox. */
+	private static final int JOIN_INCLUDE_COLUMN = 0;
+	/** Join-grid column holding the related table name. */
+	private static final int JOIN_TABLE_COLUMN = 1;
+	/** Join-grid column holding the multiplicity-handling policy. */
+	private static final int JOIN_POLICY_COLUMN = 4;
     private static final int FINALIZATION_STAGE_STEP_COUNT = 5;
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
@@ -2115,6 +2139,7 @@ final class BdqWorkbenchGui {
 								: suggester.defaultGrainTable(schema);
 				DatasetView suggested = suggester.suggest(schema, initialGrain, selectedTerms);
 				return new DatasetViewPreview(
+						path,
 						relational,
 						schema,
 						suggested,
@@ -2144,6 +2169,12 @@ final class BdqWorkbenchGui {
 	/**
 	 * Opens the dataset-view builder dialog for one already-profiled relational dataset.
 	 *
+	 * <p>The dialog lists every table related to the chosen grain table together with the
+	 * multiplicity observed in the data and a per-join handling policy
+	 * ({@link DatasetViewCardinalityPolicy}), explained by a legend beneath the join grid. Changing
+	 * the grain table re-reads the relational graphs for that table in the background (cached per
+	 * table), since relationships and multiplicity are measured relative to the grain.
+	 *
 	 * @param frame owner frame
 	 * @param datasetViewField dataset-view path field to update when the user loads or saves a view
 	 * @param previewData prepared relational schema, use-case term scope, and starter suggestion
@@ -2151,10 +2182,13 @@ final class BdqWorkbenchGui {
 	private static void openDatasetViewDialog(JFrame frame, JTextField datasetViewField, DatasetViewPreview previewData) {
 		DatasetViewIO io = new DatasetViewIO();
 		DatasetViewSuggester suggester = new DatasetViewSuggester();
-		RelationalIngestResult relational = previewData.relational();
+		Map<String, RelationalIngestResult> relationalByGrain = new LinkedHashMap<>();
+		relationalByGrain.put(previewData.relational().coreTable().toLowerCase(), previewData.relational());
+		RelationalIngestResult[] relational = {previewData.relational()};
 		DatasetSchema schema = previewData.schema();
 		JTextArea schemaDetails = readOnlyTextArea(renderDatasetViewSchemaText(schema));
 		DatasetView[] currentView = {previewData.suggested()};
+		boolean[] suppressGrainEvents = {false};
 		List<DatasetViewUseCaseScope> scopes = datasetViewScopes(previewData);
 		JComboBox<DatasetViewUseCaseScope> scopeChoice = new JComboBox<>(scopes.toArray(DatasetViewUseCaseScope[]::new));
 		JComboBox<String> grainChoice = new JComboBox<>(schema.tables().stream()
@@ -2163,22 +2197,20 @@ final class BdqWorkbenchGui {
 		grainChoice.setSelectedItem(previewData.suggested().grainTable());
 		JTextArea requestedTermsDetails = readOnlyTextArea("");
 		DefaultTableModel joinsModel = new DefaultTableModel(
-				new Object[] {"Include", "Source table", "Join path", "Multiplicity"}, 0) {
+				new Object[] {"Include", "Related table", "Join path", "Observed rows", "Multiplicity handling"}, 0) {
 			@Override
 			public Class<?> getColumnClass(int columnIndex) {
-				return columnIndex == 0
+				return columnIndex == JOIN_INCLUDE_COLUMN
 						? Boolean.class
-						: columnIndex == 3 ? DatasetViewCardinalityPolicy.class : String.class;
+						: columnIndex == JOIN_POLICY_COLUMN ? DatasetViewCardinalityPolicy.class : String.class;
 			}
 
 			@Override
 			public boolean isCellEditable(int row, int column) {
-				return column == 0 || column == 3;
+				return column == JOIN_INCLUDE_COLUMN || column == JOIN_POLICY_COLUMN;
 			}
 		};
-		JTable joinsTable = new JTable(joinsModel);
-		joinsTable.getColumnModel().getColumn(3).setCellEditor(new DefaultCellEditor(
-				new JComboBox<>(DatasetViewCardinalityPolicy.values())));
+		JTable joinsTable = createDatasetViewJoinsTable(joinsModel);
 		DefaultTableModel mappingsModel = new DefaultTableModel(
 				new Object[] {"Darwin Core term", "Source table", "Source column"}, 0) {
 			@Override
@@ -2201,7 +2233,7 @@ final class BdqWorkbenchGui {
 		JButton refreshPreview = new JButton("Refresh Preview");
 		JButton save = new JButton("Save View...");
 		JButton load = new JButton("Load View...");
-		JPanel controls = new JPanel(new FlowLayout(FlowLayout.LEFT));
+		JPanel controls = new JPanel(new WrapLayout(FlowLayout.LEFT));
 		controls.add(new JLabel("Requested terms"));
 		controls.add(scopeChoice);
 		controls.add(new JLabel("Grain table"));
@@ -2213,56 +2245,80 @@ final class BdqWorkbenchGui {
 		JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT));
 		buttons.add(load);
 		buttons.add(save);
-		JPanel panel = new JPanel(new BorderLayout(8, 8));
-		JPanel mappingPanel = new JPanel(new BorderLayout(6, 6));
-		mappingPanel.add(new JScrollPane(requestedTermsDetails), BorderLayout.NORTH);
-		JSplitPane mappingSplit = new JSplitPane(
-				JSplitPane.VERTICAL_SPLIT,
-				new JScrollPane(joinsTable),
-				new JScrollPane(mappingsTable));
-		mappingSplit.setResizeWeight(0.35d);
-		mappingPanel.add(mappingSplit, BorderLayout.CENTER);
-		JSplitPane upper = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, new JScrollPane(schemaDetails), mappingPanel);
-		upper.setResizeWeight(0.35d);
-		JSplitPane previewSplit = new JSplitPane(
-				JSplitPane.VERTICAL_SPLIT,
-				new JScrollPane(previewTable),
-				new JScrollPane(previewDiagnostics));
-		previewSplit.setResizeWeight(0.75d);
-		JSplitPane layout = new JSplitPane(JSplitPane.VERTICAL_SPLIT, upper, previewSplit);
-		layout.setResizeWeight(0.58d);
-		panel.add(controls, BorderLayout.NORTH);
-		panel.add(layout, BorderLayout.CENTER);
-		panel.add(buttons, BorderLayout.SOUTH);
 		JDialog dialog = new JDialog(frame, "Build Dataset View", true);
-		dialog.setContentPane(panel);
-		dialog.setSize(1200, 760);
+		dialog.setContentPane(layoutDatasetViewDialog(
+				controls, buttons, schemaDetails, requestedTermsDetails, joinsTable, mappingsTable, previewTable,
+				previewDiagnostics));
+		dialog.setSize(DATASET_VIEW_DIALOG_WIDTH, DATASET_VIEW_DIALOG_HEIGHT);
 		dialog.setLocationRelativeTo(frame);
 
+		java.util.function.BiConsumer<String, java.util.function.Consumer<RelationalIngestResult>> withRelational =
+				(grain, action) -> {
+					RelationalIngestResult cached = relationalByGrain.get(grain.toLowerCase());
+					if (cached != null) {
+						action.accept(cached);
+						return;
+					}
+					dialog.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.WAIT_CURSOR));
+					previewDiagnostics.setText("Reading related tables for grain table " + grain + "...");
+					new SwingWorker<RelationalIngestResult, Void>() {
+						@Override
+						protected RelationalIngestResult doInBackground() {
+							return new RelationalDatasetIngestor().ingest(previewData.datasetPath(), grain);
+						}
+
+						@Override
+						protected void done() {
+							dialog.setCursor(java.awt.Cursor.getDefaultCursor());
+							try {
+								RelationalIngestResult result = get();
+								relationalByGrain.put(grain.toLowerCase(), result);
+								action.accept(result);
+							} catch (Exception e) {
+								Throwable cause = e.getCause() == null ? e : e.getCause();
+								previewDiagnostics.setText("Unable to read grain table " + grain + ": " + cause.getMessage());
+							}
+						}
+					}.execute();
+				};
+		java.util.function.Consumer<DatasetView> showView = view -> {
+			RelationalIngestResult result = relational[0];
+			populateDatasetViewJoinRows(joinsModel, suggester, result, view.grainTable(), view);
+			populateDatasetViewMappingRows(
+					mappingsModel,
+					view,
+					((DatasetViewUseCaseScope) scopeChoice.getSelectedItem()).requestedTerms());
+			currentView[0] = view;
+			updateDatasetViewPreview(result, previewTable, previewDiagnostics, view);
+		};
 		Runnable applySuggestedDraft = () -> {
 			DatasetViewUseCaseScope scope = (DatasetViewUseCaseScope) scopeChoice.getSelectedItem();
 			String grain = String.valueOf(grainChoice.getSelectedItem());
 			List<String> requestedTerms = scope == null ? List.of() : scope.requestedTerms();
-			DatasetView suggested = suggester.suggest(schema, grain, requestedTerms);
-			populateDatasetViewJoinRows(joinsModel, suggester, schema, grain, suggested);
-			populateDatasetViewMappingRows(mappingsModel, suggested, requestedTerms);
 			requestedTermsDetails.setText(renderDatasetViewRequestedTermsText(
 					scope == null ? "Selected use case" : scope.label(),
 					scope == null ? List.of() : scope.applicableUseCases(),
 					requestedTerms));
-			currentView[0] = suggested;
-			updateDatasetViewPreview(relational, previewTableModel, previewDiagnostics, currentView[0]);
+			withRelational.accept(grain, result -> {
+				relational[0] = result;
+				schemaDetails.setText(renderDatasetViewSchemaText(result.schema()));
+				showView.accept(suggester.suggest(result.schema(), grain, requestedTerms));
+			});
 		};
 		Runnable refreshFromCurrentDraft = () -> {
 			currentView[0] = buildDatasetViewFromTables(
-					schema,
+					relational[0].schema(),
 					String.valueOf(grainChoice.getSelectedItem()),
 					joinsModel,
 					mappingsModel);
-			updateDatasetViewPreview(relational, previewTableModel, previewDiagnostics, currentView[0]);
+			updateDatasetViewPreview(relational[0], previewTable, previewDiagnostics, currentView[0]);
 		};
 		scopeChoice.addActionListener(e -> applySuggestedDraft.run());
-		grainChoice.addActionListener(e -> applySuggestedDraft.run());
+		grainChoice.addActionListener(e -> {
+			if (!suppressGrainEvents[0]) {
+				applySuggestedDraft.run();
+			}
+		});
 		autoMap.addActionListener(e -> applySuggestedDraft.run());
 		addMapping.addActionListener(e -> mappingsModel.addRow(new Object[] {"", "", ""}));
 		removeMapping.addActionListener(e -> {
@@ -2273,6 +2329,11 @@ final class BdqWorkbenchGui {
 			}
 		});
 		refreshPreview.addActionListener(e -> refreshFromCurrentDraft.run());
+		joinsModel.addTableModelListener(e -> {
+			if (e.getColumn() == JOIN_INCLUDE_COLUMN || e.getColumn() == JOIN_POLICY_COLUMN) {
+				refreshFromCurrentDraft.run();
+			}
+		});
 
 		load.addActionListener(e -> {
 			String selected = chooseFile(frame, "Select dataset view JSON");
@@ -2281,21 +2342,22 @@ final class BdqWorkbenchGui {
 			}
 			try {
 				DatasetView view = io.load(Path.of(selected));
-				io.validateCompatibility(view, schema);
+				suppressGrainEvents[0] = true;
 				grainChoice.setSelectedItem(view.grainTable());
-				populateDatasetViewJoinRows(joinsModel, suggester, schema, view.grainTable(), view);
-				populateDatasetViewMappingRows(
-					mappingsModel,
-					view,
-					((DatasetViewUseCaseScope) scopeChoice.getSelectedItem()).requestedTerms());
-				currentView[0] = view;
-				updateDatasetViewPreview(relational, previewTableModel, previewDiagnostics, currentView[0]);
+				suppressGrainEvents[0] = false;
+				withRelational.accept(view.grainTable(), result -> {
+					try {
+						io.validateCompatibility(view, result.schema());
+						relational[0] = result;
+						schemaDetails.setText(renderDatasetViewSchemaText(result.schema()));
+						showView.accept(view);
+					} catch (AppException ex) {
+						showDatasetViewLoadError(frame, ex);
+					}
+				});
 			} catch (AppException ex) {
-				JOptionPane.showMessageDialog(
-						frame,
-						"Unable to load dataset view: " + ex.getMessage(),
-						"Dataset view load failed",
-						JOptionPane.ERROR_MESSAGE);
+				suppressGrainEvents[0] = false;
+				showDatasetViewLoadError(frame, ex);
 			}
 		});
 		save.addActionListener(e -> {
@@ -2310,6 +2372,154 @@ final class BdqWorkbenchGui {
 		});
 		applySuggestedDraft.run();
 		dialog.setVisible(true);
+	}
+
+	/**
+	 * Lays out the dataset-view builder: schema and requested terms in tabs on the left; the join
+	 * grid (always visible, with its multiplicity-handling legend) above the term mappings on the
+	 * right; and the preview with its diagnostics below.
+	 *
+	 * @param controls the top control row
+	 * @param buttons the bottom button row
+	 * @param schemaDetails the schema description
+	 * @param requestedTermsDetails the requested-terms description
+	 * @param joinsTable the join grid
+	 * @param mappingsTable the term-mapping grid
+	 * @param previewTable the preview grid
+	 * @param previewDiagnostics the preview diagnostics
+	 * @return the dialog's content pane
+	 */
+	private static JPanel layoutDatasetViewDialog(
+			JPanel controls,
+			JPanel buttons,
+			JTextArea schemaDetails,
+			JTextArea requestedTermsDetails,
+			JTable joinsTable,
+			JTable mappingsTable,
+			JTable previewTable,
+			JTextArea previewDiagnostics) {
+		javax.swing.JTabbedPane leftTabs = new javax.swing.JTabbedPane();
+		leftTabs.addTab("Schema", new JScrollPane(schemaDetails));
+		leftTabs.addTab("Requested terms", new JScrollPane(requestedTermsDetails));
+		leftTabs.setPreferredSize(new Dimension(DATASET_VIEW_SCHEMA_WIDTH, leftTabs.getPreferredSize().height));
+
+		JScrollPane joinsScroll = new JScrollPane(joinsTable);
+		joinsScroll.setPreferredSize(new Dimension(
+				DATASET_VIEW_JOINS_WIDTH,
+				joinsTable.getTableHeader().getPreferredSize().height
+						+ joinsTable.getRowHeight() * DATASET_VIEW_VISIBLE_JOIN_ROWS + DATASET_VIEW_SCROLL_PADDING));
+		JPanel joinsPanel = new JPanel(new BorderLayout(4, 4));
+		joinsPanel.setBorder(BorderFactory.createTitledBorder(
+				"Related tables: how multiple related rows per grain record are handled"));
+		joinsPanel.add(joinsScroll, BorderLayout.CENTER);
+		joinsPanel.add(datasetViewPolicyLegend(), BorderLayout.SOUTH);
+
+		JPanel mappingsPanel = new JPanel(new BorderLayout());
+		mappingsPanel.setBorder(BorderFactory.createTitledBorder("Term mappings"));
+		mappingsPanel.add(new JScrollPane(mappingsTable), BorderLayout.CENTER);
+
+		JPanel right = new JPanel(new BorderLayout(6, 6));
+		right.add(joinsPanel, BorderLayout.NORTH);
+		right.add(mappingsPanel, BorderLayout.CENTER);
+
+		JSplitPane upper = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, leftTabs, right);
+		upper.setResizeWeight(0.25d);
+		JPanel previewPanel = new JPanel(new BorderLayout());
+		previewPanel.setBorder(BorderFactory.createTitledBorder(
+				"Preview: grain records, with expanded related rows beneath them"));
+		JSplitPane previewSplit = new JSplitPane(
+				JSplitPane.VERTICAL_SPLIT,
+				new JScrollPane(previewTable),
+				new JScrollPane(previewDiagnostics));
+		previewSplit.setResizeWeight(0.55d);
+		previewPanel.add(previewSplit, BorderLayout.CENTER);
+		JSplitPane layout = new JSplitPane(JSplitPane.VERTICAL_SPLIT, upper, previewPanel);
+		layout.setResizeWeight(0.6d);
+
+		JPanel panel = new JPanel(new BorderLayout(8, 8));
+		panel.add(controls, BorderLayout.NORTH);
+		panel.add(layout, BorderLayout.CENTER);
+		panel.add(buttons, BorderLayout.SOUTH);
+		return panel;
+	}
+
+	/**
+	 * Creates the join grid, rendering each multiplicity-handling policy by its label (with its
+	 * description as a tooltip) and sizing the columns so the policy column is always readable.
+	 *
+	 * @param joinsModel the join grid's model
+	 * @return the configured join grid
+	 */
+	private static JTable createDatasetViewJoinsTable(DefaultTableModel joinsModel) {
+		JTable joinsTable = new JTable(joinsModel);
+		JComboBox<DatasetViewCardinalityPolicy> policyChoice = new JComboBox<>(DatasetViewCardinalityPolicy.values());
+		policyChoice.setRenderer(new javax.swing.DefaultListCellRenderer() {
+			@Override
+			public java.awt.Component getListCellRendererComponent(
+					javax.swing.JList<?> list, Object value, int index, boolean selected, boolean focused) {
+				super.getListCellRendererComponent(list, value, index, selected, focused);
+				if (value instanceof DatasetViewCardinalityPolicy policy) {
+					setText(policy.label());
+					setToolTipText(policy.description());
+				}
+				return this;
+			}
+		});
+		javax.swing.table.TableColumnModel columns = joinsTable.getColumnModel();
+		columns.getColumn(JOIN_POLICY_COLUMN).setCellEditor(new DefaultCellEditor(policyChoice));
+		columns.getColumn(JOIN_POLICY_COLUMN).setCellRenderer(new javax.swing.table.DefaultTableCellRenderer() {
+			@Override
+			protected void setValue(Object value) {
+				if (value instanceof DatasetViewCardinalityPolicy policy) {
+					setText(policy.label() + " ▾");
+					setToolTipText(policy.description());
+				} else {
+					super.setValue(value);
+				}
+			}
+		});
+		int[] widths = {60, 140, 260, 190, 220};
+		for (int column = 0; column < widths.length; column++) {
+			columns.getColumn(column).setPreferredWidth(widths[column]);
+		}
+		joinsTable.setAutoResizeMode(JTable.AUTO_RESIZE_SUBSEQUENT_COLUMNS);
+		return joinsTable;
+	}
+
+	/**
+	 * Builds the always-visible legend explaining each multiplicity-handling policy.
+	 *
+	 * @return the legend component
+	 */
+	private static JTextArea datasetViewPolicyLegend() {
+		StringBuilder legend = new StringBuilder(
+				"Multiplicity handling applies when a grain record has more than one related row:\n");
+		for (DatasetViewCardinalityPolicy policy : DatasetViewCardinalityPolicy.values()) {
+			legend.append("• ").append(policy.name()).append(" — ").append(policy.description()).append('\n');
+		}
+		legend.append("A test whose inputs come from two EXPAND tables cannot run; expand only the tables whose rows "
+				+ "each need testing.");
+		JTextArea area = new JTextArea(legend.toString());
+		area.setEditable(false);
+		area.setLineWrap(true);
+		area.setWrapStyleWord(true);
+		area.setOpaque(false);
+		area.setBorder(BorderFactory.createEmptyBorder(2, 4, 2, 4));
+		return area;
+	}
+
+	/**
+	 * Reports a dataset view that could not be loaded.
+	 *
+	 * @param frame owner frame
+	 * @param error the load failure
+	 */
+	private static void showDatasetViewLoadError(JFrame frame, AppException error) {
+		JOptionPane.showMessageDialog(
+				frame,
+				"Unable to load dataset view: " + error.getMessage(),
+				"Dataset view load failed",
+				JOptionPane.ERROR_MESSAGE);
 	}
 
 	/**
@@ -2434,31 +2644,34 @@ final class BdqWorkbenchGui {
 	}
 
 	/**
-	 * Populates the join table from the schema and the current draft view.
+	 * Populates the join table from the relational schema and the current draft view, showing the
+	 * related-row multiplicity observed for each relation. Relations the draft does not configure
+	 * default to {@link DatasetViewCardinalityPolicy#FIRST_ROW}.
 	 *
 	 * @param joinsModel editable join-table model
 	 * @param suggester schema-based dataset-view suggester
-	 * @param schema discovered schema
+	 * @param relational relational ingest result built for {@code grainTable}
 	 * @param grainTable currently selected grain table
 	 * @param view current draft view
 	 */
 	private static void populateDatasetViewJoinRows(
 			DefaultTableModel joinsModel,
 			DatasetViewSuggester suggester,
-			DatasetSchema schema,
+			RelationalIngestResult relational,
 			String grainTable,
 			DatasetView view) {
 		joinsModel.setRowCount(0);
 		Map<String, DatasetViewJoin> configured = new LinkedHashMap<>();
 		view.joins().forEach(join -> configured.put(join.sourceTable().toLowerCase(), join));
-		for (DatasetViewSuggester.JoinCandidate candidate : suggester.joinCandidates(schema, grainTable)) {
+		for (DatasetViewSuggester.JoinCandidate candidate : suggester.joinCandidates(relational.schema(), grainTable)) {
 			DatasetViewJoin configuredJoin = configured.get(candidate.sourceTable().toLowerCase());
 			joinsModel.addRow(new Object[] {
 					configuredJoin != null,
 					candidate.sourceTable(),
 					candidate.sourceTable() + "." + candidate.sourceColumn()
 							+ " -> " + candidate.targetTable() + "." + candidate.targetColumn(),
-					configuredJoin == null ? DatasetViewCardinalityPolicy.REJECT : configuredJoin.cardinalityPolicy()});
+					DatasetViewDraftPreview.observedMultiplicity(relational, candidate.relationName()),
+					configuredJoin == null ? DatasetViewCardinalityPolicy.FIRST_ROW : configuredJoin.cardinalityPolicy()});
 		}
 	}
 
@@ -2503,11 +2716,11 @@ final class BdqWorkbenchGui {
 			DefaultTableModel mappingsModel) {
 		List<DatasetViewJoin> joins = new ArrayList<>();
 		for (int row = 0; row < joinsModel.getRowCount(); row++) {
-			if (!Boolean.TRUE.equals(joinsModel.getValueAt(row, 0))) {
+			if (!Boolean.TRUE.equals(joinsModel.getValueAt(row, JOIN_INCLUDE_COLUMN))) {
 				continue;
 			}
-			String sourceTable = String.valueOf(joinsModel.getValueAt(row, 1)).trim();
-			Object policy = joinsModel.getValueAt(row, 3);
+			String sourceTable = String.valueOf(joinsModel.getValueAt(row, JOIN_TABLE_COLUMN)).trim();
+			Object policy = joinsModel.getValueAt(row, JOIN_POLICY_COLUMN);
 			if (sourceTable.isBlank() || !(policy instanceof DatasetViewCardinalityPolicy cardinalityPolicy)) {
 				continue;
 			}
@@ -2529,49 +2742,42 @@ final class BdqWorkbenchGui {
 	/**
 	 * Updates the preview table and diagnostics for the current dataset-view draft.
 	 *
-	 * @param relational relational ingest result used for previewing
-	 * @param previewTableModel preview table model to refresh
+	 * @param relational relational ingest result built for the draft's grain table
+	 * @param previewTable preview table to refresh; its model must be a {@link DefaultTableModel}
 	 * @param diagnosticsArea diagnostics area to refresh
 	 * @param view current dataset-view draft
 	 */
 	private static void updateDatasetViewPreview(
 			RelationalIngestResult relational,
-			DefaultTableModel previewTableModel,
+			JTable previewTable,
 			JTextArea diagnosticsArea,
 			DatasetView view) {
-		org.filteredpush.bdq_workbench.ingest.ViewFlattenResult preview =
-				new org.filteredpush.bdq_workbench.ingest.ViewFlattener().flatten(relational, view);
-		java.util.Set<String> columns = new java.util.LinkedHashSet<>();
-		columns.add("recordId");
-		preview.dataset().records().stream().limit(5).forEach(row -> columns.addAll(row.terms().keySet()));
-		previewTableModel.setColumnIdentifiers(columns.toArray());
+		DatasetViewDraftPreview preview = DatasetViewDraftPreview.build(relational, view);
+		DefaultTableModel previewTableModel = (DefaultTableModel) previewTable.getModel();
+		previewTableModel.setColumnIdentifiers(preview.columns().toArray());
 		previewTableModel.setRowCount(0);
-		preview.dataset().records().stream().limit(5).forEach(row -> {
-			List<Object> values = new ArrayList<>();
-			values.add(row.id());
-			columns.stream().skip(1).forEach(column -> values.add(row.terms().getOrDefault(column, "")));
-			previewTableModel.addRow(values.toArray());
-		});
-		diagnosticsArea.setText(renderDatasetViewPreviewDiagnosticsText(preview));
+		preview.rows().forEach(row -> previewTableModel.addRow(row.toArray()));
+		sizeColumnsToContent(previewTable);
+		diagnosticsArea.setText(preview.renderDiagnostics());
+		diagnosticsArea.setCaretPosition(0);
 	}
 
 	/**
-	 * Renders preview diagnostics beneath the preview table.
+	 * Widens each column of a table to fit its header and cells, within fixed bounds.
 	 *
-	 * @param preview current flattening preview
-	 * @return rendered diagnostics
+	 * @param table the table to size
 	 */
-	private static String renderDatasetViewPreviewDiagnosticsText(
-			org.filteredpush.bdq_workbench.ingest.ViewFlattenResult preview) {
-		StringBuilder builder = new StringBuilder();
-		builder.append("Preview rows shown: ").append(Math.min(5, preview.dataset().records().size())).append('\n');
-		if (!preview.diagnostics().isEmpty()) {
-			builder.append("Warnings and diagnostics:\n");
-			preview.diagnostics().forEach(message -> builder.append(" - ").append(message).append('\n'));
-		} else {
-			builder.append("No preview warnings.");
+	private static void sizeColumnsToContent(JTable table) {
+		java.awt.FontMetrics metrics = table.getFontMetrics(table.getFont());
+		for (int column = 0; column < table.getColumnCount(); column++) {
+			int width = metrics.stringWidth(table.getColumnName(column));
+			for (int row = 0; row < table.getRowCount(); row++) {
+				width = Math.max(width, metrics.stringWidth(String.valueOf(table.getValueAt(row, column))));
+			}
+			table.getColumnModel().getColumn(column).setPreferredWidth(Math.max(
+					DATASET_VIEW_PREVIEW_MIN_COLUMN_WIDTH,
+					Math.min(DATASET_VIEW_PREVIEW_MAX_COLUMN_WIDTH, width + DATASET_VIEW_PREVIEW_COLUMN_PADDING)));
 		}
-		return builder.toString();
 	}
 
 	/**
@@ -4313,6 +4519,7 @@ final class BdqWorkbenchGui {
 
 	/** Prepared relational schema and suggestion payload for the dataset-view builder dialog. */
 	private record DatasetViewPreview(
+			Path datasetPath,
 			RelationalIngestResult relational,
 			DatasetSchema schema,
 			DatasetView suggested,
