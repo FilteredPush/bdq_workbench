@@ -32,20 +32,23 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
+import org.filteredpush.bdq_workbench.model.BuiltInMeasureSpec;
 import org.filteredpush.bdq_workbench.model.CanonicalRecord;
 import org.filteredpush.bdq_workbench.model.ExecutionSummary;
+import org.filteredpush.bdq_workbench.model.Phase;
 import org.filteredpush.bdq_workbench.model.Response;
 import org.filteredpush.bdq_workbench.model.SubjectRef;
 
 /**
  * Exports a human-readable HTML report for flat and structured results.
  *
- * <p>The rendered report begins with run metadata and a ranked "high-impact action items" summary,
- * then keeps one top-level section per core record. For flat runs, each test group renders as a
- * simplified single-level summary. For structured runs, each test group renders a
- * core-record-level summary followed by nested detail assertions, including source-row selectors
- * derived from each contributing {@link SubjectRef}. The exporter complements the existing summary,
- * tab-delimited, RDF, XLSX, and Markdown outputs rather than replacing them.
+ * <p>The rendered report begins with run metadata, a ranked "high-impact action items" summary,
+ * and one comparative visualization of any emitted multi-record measures before the per-record
+ * sections. For flat runs, each test group renders as a simplified single-level summary. For
+ * structured runs, each test group renders a core-record-level summary followed by nested detail
+ * assertions, including source-row selectors derived from each contributing {@link SubjectRef}.
+ * The exporter complements the existing summary, tab-delimited, RDF, XLSX, and Markdown outputs
+ * rather than replacing them.
  */
 public class StructuredHtmlReportExporter implements ReportExporter {
 
@@ -115,12 +118,24 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 				.append("    section { margin-bottom: 2rem; }\n")
 				.append("    ul { margin-top: 0.5rem; }\n")
 				.append("    details { margin-top: 0.75rem; }\n")
+				.append("    table { border-collapse: collapse; width: 100%; margin-top: 0.75rem; }\n")
+				.append("    th, td { border: 1px solid #d0d7de; padding: 0.5rem; text-align: left; vertical-align: top; }\n")
+				.append("    th { background: #f6f8fa; }\n")
+				.append("    .measure-track { width: 100%; min-width: 12rem; background: #edf2f7; border-radius: 999px; overflow: hidden; margin-top: 0.25rem; }\n")
+				.append("    .measure-fill { height: 0.9rem; }\n")
+				.append("    .measure-fill.pre { background: #6a1b9a; }\n")
+				.append("    .measure-fill.post { background: #00897b; }\n")
+				.append("    .measure-value { display: block; font-weight: 600; }\n")
+				.append("    .measure-change.positive { color: #0b6e4f; }\n")
+				.append("    .measure-change.negative { color: #b42318; }\n")
+				.append("    .measure-change.neutral { color: #57606a; }\n")
 				.append("  </style>\n")
 				.append("</head>\n")
 				.append("<body>\n")
 				.append("<h1>BDQ Workbench Structured Report</h1>\n");
 		appendRunMetadata(builder, summary, insights);
 		appendHighImpactActionItems(builder, insights);
+		appendMeasureDifferenceVisualization(builder, summary);
 		for (Map.Entry<String, List<Response>> entry : responsesByRecord.entrySet()) {
 			appendRecordSection(builder, entry.getKey(), entry.getValue(), recordsById.get(entry.getKey()));
 		}
@@ -245,6 +260,208 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 		}
 		builder.append("      </ul>\n")
 				.append("    </li>\n");
+	}
+
+	/**
+	 * Appends one HTML visualization section comparing pre-amendment and post-amendment
+	 * multi-record measures.
+	 *
+	 * @param builder the report being built; appended to in place
+	 * @param summary the execution summary supplying measure responses
+	 */
+	private static void appendMeasureDifferenceVisualization(StringBuilder builder, ExecutionSummary summary) {
+		List<MeasureComparison> comparisons = summarizeMeasureComparisons(summary);
+		if (comparisons.isEmpty()) {
+			return;
+		}
+		builder.append("<section>\n")
+				.append("  <h2>Measure differences between pre-amendment and post-amendment phases</h2>\n")
+				.append("  <table>\n")
+				.append("    <thead><tr><th>Measure</th><th>Pre-amendment</th><th>Post-amendment</th><th>Observed change</th></tr></thead>\n")
+				.append("    <tbody>\n");
+		for (MeasureComparison comparison : comparisons) {
+			builder.append("      <tr>\n")
+					.append("        <td>")
+					.append(escapeHtml(comparison.label()))
+					.append("</td>\n")
+					.append("        <td>")
+					.append(renderMeasurePhaseCell(comparison.preText(), comparison.prePercent(), "pre"))
+					.append("</td>\n")
+					.append("        <td>")
+					.append(renderMeasurePhaseCell(comparison.postText(), comparison.postPercent(), "post"))
+					.append("</td>\n")
+					.append("        <td><span class=\"measure-change ")
+					.append(changeCssClass(comparison.deltaPercent()))
+					.append("\">")
+					.append(escapeHtml(comparison.changeText()))
+					.append("</span></td>\n")
+					.append("      </tr>\n");
+		}
+		builder.append("    </tbody>\n")
+				.append("  </table>\n")
+				.append("</section>\n");
+	}
+
+	/**
+	 * Summarizes multi-record measures into one pre/post comparison row per measure.
+	 *
+	 * @param summary the execution summary supplying multi-record measure responses
+	 * @return the ordered measure comparisons to visualize
+	 */
+	private static List<MeasureComparison> summarizeMeasureComparisons(ExecutionSummary summary) {
+		List<MeasureComparison> comparisons = new ArrayList<>();
+		for (Map<Phase, Response> byPhase : summary.multiRecordMeasureResponsesByTestAndPhase().values()) {
+			Response example = byPhase.values().stream().findFirst().orElse(null);
+			if (example == null) {
+				continue;
+			}
+			Response pre = byPhase.get(Phase.PRE_AMENDMENT);
+			Response post = byPhase.get(Phase.POST_AMENDMENT);
+			Integer prePercent = extractMeasurePercentage(pre);
+			Integer postPercent = extractMeasurePercentage(post);
+			comparisons.add(new MeasureComparison(
+					example.parameters().getOrDefault(BuiltInMeasureSpec.MEASURE_LABEL_KEY, example.testId()),
+					renderMeasurePhaseText(pre),
+					prePercent,
+					renderMeasurePhaseText(post),
+					postPercent,
+					renderMeasureChangeText(pre, post, prePercent, postPercent),
+					computeDeltaPercent(prePercent, postPercent)));
+		}
+		comparisons.sort(java.util.Comparator.comparing(MeasureComparison::label, String.CASE_INSENSITIVE_ORDER));
+		return List.copyOf(comparisons);
+	}
+
+	/**
+	 * Renders one measure phase cell, including a percentage bar when a percentage is available.
+	 *
+	 * @param text the textual phase summary
+	 * @param percent the optional percentage value
+	 * @param cssVariant the CSS variant to apply to the percentage fill
+	 * @return the HTML fragment for the phase cell
+	 */
+	private static String renderMeasurePhaseCell(String text, Integer percent, String cssVariant) {
+		StringBuilder builder = new StringBuilder()
+				.append("<span class=\"measure-value\">")
+				.append(escapeHtml(text))
+				.append("</span>");
+		if (percent != null) {
+			builder.append("<div class=\"measure-track\"><div class=\"measure-fill ")
+					.append(cssVariant)
+					.append("\" style=\"width: ")
+					.append(Math.max(0, Math.min(100, percent)))
+					.append("%;\"></div></div>");
+		}
+		return builder.toString();
+	}
+
+	/**
+	 * Renders one measure phase as concise text.
+	 *
+	 * @param response the phase response, or {@code null} if that phase was not run
+	 * @return the textual summary for the phase
+	 */
+	private static String renderMeasurePhaseText(Response response) {
+		if (response == null) {
+			return "not run";
+		}
+		if (BuiltInMeasureSpec.MeasureKind.COUNT.name().equals(response.parameters().get(BuiltInMeasureSpec.KIND_KEY))) {
+			String count = response.parameters().getOrDefault(BuiltInMeasureSpec.MATCHING_COUNT_KEY, response.responseResult());
+			String total = response.parameters().getOrDefault(BuiltInMeasureSpec.TOTAL_RECORDS_KEY, "?");
+			String percentage = response.parameters().get(BuiltInMeasureSpec.PERCENTAGE_KEY);
+			return percentage == null || percentage.isBlank()
+					? count + "/" + total
+					: count + "/" + total + " (" + percentage + "%)";
+		}
+		return firstNonBlank(response.responseResult(), response.responseStatus(), "not run");
+	}
+
+	/**
+	 * Extracts a whole-number percentage for a measure phase when one is available.
+	 *
+	 * @param response the phase response
+	 * @return the rounded percentage, or {@code null} when unavailable
+	 */
+	private static Integer extractMeasurePercentage(Response response) {
+		if (response == null) {
+			return null;
+		}
+		String percentage = response.parameters().get(BuiltInMeasureSpec.PERCENTAGE_KEY);
+		if (percentage == null || percentage.isBlank()) {
+			return null;
+		}
+		try {
+			return (int) Math.round(Double.parseDouble(percentage));
+		} catch (NumberFormatException ignored) {
+			return null;
+		}
+	}
+
+	/**
+	 * Renders one concise change summary for a measure's pre/post pair.
+	 *
+	 * @param pre the pre-amendment response, or {@code null} if not run
+	 * @param post the post-amendment response, or {@code null} if not run
+	 * @param prePercent the rounded pre-amendment percentage, when available
+	 * @param postPercent the rounded post-amendment percentage, when available
+	 * @return the human-readable change summary
+	 */
+	private static String renderMeasureChangeText(
+			Response pre,
+			Response post,
+			Integer prePercent,
+			Integer postPercent) {
+		if (prePercent != null && postPercent != null) {
+			int delta = postPercent - prePercent;
+			if (delta == 0) {
+				return "No percentage-point change";
+			}
+			return (delta > 0 ? "+" : "") + delta + " percentage point(s)";
+		}
+		String preText = renderMeasurePhaseText(pre);
+		String postText = renderMeasurePhaseText(post);
+		return Objects.equals(preText, postText)
+				? "No observed change"
+				: preText + " → " + postText;
+	}
+
+	/**
+	 * Computes the percentage delta for CSS styling when both phases carry percentages.
+	 *
+	 * @param prePercent the rounded pre-amendment percentage, when available
+	 * @param postPercent the rounded post-amendment percentage, when available
+	 * @return the signed delta, or {@code null} when unavailable
+	 */
+	private static Integer computeDeltaPercent(Integer prePercent, Integer postPercent) {
+		return prePercent == null || postPercent == null ? null : postPercent - prePercent;
+	}
+
+	/**
+	 * Chooses the CSS class for one change summary.
+	 *
+	 * @param deltaPercent the signed percentage delta, or {@code null} when unavailable
+	 * @return {@code positive}, {@code negative}, or {@code neutral}
+	 */
+	private static String changeCssClass(Integer deltaPercent) {
+		if (deltaPercent == null || deltaPercent == 0) {
+			return "neutral";
+		}
+		return deltaPercent > 0 ? "positive" : "negative";
+	}
+
+	/**
+	 * Returns the first non-blank string from the supplied candidates.
+	 *
+	 * @param values candidate strings in priority order
+	 * @return the first non-blank value, or the empty string when none are usable
+	 */
+	private static String firstNonBlank(String... values) {
+		for (String value : values) {
+			if (value != null && !value.isBlank()) {
+				return value;
+			}
+		}
+		return "";
 	}
 
 	/**
@@ -566,6 +783,27 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 	 */
 	private static String nullSafe(String raw) {
 		return raw == null ? "" : raw;
+	}
+
+	/**
+	 * One pre/post comparison row for the measure-difference visualization.
+	 *
+	 * @param label the rendered measure label
+	 * @param preText the textual pre-amendment summary
+	 * @param prePercent the rounded pre-amendment percentage, when available
+	 * @param postText the textual post-amendment summary
+	 * @param postPercent the rounded post-amendment percentage, when available
+	 * @param changeText the rendered change summary
+	 * @param deltaPercent the signed percentage delta, when available
+	 */
+	private record MeasureComparison(
+			String label,
+			String preText,
+			Integer prePercent,
+			String postText,
+			Integer postPercent,
+			String changeText,
+			Integer deltaPercent) {
 	}
 
 	/**

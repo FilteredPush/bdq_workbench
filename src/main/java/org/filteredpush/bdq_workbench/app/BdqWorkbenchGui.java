@@ -3261,7 +3261,7 @@ final class BdqWorkbenchGui {
      */
     private static String renderResultSummary(ExecutionSummary summary) {
         return SummaryReportExporter.renderSummaryText("Results summary", summary)
-                + "Saved files: reports/bdq-report-summary.txt, reports/bdq-report-responses.txt, reports/bdq-report-xls.xlsx, reports/bdq-report-xls-unresolved.xlsx, reports/bdq-report-rdf.ttl\n";
+                + "Saved files: reports/bdq-report-summary.txt, reports/bdq-report-responses.txt, reports/bdq-report-structured-html.html, reports/bdq-report-structured.md, reports/bdq-report-xls.xlsx, reports/bdq-report-xls-unresolved.xlsx, reports/bdq-report-rdf.ttl\n";
     }
 
     /**

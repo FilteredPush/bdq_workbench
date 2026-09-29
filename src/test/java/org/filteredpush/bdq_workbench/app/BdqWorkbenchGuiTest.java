@@ -432,6 +432,7 @@ class BdqWorkbenchGuiTest {
         assertThat(text).contains("Pre-amendment: 1/2 (50.0%)");
         assertThat(text).contains("Top filled-in amendment values:");
         assertThat(text).contains("Top amended original -> proposed values:");
+        assertThat(text).contains("Saved files: reports/bdq-report-summary.txt, reports/bdq-report-responses.txt, reports/bdq-report-structured-html.html, reports/bdq-report-structured.md, reports/bdq-report-xls.xlsx, reports/bdq-report-xls-unresolved.xlsx, reports/bdq-report-rdf.ttl");
         assertThat(text).doesNotContain("Phase counts: {");
         assertThat(text).doesNotContain("Response result counts: {");
     }
