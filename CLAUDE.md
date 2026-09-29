@@ -208,6 +208,16 @@ understanding how the stages connect — read its class Javadoc first. The pipel
    HTML/Markdown reports. The flat XLSX exporter still deliberately projects only core-grain
    rows/derived rollups and ignores structured detail rows.
 
+   Both structured reports open with an "Input data view" overview: the view mode (single table,
+   flattened view, or structured view with related-row multiplicity retained), the grain table,
+   each input table's record count, per-relation multiplicity, and which tables were ignored for
+   lacking test bindings. Ingest records this as a `DatasetInputDescription` on `RecordDataset`
+   (built by `DatasetInputDescriber` in `DefaultIngestService`, and carried through record
+   filtering); `InputViewOverview` classifies each table against the run's `ACTED_UPON`/
+   `CONSULTED` bindings, and `InputViewDiagram` draws the HTML report's inline SVG of the tables,
+   their relationships, and the view construction. Keep it an overview — the reports summarize
+   column counts and bound terms, not every column.
+
 `WorkbenchFacade.prepare(AppConfig)` runs ingestion → policy resolution → discovery → binding and
 returns a `PreparedRun` without executing anything — this is what backs the GUI's preflight
 review. `runPrepared(PreparedRun)` executes the bound tests, synthesizes `UNABLE_TO_RUN` responses

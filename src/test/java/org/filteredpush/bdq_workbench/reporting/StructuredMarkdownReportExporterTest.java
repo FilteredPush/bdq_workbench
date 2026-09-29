@@ -201,4 +201,32 @@ class StructuredMarkdownReportExporterTest {
 				false,
 				List.of());
 	}
+
+	@Test
+	void rendersInputViewOverviewWithTableCountsAndIgnoredTables() {
+		String markdown = StructuredMarkdownReportExporter.renderMarkdown(InputViewFixtures.structuredSummary());
+
+		assertThat(markdown).contains("## Input data view\n\n");
+		assertThat(markdown).contains("- View: **Structured view with multiplicity present** — Each row of event");
+		assertThat(markdown).contains("- Grain table: `event` → 2 execution record(s), 2 selected after record filtering\n");
+		assertThat(markdown).contains("- Input tables: 5 (2 used by the view, 2 ignored for lacking test bindings, "
+				+ "1 not included)\n");
+		assertThat(markdown).contains("  - occurrence: 4 related row(s) across 2 of 2 event record(s); 1 had more "
+				+ "than one (max 3), each evaluated separately\n");
+		assertThat(markdown).contains("| `occurrence` | OCCURRENCE | 4 | 3 | joined into view | child of event "
+				+ "(eventID → eventID) | 1 | scientificName |\n");
+		assertThat(markdown).contains("| `audit` | OTHER | 9 | 2 | ignored: no test bindings | not directly related "
+				+ "to event | 0 | none |\n");
+		assertThat(markdown).contains("Ignored in view construction (no test binding reads any of their terms): "
+				+ "`measurement`, `audit`\n");
+		assertThat(markdown.indexOf("## Input data view"))
+				.isLessThan(markdown.indexOf("## High-impact action items"));
+	}
+
+	@Test
+	void notesWhenInputViewWasNotRecorded() {
+		String markdown = StructuredMarkdownReportExporter.renderMarkdown(new ExecutionSummary(List.of()));
+
+		assertThat(markdown).contains("## Input data view\n\n- View: not recorded by ingest\n\n");
+	}
 }

@@ -119,7 +119,31 @@ public class DefaultIngestService implements IngestService {
         return ingestWithOptionalBuiltInView(inputPath, requestedTable);
     }
 
+    /**
+     * Ingests one table directly with the format-specific flat ingestor, recording it as a
+     * single-table input.
+     *
+     * @param inputPath path to the dataset input
+     * @param requestedTable the requested table; blank to let the ingestor choose
+     * @return the flat dataset, carrying a single-table input description
+     */
     private RecordDataset ingestFlat(Path inputPath, String requestedTable) {
+        RecordDataset dataset = readFlat(inputPath, requestedTable);
+        String tableName = requestedTable == null || requestedTable.isBlank()
+                ? inputPath.getFileName().toString()
+                : requestedTable;
+        return dataset.withInputDescription(DatasetInputDescriber.singleTable(tableName, dataset));
+    }
+
+    /**
+     * Dispatches flat ingestion to the ingestor matching the input's format.
+     *
+     * @param inputPath path to the dataset input
+     * @param requestedTable the requested table; blank to let the ingestor choose
+     * @return the flat dataset
+     * @throws AppException if the input's file extension does not match a supported format
+     */
+    private RecordDataset readFlat(Path inputPath, String requestedTable) {
         String fileName = inputPath.getFileName().toString().toLowerCase();
         if (fileName.endsWith(".zip")) {
             if (DataPackageArchiveSupport.isDataPackageArchive(inputPath)) {
@@ -140,7 +164,11 @@ public class DefaultIngestService implements IngestService {
         datasetViewIO.validateCompatibility(view, relational.schema());
         ViewFlattenResult flattened = viewFlattener.flatten(relational, view);
         logDiagnostics(relational.diagnostics(), flattened.diagnostics());
-        return flattened.dataset();
+        return flattened.dataset().withInputDescription(DatasetInputDescriber.flattened(
+                relational,
+                view,
+                "dataset view file " + datasetViewPath,
+                flattened.dataset().records().size()));
     }
 
     private RecordDataset ingestWithOptionalBuiltInView(Path inputPath, String requestedTable) {
@@ -155,11 +183,17 @@ public class DefaultIngestService implements IngestService {
         	List<org.filteredpush.bdq_workbench.model.CanonicalRecord> rows = relational.graphs().stream()
         			.map(org.filteredpush.bdq_workbench.model.RecordGraph::core)
         			.toList();
-            return new RecordDataset(rows, relational.graphs());
+            return new RecordDataset(rows, relational.graphs(), DatasetInputDescriber.structured(
+                    relational,
+                    "automatic relational ingest (no dataset view matched; related rows retained)"));
         }
         ViewFlattenResult flattened = viewFlattener.flatten(relational, builtIn.get());
         logDiagnostics(relational.diagnostics(), diagnostics, flattened.diagnostics());
-        return flattened.dataset();
+        return flattened.dataset().withInputDescription(DatasetInputDescriber.flattened(
+                relational,
+                builtIn.get(),
+                "built-in dataset view",
+                flattened.dataset().records().size()));
     }
 
     private void logDiagnostics(List<String>... groups) {

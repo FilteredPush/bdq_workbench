@@ -33,6 +33,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 import org.filteredpush.bdq_workbench.model.CanonicalRecord;
+import org.filteredpush.bdq_workbench.model.DatasetInputDescription;
 import org.filteredpush.bdq_workbench.model.ExecutionSummary;
 import org.filteredpush.bdq_workbench.model.Response;
 import org.filteredpush.bdq_workbench.model.SubjectRef;
@@ -40,8 +41,10 @@ import org.filteredpush.bdq_workbench.model.SubjectRef;
 /**
  * Exports a human-readable Markdown report for flat and structured results.
  *
- * <p>The rendered report begins with run metadata and a ranked "high-impact action items" summary,
- * then keeps one top-level section per core record. For flat runs, each test group renders as a
+ * <p>The rendered report begins with run metadata, an overview of the input data view (input
+ * tables and their record counts, whether a flattened view or a view with multiplicity was used,
+ * and any tables ignored for lacking test bindings), and a ranked "high-impact action items"
+ * summary, then keeps one top-level section per core record. For flat runs, each test group renders as a
  * single-level summary. For structured runs, each test group renders a core-record-level summary
  * followed by nested detail assertions, including source-row selectors derived from each
  * contributing {@link SubjectRef}. The exporter is additive: it complements the existing summary,
@@ -51,6 +54,8 @@ public class StructuredMarkdownReportExporter implements ReportExporter {
 
 	private static final String MULTIRECORD_SENTINEL = "MULTIRECORD";
 	private static final String UNRESOLVED_SENTINEL = "*";
+	/** The most bound terms named per table in the input-view overview. */
+	private static final int MAX_LISTED_TERMS = 6;
 
 	/**
 	 * @return {@code "structured"}, the format identifier for this exporter
@@ -105,6 +110,7 @@ public class StructuredMarkdownReportExporter implements ReportExporter {
 
 		StringBuilder builder = new StringBuilder("# BDQ Workbench Structured Report\n\n");
 		appendRunMetadata(builder, summary, insights);
+		appendInputView(builder, summary, InputViewOverview.from(summary));
 		appendHighImpactActionItems(builder, insights);
 		for (Map.Entry<String, List<Response>> entry : responsesByRecord.entrySet()) {
 			appendRecordSection(builder, entry.getKey(), entry.getValue(), recordsById.get(entry.getKey()));
@@ -159,6 +165,82 @@ public class StructuredMarkdownReportExporter implements ReportExporter {
 				.append(escape(String.join(" | ", values)))
 				.append('\n'));
 		builder.append('\n');
+	}
+
+	/**
+	 * Appends an overview of the input tables and the view the tests ran over.
+	 *
+	 * @param builder the report being built; appended to in place
+	 * @param summary the execution summary carrying record-selection metadata
+	 * @param overview the input-view overview to render
+	 */
+	private static void appendInputView(StringBuilder builder, ExecutionSummary summary, InputViewOverview overview) {
+		builder.append("## Input data view\n\n");
+		if (!overview.isKnown()) {
+			builder.append("- View: not recorded by ingest\n\n");
+			return;
+		}
+		DatasetInputDescription description = overview.description();
+		builder.append("- View: **")
+				.append(escape(overview.modeLabel()))
+				.append("** — ")
+				.append(escape(overview.modeExplanation()))
+				.append('\n');
+		if (!description.viewSource().isBlank()) {
+			builder.append("- View source: ").append(escape(description.viewSource())).append('\n');
+		}
+		builder.append("- Grain table: `")
+				.append(escape(description.grainTable()))
+				.append("` → ")
+				.append(description.viewRecordCount())
+				.append(" execution record(s), ")
+				.append(summary.metadata().filteredSingleRecordCount())
+				.append(" selected after record filtering\n")
+				.append("- Input tables: ")
+				.append(overview.tables().size())
+				.append(" (")
+				.append(overview.includedTables().size())
+				.append(" used by the view, ")
+				.append(overview.ignoredTables().size())
+				.append(" ignored for lacking test bindings, ")
+				.append(overview.notIncludedTables().size())
+				.append(" not included)\n");
+		List<String> notes = overview.multiplicityNotes();
+		if (!notes.isEmpty()) {
+			builder.append("- Related-row multiplicity:\n");
+			notes.forEach(note -> builder.append("  - ").append(escape(note)).append('\n'));
+		}
+		builder.append('\n')
+				.append("| Table | Row type | Records | Columns | Role in view | Relationship to grain | Tests reading it | Bound terms supplied |\n")
+				.append("|---|---|---:|---:|---|---|---:|---|\n");
+		for (InputViewOverview.TableOverview table : overview.tables()) {
+			builder.append("| `").append(escapeCell(table.name())).append("` | ")
+					.append(escapeCell(table.rowType().isBlank() ? "—" : table.rowType())).append(" | ")
+					.append(table.recordCountLabel()).append(" | ")
+					.append(table.columnCount()).append(" | ")
+					.append(escapeCell(table.role().label())).append(" | ")
+					.append(escapeCell(table.relationToGrain())).append(" | ")
+					.append(table.testCount()).append(" | ")
+					.append(escapeCell(table.suppliedTermsSummary(MAX_LISTED_TERMS))).append(" |\n");
+		}
+		builder.append('\n');
+		if (!overview.ignoredTables().isEmpty()) {
+			builder.append("Ignored in view construction (no test binding reads any of their terms): ")
+					.append(overview.ignoredTables().stream()
+							.map(table -> "`" + escape(table.name()) + "`")
+							.collect(Collectors.joining(", ")))
+					.append("\n\n");
+		}
+	}
+
+	/**
+	 * Escapes text for use inside a Markdown table cell.
+	 *
+	 * @param raw the raw text to escape
+	 * @return the escaped text, with pipes escaped so they do not split the cell
+	 */
+	private static String escapeCell(String raw) {
+		return escape(raw).replace("|", "\\|");
 	}
 
 	/**

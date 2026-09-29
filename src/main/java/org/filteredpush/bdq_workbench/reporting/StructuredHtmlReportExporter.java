@@ -34,6 +34,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import org.filteredpush.bdq_workbench.model.BuiltInMeasureSpec;
 import org.filteredpush.bdq_workbench.model.CanonicalRecord;
+import org.filteredpush.bdq_workbench.model.DatasetInputDescription;
 import org.filteredpush.bdq_workbench.model.ExecutionSummary;
 import org.filteredpush.bdq_workbench.model.Phase;
 import org.filteredpush.bdq_workbench.model.Response;
@@ -42,7 +43,10 @@ import org.filteredpush.bdq_workbench.model.SubjectRef;
 /**
  * Exports a human-readable HTML report for flat and structured results.
  *
- * <p>The rendered report begins with run metadata, a ranked "high-impact action items" summary,
+ * <p>The rendered report begins with run metadata, an overview of the input data view (a diagram
+ * of the input tables, their relationships, and how the execution view was built from them —
+ * flattened, or with related-row multiplicity retained — plus a table of record counts and the
+ * tables ignored for lacking test bindings), a ranked "high-impact action items" summary,
  * and one comparative visualization of any emitted multi-record measures before the per-record
  * sections. For flat runs, each test group renders as a simplified single-level summary. For
  * structured runs, each test group renders a core-record-level summary followed by nested detail
@@ -54,6 +58,8 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 
 	private static final String MULTIRECORD_SENTINEL = "MULTIRECORD";
 	private static final String UNRESOLVED_SENTINEL = "*";
+	/** The most bound terms named per table in the input-view overview. */
+	private static final int MAX_LISTED_TERMS = 6;
 
 	/**
 	 * @return {@code "structured-html"}, the format identifier for this exporter
@@ -129,11 +135,13 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 				.append("    .measure-change.positive { color: #0b6e4f; }\n")
 				.append("    .measure-change.negative { color: #b42318; }\n")
 				.append("    .measure-change.neutral { color: #57606a; }\n")
+				.append(InputViewDiagram.CSS)
 				.append("  </style>\n")
 				.append("</head>\n")
 				.append("<body>\n")
 				.append("<h1>BDQ Workbench Structured Report</h1>\n");
 		appendRunMetadata(builder, summary, insights);
+		appendInputView(builder, summary, InputViewOverview.from(summary));
 		appendHighImpactActionItems(builder, insights);
 		appendMeasureDifferenceVisualization(builder, summary);
 		for (Map.Entry<String, List<Response>> entry : responsesByRecord.entrySet()) {
@@ -194,6 +202,104 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 		}
 		builder.append("  </ul>\n")
 				.append("</section>\n");
+	}
+
+	/**
+	 * Appends an overview of the input tables and the view the tests ran over: a description of
+	 * the view, a diagram of the tables and view construction, and a per-table summary.
+	 *
+	 * @param builder the report being built; appended to in place
+	 * @param summary the execution summary carrying record-selection metadata
+	 * @param overview the input-view overview to render
+	 */
+	private static void appendInputView(StringBuilder builder, ExecutionSummary summary, InputViewOverview overview) {
+		builder.append("<section>\n")
+				.append("  <h2>Input data view</h2>\n");
+		if (!overview.isKnown()) {
+			builder.append("  <p><em>The view used to run the tests was not recorded by ingest.</em></p>\n")
+					.append("</section>\n");
+			return;
+		}
+		DatasetInputDescription description = overview.description();
+		builder.append("  <p><strong>")
+				.append(escapeHtml(overview.modeLabel()))
+				.append(".</strong> ")
+				.append(escapeHtml(overview.modeExplanation()))
+				.append("</p>\n")
+				.append("  <ul>\n");
+		if (!description.viewSource().isBlank()) {
+			builder.append("    <li><strong>View source:</strong> ")
+					.append(escapeHtml(description.viewSource()))
+					.append("</li>\n");
+		}
+		builder.append("    <li><strong>Grain table:</strong> <code>")
+				.append(escapeHtml(description.grainTable()))
+				.append("</code> → ")
+				.append(description.viewRecordCount())
+				.append(" execution record(s), ")
+				.append(summary.metadata().filteredSingleRecordCount())
+				.append(" selected after record filtering</li>\n")
+				.append("    <li><strong>Input tables:</strong> ")
+				.append(overview.tables().size())
+				.append(" (")
+				.append(overview.includedTables().size())
+				.append(" used by the view, ")
+				.append(overview.ignoredTables().size())
+				.append(" ignored for lacking test bindings, ")
+				.append(overview.notIncludedTables().size())
+				.append(" not included)</li>\n");
+		List<String> notes = overview.multiplicityNotes();
+		if (!notes.isEmpty()) {
+			builder.append("    <li><strong>Related-row multiplicity:</strong>\n      <ul>\n");
+			notes.forEach(note -> builder.append("        <li>").append(escapeHtml(note)).append("</li>\n"));
+			builder.append("      </ul>\n    </li>\n");
+		}
+		builder.append("  </ul>\n")
+				.append(InputViewDiagram.render(overview));
+		appendInputTableSummary(builder, overview);
+		if (!overview.ignoredTables().isEmpty()) {
+			builder.append("  <p><strong>Ignored in view construction</strong> (no test binding reads any of their terms): ")
+					.append(overview.ignoredTables().stream()
+							.map(table -> "<code>" + escapeHtml(table.name()) + "</code>")
+							.collect(Collectors.joining(", ")))
+					.append("</p>\n");
+		}
+		builder.append("</section>\n");
+	}
+
+	/**
+	 * Appends the per-table overview grid for the input-view section.
+	 *
+	 * @param builder the report being built; appended to in place
+	 * @param overview the input-view overview to render
+	 */
+	private static void appendInputTableSummary(StringBuilder builder, InputViewOverview overview) {
+		builder.append("  <table>\n")
+				.append("    <thead><tr><th>Table</th><th>Row type</th><th>Records</th><th>Columns</th>")
+				.append("<th>Role in view</th><th>Relationship to grain</th><th>Tests reading it</th>")
+				.append("<th>Bound terms supplied</th></tr></thead>\n")
+				.append("    <tbody>\n");
+		for (InputViewOverview.TableOverview table : overview.tables()) {
+			builder.append("      <tr><td><code>")
+					.append(escapeHtml(table.name()))
+					.append("</code></td><td>")
+					.append(escapeHtml(table.rowType().isBlank() ? "—" : table.rowType()))
+					.append("</td><td>")
+					.append(table.recordCountLabel())
+					.append("</td><td>")
+					.append(table.columnCount())
+					.append("</td><td>")
+					.append(escapeHtml(table.role().label()))
+					.append("</td><td>")
+					.append(escapeHtml(table.relationToGrain()))
+					.append("</td><td>")
+					.append(table.testCount())
+					.append("</td><td>")
+					.append(escapeHtml(table.suppliedTermsSummary(MAX_LISTED_TERMS)))
+					.append("</td></tr>\n");
+		}
+		builder.append("    </tbody>\n")
+				.append("  </table>\n");
 	}
 
 	/**

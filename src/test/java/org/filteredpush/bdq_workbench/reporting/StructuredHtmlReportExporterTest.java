@@ -255,4 +255,49 @@ class StructuredHtmlReportExporterTest {
 				Instant.now(),
 				Instant.now());
 	}
+
+	@Test
+	void rendersInputViewOverviewWithDiagramAndIgnoredTables() {
+		String html = StructuredHtmlReportExporter.renderHtml(InputViewFixtures.structuredSummary());
+
+		assertThat(html).contains("<h2>Input data view</h2>");
+		assertThat(html).contains("<strong>Structured view with multiplicity present.</strong>");
+		assertThat(html).contains("<li><strong>View source:</strong> automatic relational ingest</li>");
+		assertThat(html).contains("<code>event</code> → 2 execution record(s), 2 selected after record filtering");
+		assertThat(html).contains("5 (2 used by the view, 2 ignored for lacking test bindings, 1 not included)");
+		assertThat(html).contains("<svg viewBox=\"0 0 880 ");
+		assertThat(html).contains("<g class=\"vw-box vw-grain\">");
+		assertThat(html).contains("<g class=\"vw-box vw-contrib\">");
+		assertThat(html).contains("<g class=\"vw-box vw-ignored\">");
+		assertThat(html).contains("<g class=\"vw-box vw-notincl\">");
+		assertThat(html).contains("1 : n (max 3) · 1 bound term(s)");
+		assertThat(html).contains("<path class=\"vw-rel\" ");
+		assertThat(html).contains("<path class=\"vw-rel inactive\" ");
+		assertThat(html).contains("rows retained");
+		assertThat(html).contains("<td><code>occurrence</code></td><td>OCCURRENCE</td><td>4</td><td>3</td>"
+				+ "<td>joined into view</td><td>child of event (eventID → eventID)</td><td>1</td>"
+				+ "<td>scientificName</td></tr>");
+		assertThat(html).contains("<strong>Ignored in view construction</strong> (no test binding reads any of their "
+				+ "terms): <code>measurement</code>, <code>audit</code>");
+		assertThat(html.indexOf("<h2>Input data view</h2>"))
+				.isLessThan(html.indexOf("<h2>High-impact action items</h2>"));
+	}
+
+	@Test
+	void rendersFlattenedViewCollapsePolicyOnDiagramArrows() {
+		String html = StructuredHtmlReportExporter.renderHtml(InputViewFixtures.flattenedSummary());
+
+		assertThat(html).contains("<strong>Flattened view.</strong>");
+		assertThat(html).contains(">first row</text>");
+		assertThat(html).contains("related rows collapsed per record");
+		assertThat(html).contains("collapsed by FIRST_ROW");
+	}
+
+	@Test
+	void notesWhenInputViewWasNotRecorded() {
+		String html = StructuredHtmlReportExporter.renderHtml(new ExecutionSummary(List.of()));
+
+		assertThat(html).contains("<p><em>The view used to run the tests was not recorded by ingest.</em></p>");
+		assertThat(html).doesNotContain("<svg");
+	}
 }

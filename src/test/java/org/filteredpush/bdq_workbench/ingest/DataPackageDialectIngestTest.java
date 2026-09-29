@@ -2,6 +2,7 @@ package org.filteredpush.bdq_workbench.ingest;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.Charset;
@@ -14,6 +15,9 @@ import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import org.filteredpush.bdq_workbench.app.AppException;
+import org.filteredpush.bdq_workbench.model.DatasetInputDescription;
+import org.filteredpush.bdq_workbench.model.DatasetInputDescription.InputTable;
+import org.filteredpush.bdq_workbench.model.DatasetInputDescription.ViewMode;
 import org.filteredpush.bdq_workbench.model.DatasetView;
 import org.filteredpush.bdq_workbench.model.DatasetViewCardinalityPolicy;
 import org.filteredpush.bdq_workbench.model.DatasetViewJoin;
@@ -432,6 +436,13 @@ class DataPackageDialectIngestTest {
 
 		assertThat(dataset.records()).hasSize(1);
 		assertThat(dataset.records().get(0).terms()).containsEntry("scientificName", "Abies balsamea");
+		DatasetInputDescription description = dataset.inputDescription();
+		assertThat(description.viewMode()).isEqualTo(ViewMode.FLATTENED);
+		assertThat(description.viewSource()).isEqualTo("built-in dataset view");
+		assertThat(description.grainTable()).isEqualTo("occurrence");
+		assertThat(description.tables())
+				.extracting(InputTable::name, InputTable::recordCount)
+				.containsExactly(tuple("occurrence", 1), tuple("identification", 1));
 	}
 
 	@Test
@@ -487,6 +498,76 @@ class DataPackageDialectIngestTest {
 		assertThat(dataset.records())
 				.extracting(record -> record.terms().get("occurrenceID"))
 				.containsExactly("occ-1", "occ-2", "occ-3");
+		DatasetInputDescription description = dataset.inputDescription();
+		assertThat(description.viewMode()).isEqualTo(ViewMode.FLATTENED);
+		assertThat(description.viewSource()).isEqualTo("dataset view file " + viewPath);
+		assertThat(description.grainTable()).isEqualTo("occurrence");
+		assertThat(description.viewRecordCount()).isEqualTo(3);
+		assertThat(description.tables())
+				.extracting(InputTable::name, InputTable::recordCount)
+				.containsExactly(tuple("event", 2), tuple("occurrence", 3));
+		assertThat(description.grainMappedTerms()).containsExactly("occurrenceID", "scientificName");
+		assertThat(description.viewRelations()).singleElement().satisfies(relation -> {
+			assertThat(relation.sourceTable()).isEqualTo("event");
+			assertThat(relation.cardinalityPolicy()).isEqualTo(DatasetViewCardinalityPolicy.FIRST_ROW);
+			assertThat(relation.coreRecordsWithRows()).isEqualTo(3);
+			assertThat(relation.maxRowsPerCoreRecord()).isEqualTo(1);
+			assertThat(relation.mappedTerms()).containsExactly("eventDate");
+		});
+		assertThat(description.hasObservedMultiplicity()).isFalse();
+	}
+
+	@Test
+	void defaultIngestServiceDescribesStructuredViewWithMultiplicityWhenNoBuiltInViewMatches(@TempDir Path tempDir)
+			throws Exception {
+		writeFile(tempDir, "taxon.csv", StandardCharsets.UTF_8,
+				"taxonID,scientificName\nT-1,Abies balsamea\nT-2,Picea glauca\n");
+		writeFile(tempDir, "vernacular.csv", StandardCharsets.UTF_8,
+				"taxonID,vernacularName\nT-1,balsam fir\nT-1,sapin baumier\nT-2,white spruce\n");
+		Path manifest = writeManifest(tempDir, """
+				{
+				  "resources": [
+				    {
+				      "name": "taxon",
+				      "path": "taxon.csv",
+				      "schema": {
+				        "fields": [ { "name": "taxonID" }, { "name": "scientificName" } ],
+				        "primaryKey": "taxonID"
+				      }
+				    },
+				    {
+				      "name": "vernacular",
+				      "path": "vernacular.csv",
+				      "schema": {
+				        "fields": [ { "name": "taxonID" }, { "name": "vernacularName" } ],
+				        "foreignKeys": [
+				          { "fields": "taxonID", "reference": { "resource": "taxon", "fields": "taxonID" } }
+				        ]
+				      }
+				    }
+				  ]
+				}
+				""");
+
+		RecordDataset dataset = new DefaultIngestService().ingest(manifest, "taxon");
+
+		assertThat(dataset.hasStructuredGraphs()).isTrue();
+		DatasetInputDescription description = dataset.inputDescription();
+		assertThat(description.viewMode()).isEqualTo(ViewMode.STRUCTURED);
+		assertThat(description.grainTable()).isEqualTo("taxon");
+		assertThat(description.viewRecordCount()).isEqualTo(2);
+		assertThat(description.tables())
+				.extracting(InputTable::name, InputTable::recordCount)
+				.containsExactly(tuple("taxon", 2), tuple("vernacular", 3));
+		assertThat(description.viewRelations()).singleElement().satisfies(relation -> {
+			assertThat(relation.sourceTable()).isEqualTo("vernacular");
+			assertThat(relation.cardinalityPolicy()).isNull();
+			assertThat(relation.coreRecordsWithRows()).isEqualTo(2);
+			assertThat(relation.coreRecordsWithMultipleRows()).isEqualTo(1);
+			assertThat(relation.maxRowsPerCoreRecord()).isEqualTo(2);
+			assertThat(relation.relatedRowCount()).isEqualTo(3);
+		});
+		assertThat(description.hasObservedMultiplicity()).isTrue();
 	}
 
 	/**

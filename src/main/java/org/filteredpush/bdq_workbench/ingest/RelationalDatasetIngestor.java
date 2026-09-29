@@ -218,7 +218,10 @@ public class RelationalDatasetIngestor {
 			graphs.add(new RecordGraph(core, relatedByRelation));
 		}
 		String fingerprint = SchemaFingerprint.of(tables, relationships);
-		return new RelationalIngestResult(graphs, new DatasetSchema(tables, relationships, fingerprint), diagnostics);
+		Map<String, Integer> tableRecordCounts = new LinkedHashMap<>();
+		rowsByTable.forEach((table, rows) -> tableRecordCounts.put(table, rows.size()));
+		return new RelationalIngestResult(graphs, new DatasetSchema(tables, relationships, fingerprint), diagnostics,
+				coreTable, tableRecordCounts);
 	}
 
 	/**

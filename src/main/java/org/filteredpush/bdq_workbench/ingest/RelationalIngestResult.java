@@ -19,7 +19,10 @@
  */
 package org.filteredpush.bdq_workbench.ingest;
 
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import org.filteredpush.bdq_workbench.model.DatasetSchema;
 import org.filteredpush.bdq_workbench.model.RecordGraph;
 
@@ -29,17 +32,37 @@ import org.filteredpush.bdq_workbench.model.RecordGraph;
  * @param graphs core-record graphs in deterministic row order
  * @param schema discovered schema metadata and fingerprint
  * @param diagnostics non-fatal ingest diagnostics
+ * @param coreTable the name of the table whose rows became the graphs' core records; {@code ""}
+ *     when not recorded
+ * @param tableRecordCounts the number of rows read from each table, keyed by table name in
+ *     declaration order; empty when not recorded
  */
 public record RelationalIngestResult(
 		List<RecordGraph> graphs,
 		DatasetSchema schema,
-		List<String> diagnostics) {
+		List<String> diagnostics,
+		String coreTable,
+		Map<String, Integer> tableRecordCounts) {
 
 	/**
-	 * Canonical constructor; copies list components defensively.
+	 * Creates a result with no recorded core table name or per-table row counts.
+	 *
+	 * @param graphs core-record graphs in deterministic row order
+	 * @param schema discovered schema metadata and fingerprint
+	 * @param diagnostics non-fatal ingest diagnostics
+	 */
+	public RelationalIngestResult(List<RecordGraph> graphs, DatasetSchema schema, List<String> diagnostics) {
+		this(graphs, schema, diagnostics, "", Map.of());
+	}
+
+	/**
+	 * Canonical constructor; copies list and map components defensively.
 	 */
 	public RelationalIngestResult {
 		graphs = List.copyOf(graphs);
 		diagnostics = List.copyOf(diagnostics);
+		coreTable = coreTable == null ? "" : coreTable;
+		tableRecordCounts = Collections.unmodifiableMap(new LinkedHashMap<>(
+				tableRecordCounts == null ? Map.of() : tableRecordCounts));
 	}
 }
