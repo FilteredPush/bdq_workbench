@@ -43,12 +43,13 @@ import org.filteredpush.bdq_workbench.model.SubjectRef;
  *
  * <p>The rendered report begins with run metadata, an overview of the input data view (input
  * tables and their record counts, whether a flattened view or a view with multiplicity was used,
- * and any tables ignored for lacking test bindings), and a ranked "high-impact action items"
- * summary, then keeps one top-level section per core record. For flat runs, each test group renders as a
- * single-level summary. For structured runs, each test group renders a core-record-level summary
- * followed by nested detail assertions, including source-row selectors derived from each
- * contributing {@link SubjectRef}. The exporter is additive: it complements the existing summary,
- * tab-delimited, RDF, and XLSX outputs rather than replacing them.
+ * and any tables ignored for lacking test bindings), a ranked "high-impact action items" summary,
+ * and a textual list of any multi-record measures whose pre/post values changed, then keeps one
+ * top-level section per core record. For flat runs, each test group renders as a single-level
+ * summary. For structured runs, each test group renders a core-record-level summary followed by
+ * nested detail assertions, including source-row selectors derived from each contributing
+ * {@link SubjectRef}. The exporter is additive: it complements the existing summary, tab-delimited,
+ * RDF, and XLSX outputs rather than replacing them.
  */
 public class StructuredMarkdownReportExporter implements ReportExporter {
 
@@ -112,6 +113,7 @@ public class StructuredMarkdownReportExporter implements ReportExporter {
 		appendRunMetadata(builder, summary, insights);
 		appendInputView(builder, summary, InputViewOverview.from(summary));
 		appendHighImpactActionItems(builder, insights);
+		appendMeasureDifferences(builder, summary);
 		for (Map.Entry<String, List<Response>> entry : responsesByRecord.entrySet()) {
 			appendRecordSection(builder, entry.getKey(), entry.getValue(), recordsById.get(entry.getKey()));
 		}
@@ -303,6 +305,34 @@ public class StructuredMarkdownReportExporter implements ReportExporter {
 					.append(insight.recordCount())
 					.append(" record(s)\n");
 		}
+	}
+
+	/**
+	 * Appends a textual summary of measures whose pre- and post-amendment values changed.
+	 *
+	 * @param builder the report being built; appended to in place
+	 * @param summary the execution summary supplying multi-record measure responses
+	 */
+	private static void appendMeasureDifferences(StringBuilder builder, ExecutionSummary summary) {
+		List<StructuredMeasureComparisons.MeasureComparison> changed = StructuredMeasureComparisons.summarize(summary).stream()
+				.filter(StructuredMeasureComparisons.MeasureComparison::changed)
+				.toList();
+		if (changed.isEmpty()) {
+			return;
+		}
+		builder.append("## Measures with pre/post differences\n\n");
+		for (StructuredMeasureComparisons.MeasureComparison comparison : changed) {
+			builder.append("- ")
+					.append(escape(comparison.label()))
+					.append(": ")
+					.append(escape(comparison.preText()))
+					.append(" -> ")
+					.append(escape(comparison.postText()))
+					.append(" (")
+					.append(escape(comparison.changeText()))
+					.append(")\n");
+		}
+		builder.append('\n');
 	}
 
 	/**

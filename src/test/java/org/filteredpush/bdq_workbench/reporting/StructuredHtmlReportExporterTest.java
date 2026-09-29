@@ -93,9 +93,23 @@ class StructuredHtmlReportExporterTest {
 				"3",
 				"4",
 				"75.0");
+		Response unchangedPreMeasure = measureResponse(
+				"urn:test:unchanged",
+				"Count complete dates",
+				Phase.PRE_AMENDMENT,
+				"4",
+				"4",
+				"100.0");
+		Response unchangedPostMeasure = measureResponse(
+				"urn:test:unchanged",
+				"Count complete dates",
+				Phase.POST_AMENDMENT,
+				"4",
+				"4",
+				"100.0");
 
 		ExecutionSummary summary = new ExecutionSummary(
-				List.of(detailOne, detailTwo, rollup, issue, amendment, preMeasure, postMeasure),
+				List.of(detailOne, detailTwo, rollup, issue, amendment, preMeasure, postMeasure, unchangedPreMeasure, unchangedPostMeasure),
 				new ExecutionSummaryMetadata(
 						"urn:usecase:1",
 						"Use Case One",
@@ -131,10 +145,14 @@ class StructuredHtmlReportExporterTest {
 		assertThat(report).contains("Coordinates valid — Missing coordinates — 1 response(s) across 1 record(s)");
 		assertThat(report).contains("Fill missing coordinates: dwc:decimalLatitude → 42.0 — 1 response(s) across 1 record(s)");
 		assertThat(report).contains("<h2>Measure differences between pre-amendment and post-amendment phases</h2>");
+		assertThat(report).contains("<h3>Measures with differences</h3>");
+		assertThat(report).contains("<h3>Measures with no differences</h3>");
 		assertThat(report).contains("Count compliant coordinates");
 		assertThat(report).contains("1/4 (25.0%)");
 		assertThat(report).contains("3/4 (75.0%)");
 		assertThat(report).contains("+50 percentage point(s)");
+		assertThat(report).contains("Count complete dates");
+		assertThat(report).contains("No percentage-point change");
 		assertThat(report).contains("class=\"measure-fill pre\" style=\"width: 25%;\"");
 		assertThat(report).contains("class=\"measure-fill post\" style=\"width: 75%;\"");
 		assertThat(report).contains("<h2>Record <code>record-1</code></h2>");
