@@ -230,6 +230,16 @@ Reports include:
 - `reports/bdq-report-xls.xlsx` Spreadsheet report produced via kurator-ffdq's `XLSXPostProcessor` (see below).
 - `reports/bdq-report-xls-unresolved.xlsx` Spreadsheet companion listing unresolved, unbound, and other sentinel-record responses excluded from the main per-record workbook.
 
+The structured HTML and Markdown reports are quality-control summaries sized for real datasets:
+records with quality for the use case (all multi-record QA measures COMPLETE), a per-test table of
+problems before and after amendment, information elements empty in every record, proposed
+amendments ranked by how many records they affect, and a capped list of records needing
+attention. Tests are named by their labels, and records by values from the original data —
+`institutionCode:collectionCode:catalogNumber` (or dataset and catalog number) plus the data file
+and line within the archive or package. Report headers, and the text summary, state any results
+with external prerequisites not met. The full per-record results remain in the spreadsheet and
+the response list (`bdq-report-responses.txt`, which leads with record and test label columns).
+
 The input is checked for the record-level markers of the BDQ
 [Guide to Marking and Identifying Synthetic and Modified Data](https://rs.tdwg.org/bdq/doc/synthetic/):
 `collectionCode` "Synthetic Example" / "Modified Example", the guide's two `collectionID` UUIDs,

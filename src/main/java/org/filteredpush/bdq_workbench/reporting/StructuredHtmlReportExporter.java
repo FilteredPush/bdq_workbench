@@ -23,20 +23,12 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
 import java.util.stream.Collectors;
-import org.filteredpush.bdq_workbench.model.CanonicalRecord;
 import org.filteredpush.bdq_workbench.model.DatasetInputDescription;
 import org.filteredpush.bdq_workbench.model.ExecutionSummary;
-import org.filteredpush.bdq_workbench.model.Response;
-import org.filteredpush.bdq_workbench.model.SubjectRef;
+import org.filteredpush.bdq_workbench.model.TestType;
 import org.filteredpush.bdq_workbench.model.SyntheticDataMarkers;
 
 /**
@@ -55,8 +47,6 @@ import org.filteredpush.bdq_workbench.model.SyntheticDataMarkers;
  */
 public class StructuredHtmlReportExporter implements ReportExporter {
 
-	private static final String MULTIRECORD_SENTINEL = "MULTIRECORD";
-	private static final String UNRESOLVED_SENTINEL = "*";
 	/** Height, in pixels, of one dumbbell-chart row's plot. */
 	private static final int MEASURE_ROW_HEIGHT = 26;
 	/** Radius, in pixels, of a dumbbell-chart marker. */
@@ -136,22 +126,7 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 	 * @return the rendered HTML report
 	 */
 	public static String renderHtml(ExecutionSummary summary) {
-		StructuredReportInsights insights = StructuredReportInsights.from(summary);
-		Map<String, CanonicalRecord> recordsById = summary.dataset().records().stream()
-				.collect(Collectors.toMap(CanonicalRecord::id, record -> record, (left, right) -> left, LinkedHashMap::new));
-		Map<String, List<Response>> responsesByRecord = new LinkedHashMap<>();
-		for (String recordId : orderedRecordIds(summary, recordsById.keySet())) {
-			responsesByRecord.put(recordId, new ArrayList<>());
-		}
-		List<Response> aggregateResponses = new ArrayList<>();
-		for (Response response : summary.responses()) {
-			if (isPerRecordResponse(response)) {
-				responsesByRecord.computeIfAbsent(response.recordId(), ignored -> new ArrayList<>()).add(response);
-			} else {
-				aggregateResponses.add(response);
-			}
-		}
-
+		ReportDigest digest = ReportDigest.from(summary);
 		StringBuilder builder = new StringBuilder()
 				.append("<!DOCTYPE html>\n")
 				.append("<html lang=\"en\">\n")
@@ -168,6 +143,10 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 				.append("    th, td { border: 1px solid #d0d7de; padding: 0.5rem; text-align: left; vertical-align: top; }\n")
 				.append("    th { background: #f6f8fa; }\n")
 				.append(MEASURE_CHART_CSS)
+				.append("    .data-notice { border: 2px solid #9a6700; background: #fff8c5; color: #1f2328; padding: 0.6rem 1rem;"
+						+ " border-radius: 6px; margin: 1rem 0; }\n")
+				.append("    .muted { color: #57606a; }\n")
+				.append("    td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }\n")
 				.append("    .data-warning { border: 2px solid #b42318; background: #fef3f2; color: #1f2328; padding: 0.75rem 1rem;"
 						+ " border-radius: 6px; margin: 1rem 0; }\n")
 				.append(InputViewDiagram.CSS)
@@ -176,14 +155,16 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 				.append("<body>\n")
 				.append("<h1>BDQ Workbench Structured Report</h1>\n");
 		appendSyntheticDataWarning(builder, summary);
-		appendRunMetadata(builder, summary, insights);
+		appendExternalPrerequisitesNotice(builder, digest);
+		appendRunMetadata(builder, summary, digest);
 		appendInputView(builder, summary, InputViewOverview.from(summary));
-		appendHighImpactActionItems(builder, insights);
+		appendQualitySection(builder, digest);
+		appendTestFindings(builder, digest);
+		appendEmptyTerms(builder, digest);
+		appendAmendments(builder, digest);
 		appendMeasureDifferenceVisualization(builder, summary);
-		for (Map.Entry<String, List<Response>> entry : responsesByRecord.entrySet()) {
-			appendRecordSection(builder, entry.getKey(), entry.getValue(), recordsById.get(entry.getKey()));
-		}
-		appendAggregateSection(builder, aggregateResponses);
+		appendRecordsNeedingAttention(builder, digest);
+		appendTestsUnableToRun(builder, digest);
 		builder.append("</body>\n</html>\n");
 		return builder.toString();
 	}
@@ -212,12 +193,12 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 	 *
 	 * @param builder the report being built; appended to in place
 	 * @param summary the execution summary carrying run metadata
-	 * @param insights derived timing and impact metadata for the run
+	 * @param digest the run's condensed findings
 	 */
 	private static void appendRunMetadata(
 			StringBuilder builder,
 			ExecutionSummary summary,
-			StructuredReportInsights insights) {
+			ReportDigest digest) {
 		builder.append("<section>\n")
 				.append("  <h2>Run metadata</h2>\n")
 				.append("  <ul>\n")
@@ -230,11 +211,17 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 				.append("    <li><strong>Synthetic or modified example data:</strong> ")
 				.append(escapeHtml(summary.dataset().inputDescription().syntheticMarkers().summaryLine()))
 				.append("</li>\n")
+				.append("    <li><strong>Records with quality for this use case:</strong> ")
+				.append(escapeHtml(digest.qualityLine()))
+				.append("</li>\n")
+				.append("    <li><strong>External prerequisites not met:</strong> ")
+				.append(escapeHtml(digest.externalPrerequisiteLine()))
+				.append("</li>\n")
 				.append("    <li><strong>Run started:</strong> ")
-				.append(escapeHtml(formatInstant(insights.runStartedAt())))
+				.append(escapeHtml(formatInstant(digest.runStartedAt())))
 				.append("</li>\n")
 				.append("    <li><strong>Run finished:</strong> ")
-				.append(escapeHtml(formatInstant(insights.runFinishedAt())))
+				.append(escapeHtml(formatInstant(digest.runFinishedAt())))
 				.append("</li>\n")
 				.append("    <li><strong>Records selected for execution:</strong> ")
 				.append(summary.metadata().filteredSingleRecordCount())
@@ -361,69 +348,241 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 	}
 
 	/**
-	 * Appends the high-impact improvement summary before record-by-record details.
+	 * Appends a notice when some results could not be determined for want of an external resource.
 	 *
 	 * @param builder the report being built; appended to in place
-	 * @param insights the ranked improvement cues to render
+	 * @param digest the run's condensed findings
 	 */
-	private static void appendHighImpactActionItems(
-			StringBuilder builder,
-			StructuredReportInsights insights) {
-		builder.append("<section>\n")
-				.append("  <h2>High-impact action items</h2>\n")
-				.append("  <ul>\n")
-				.append("    <li><strong>Review issue findings:</strong> ")
-				.append(insights.confirmedIssueCount())
-				.append(" confirmed issue response(s), ")
-				.append(insights.potentialIssueCount())
-				.append(" potential issue response(s)</li>\n")
-				.append("    <li><strong>Validation non-compliance:</strong> ")
-				.append(insights.validationNonComplianceCount())
-				.append(" summary finding(s) across ")
-				.append(insights.recordsWithValidationNonCompliance())
-				.append(" record(s)</li>\n");
-		appendRankedInsightSection(
-				builder,
-				"Most frequent causes of validation non-compliance",
-				insights.topValidationNonComplianceCauses());
-		appendRankedInsightSection(
-				builder,
-				"Most effective amendment proposals seen on non-compliant records",
-				insights.topAmendmentProposals());
-		builder.append("  </ul>\n")
-				.append("</section>\n");
+	private static void appendExternalPrerequisitesNotice(StringBuilder builder, ReportDigest digest) {
+		if (digest.externalPrerequisiteCount() == 0) {
+			return;
+		}
+		builder.append("<div class=\"data-notice\" role=\"note\"><strong>External prerequisites not met:</strong> ")
+				.append(escapeHtml(digest.externalPrerequisiteLine()))
+				.append(".</div>\n");
 	}
 
 	/**
-	 * Appends one ranked-insight subsection.
+	 * Appends the count and list of records meeting every multi-record QA measure.
 	 *
 	 * @param builder the report being built; appended to in place
-	 * @param title the subsection title
-	 * @param insights the ranked insights to render
+	 * @param digest the run's condensed findings
 	 */
-	private static void appendRankedInsightSection(
-			StringBuilder builder,
-			String title,
-			List<StructuredReportInsights.RankedInsight> insights) {
-		builder.append("    <li><strong>")
-				.append(escapeHtml(title))
-				.append(":</strong>");
-		if (insights.isEmpty()) {
-			builder.append(" none</li>\n");
+	private static void appendQualitySection(StringBuilder builder, ReportDigest digest) {
+		ReportDigest.QualitySummary quality = digest.qualitySummary();
+		builder.append("<section>\n  <h2>Records with quality for this use case</h2>\n");
+		if (!quality.hasMeasures()) {
+			builder.append("  <p class=\"muted\">The use case defines no multi-record QA measures, so records cannot be "
+					+ "assessed as having quality for it.</p>\n</section>\n");
 			return;
 		}
-		builder.append("\n      <ul>\n");
-		for (StructuredReportInsights.RankedInsight insight : insights) {
-			builder.append("        <li>")
-					.append(escapeHtml(insight.label()))
-					.append(" — ")
-					.append(insight.responseCount())
-					.append(" response(s) across ")
-					.append(insight.recordCount())
-					.append(" record(s)</li>\n");
+		builder.append("  <p><strong>")
+				.append(escapeHtml(digest.qualityLine()))
+				.append(".</strong> A record has quality for the use case when its result for every QA measure's test "
+						+ "is COMPLETE.</p>\n");
+		if (!quality.recordIds().isEmpty()) {
+			builder.append("  <p>")
+					.append(escapeHtml(limitedList(quality.recordIds().stream().map(digest::recordLabel).toList(),
+							ReportDigest.MAX_QUALITY_RECORDS)))
+					.append("</p>\n");
 		}
-		builder.append("      </ul>\n")
-				.append("    </li>\n");
+		builder.append("  <details><summary>QA measures (")
+				.append(quality.measureLabels().size())
+				.append(")</summary><p>")
+				.append(escapeHtml(String.join(", ", quality.measureLabels())))
+				.append("</p></details>\n</section>\n");
+	}
+
+	/**
+	 * Appends one row per VALIDATION and ISSUE test, with problem counts before and after amendment.
+	 *
+	 * @param builder the report being built; appended to in place
+	 * @param digest the run's condensed findings
+	 */
+	private static void appendTestFindings(StringBuilder builder, ReportDigest digest) {
+		List<ReportDigest.TestFindings> findings = digest.testFindings();
+		builder.append("<section>\n  <h2>Quality control by test</h2>\n");
+		if (findings.isEmpty()) {
+			builder.append("  <p class=\"muted\">No validations or issues ran.</p>\n</section>\n");
+			return;
+		}
+		builder.append("  <p class=\"muted\">Problems are NOT_COMPLIANT validations and potential or actual issues, "
+						+ "counted per record; tests with the most problems after amendment come first.</p>\n")
+				.append("  <table>\n    <thead><tr><th>Test</th><th>Problems (before → after amendment)</th>"
+						+ "<th>Not assessable (internal / external prerequisites)</th><th>Example records</th></tr></thead>\n"
+						+ "    <tbody>\n");
+		for (ReportDigest.TestFindings row : findings) {
+			ReportDigest.PhaseCounts latest = row.latest();
+			builder.append("      <tr><td>")
+					.append(escapeHtml(row.testLabel()))
+					.append(row.type() == TestType.ISSUE ? " <span class=\"muted\">(issue)</span>" : "")
+					.append("</td><td class=\"num\">")
+					.append(escapeHtml(problemTransition(row)))
+					.append("</td><td class=\"num\">")
+					.append(latest.internalPrerequisites()).append(" / ").append(latest.externalPrerequisites())
+					.append("</td><td>")
+					.append(escapeHtml(String.join("; ", row.exampleRecords())))
+					.append("</td></tr>\n");
+		}
+		builder.append("    </tbody>\n  </table>\n</section>\n");
+	}
+
+	/**
+	 * Renders a test's problem counts before and after amendment.
+	 *
+	 * @param row the test's findings
+	 * @return e.g. {@code "12 → 3 of 69"}
+	 */
+	static String problemTransition(ReportDigest.TestFindings row) {
+		ReportDigest.PhaseCounts latest = row.latest();
+		if (row.pre() != null && row.post() != null) {
+			return row.pre().problems() + " → " + row.post().problems() + " of " + latest.records();
+		}
+		return latest.problems() + " of " + latest.records();
+	}
+
+	/**
+	 * Appends the information elements empty in every record.
+	 *
+	 * @param builder the report being built; appended to in place
+	 * @param digest the run's condensed findings
+	 */
+	private static void appendEmptyTerms(StringBuilder builder, ReportDigest digest) {
+		List<ReportDigest.EmptyTerm> empty = digest.consistentlyEmptyTerms();
+		builder.append("<section>\n  <h2>Information elements empty in every record</h2>\n");
+		if (empty.isEmpty()) {
+			builder.append("  <p class=\"muted\">None: every information element the tests read has a value in at "
+					+ "least one record.</p>\n</section>\n");
+			return;
+		}
+		builder.append("  <p>")
+				.append(empty.size())
+				.append(" term(s) the tests read have no value in any record, so those tests cannot assess them:</p>\n")
+				.append("  <table>\n    <thead><tr><th>Term</th><th>In the input</th><th>Tests reading it</th></tr>"
+						+ "</thead>\n    <tbody>\n");
+		for (ReportDigest.EmptyTerm term : empty) {
+			builder.append("      <tr><td><code>")
+					.append(escapeHtml(term.term()))
+					.append("</code></td><td>")
+					.append(term.presentInInput() ? "column present, always empty" : "no such column")
+					.append("</td><td>")
+					.append(escapeHtml(limitedList(term.tests(), ReportDigest.MAX_TESTS_PER_TERM)))
+					.append("</td></tr>\n");
+		}
+		builder.append("    </tbody>\n  </table>\n</section>\n");
+	}
+
+	/**
+	 * Appends the proposed amendments, grouped by change and ranked by records affected.
+	 *
+	 * @param builder the report being built; appended to in place
+	 * @param digest the run's condensed findings
+	 */
+	private static void appendAmendments(StringBuilder builder, ReportDigest digest) {
+		List<ReportDigest.AmendmentGroup> groups = digest.amendmentGroups();
+		builder.append("<section>\n  <h2>Proposed amendments</h2>\n");
+		if (groups.isEmpty()) {
+			builder.append("  <p class=\"muted\">No amendments were proposed.</p>\n</section>\n");
+			return;
+		}
+		builder.append("  <p>")
+				.append(groups.size())
+				.append(" distinct change(s) proposed; the most widely applicable first.</p>\n")
+				.append("  <table>\n    <thead><tr><th>Records</th><th>Change</th><th>Proposed by</th>"
+						+ "<th>Example records</th></tr></thead>\n    <tbody>\n");
+		for (ReportDigest.AmendmentGroup group
+				: groups.subList(0, Math.min(ReportDigest.MAX_AMENDMENT_GROUPS, groups.size()))) {
+			builder.append("      <tr><td class=\"num\">")
+					.append(group.recordCount())
+					.append("</td><td><code>")
+					.append(escapeHtml(group.term()))
+					.append("</code>: ")
+					.append(escapeHtml(ReportDigest.displayValue(group.originalValue())))
+					.append(" → <strong>")
+					.append(escapeHtml(ReportDigest.displayValue(group.proposedValue())))
+					.append("</strong></td><td>")
+					.append(escapeHtml(group.testLabel()))
+					.append("</td><td>")
+					.append(escapeHtml(String.join("; ", group.exampleRecords())))
+					.append("</td></tr>\n");
+		}
+		builder.append("    </tbody>\n  </table>\n");
+		if (groups.size() > ReportDigest.MAX_AMENDMENT_GROUPS) {
+			builder.append("  <p class=\"muted\">… and ")
+					.append(groups.size() - ReportDigest.MAX_AMENDMENT_GROUPS)
+					.append(" more distinct change(s); see bdq-report-xls.xlsx for every amendment.</p>\n");
+		}
+		builder.append("</section>\n");
+	}
+
+	/**
+	 * Appends a capped table of the records with problems after amendment or proposed amendments.
+	 *
+	 * @param builder the report being built; appended to in place
+	 * @param digest the run's condensed findings
+	 */
+	private static void appendRecordsNeedingAttention(StringBuilder builder, ReportDigest digest) {
+		List<ReportDigest.AttentionRecord> records = digest.recordsNeedingAttention();
+		builder.append("<section>\n  <h2>Records needing attention</h2>\n");
+		if (records.isEmpty()) {
+			builder.append("  <p class=\"muted\">No record has a problem after amendment or a proposed amendment."
+					+ "</p>\n</section>\n");
+			return;
+		}
+		int shown = Math.min(ReportDigest.MAX_ATTENTION_RECORDS, records.size());
+		builder.append("  <p>")
+				.append(records.size())
+				.append(" record(s) have a problem after amendment or a proposed amendment")
+				.append(records.size() > shown ? "; the " + shown + " with the most problems are shown" : "")
+				.append(".</p>\n")
+				.append("  <table>\n    <thead><tr><th>Record</th><th>Problems after amendment</th>"
+						+ "<th>Proposed amendments</th></tr></thead>\n    <tbody>\n");
+		for (ReportDigest.AttentionRecord record : records.subList(0, shown)) {
+			builder.append("      <tr><td>")
+					.append(escapeHtml(record.recordLabel()))
+					.append("</td><td>")
+					.append(escapeHtml(record.problems().isEmpty() ? "—" : String.join("; ", record.problems())))
+					.append("</td><td>")
+					.append(escapeHtml(record.amendments().isEmpty() ? "—" : String.join("; ", record.amendments())))
+					.append("</td></tr>\n");
+		}
+		builder.append("    </tbody>\n  </table>\n");
+		if (records.size() > shown) {
+			builder.append("  <p class=\"muted\">Every record's results are in bdq-report-xls.xlsx and "
+					+ "bdq-report-responses.txt.</p>\n");
+		}
+		builder.append("</section>\n");
+	}
+
+	/**
+	 * Appends the tests that could not run at all.
+	 *
+	 * @param builder the report being built; appended to in place
+	 * @param digest the run's condensed findings
+	 */
+	private static void appendTestsUnableToRun(StringBuilder builder, ReportDigest digest) {
+		Map<String, String> unable = digest.testsUnableToRun();
+		if (unable.isEmpty()) {
+			return;
+		}
+		builder.append("<section>\n  <h2>Tests that could not run</h2>\n  <ul>\n");
+		unable.forEach((test, reason) -> builder.append("    <li>")
+				.append(escapeHtml(test))
+				.append(reason.isBlank() ? "" : " <span class=\"muted\">— " + escapeHtml(reason) + "</span>")
+				.append("</li>\n"));
+		builder.append("  </ul>\n</section>\n");
+	}
+
+	/**
+	 * Joins values, listing at most {@code max} and counting the rest.
+	 *
+	 * @param values the values
+	 * @param max the most to list
+	 * @return e.g. {@code "a, b, c (+4 more)"}
+	 */
+	static String limitedList(List<String> values, int max) {
+		String listed = String.join(", ", values.subList(0, Math.min(max, values.size())));
+		return values.size() > max ? listed + " (+" + (values.size() - max) + " more)" : listed;
 	}
 
 	/**
@@ -719,273 +878,6 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 	}
 
 	/**
-	 * Returns core record IDs in dataset order, followed by any response-only record IDs.
-	 *
-	 * @param summary the execution summary supplying response-only record IDs
-	 * @param datasetRecordIds the dataset's core record IDs in encounter order
-	 * @return the ordered record IDs to render
-	 */
-	private static List<String> orderedRecordIds(ExecutionSummary summary, Collection<String> datasetRecordIds) {
-		Set<String> ordered = new LinkedHashSet<>(datasetRecordIds);
-		summary.responses().stream()
-				.filter(StructuredHtmlReportExporter::isPerRecordResponse)
-				.map(Response::recordId)
-				.forEach(ordered::add);
-		return List.copyOf(ordered);
-	}
-
-	/**
-	 * Appends one record section to the report.
-	 *
-	 * @param builder the report being built; appended to in place
-	 * @param recordId the core record ID the section represents
-	 * @param responses the responses for that core record
-	 * @param record the corresponding canonical record, or {@code null} when unavailable
-	 */
-	private static void appendRecordSection(
-			StringBuilder builder,
-			String recordId,
-			List<Response> responses,
-			CanonicalRecord record) {
-		builder.append("<section>\n")
-				.append("  <h2>Record <code>")
-				.append(escapeHtml(recordId))
-				.append("</code></h2>\n");
-		if (record != null && !record.terms().isEmpty()) {
-			builder.append("  <p>Core terms: ")
-					.append(record.terms().entrySet().stream()
-							.sorted(Map.Entry.comparingByKey())
-							.map(entry -> "<code>" + escapeHtml(entry.getKey()) + "=" + escapeHtml(entry.getValue()) + "</code>")
-							.collect(Collectors.joining(", ")))
-					.append("</p>\n");
-		}
-		if (responses.isEmpty()) {
-			builder.append("  <p><em>No responses emitted for this record.</em></p>\n")
-					.append("</section>\n");
-			return;
-		}
-		for (Map.Entry<TestGroupKey, List<Response>> entry : groupByTest(responses).entrySet()) {
-			appendTestGroup(builder, entry.getKey(), entry.getValue());
-		}
-		builder.append("</section>\n");
-	}
-
-	/**
-	 * Groups responses by test identity while preserving encounter order.
-	 *
-	 * @param responses the responses to group
-	 * @return responses keyed by test identity
-	 */
-	private static Map<TestGroupKey, List<Response>> groupByTest(List<Response> responses) {
-		Map<TestGroupKey, List<Response>> grouped = new LinkedHashMap<>();
-		for (Response response : responses) {
-			grouped.computeIfAbsent(TestGroupKey.of(response), ignored -> new ArrayList<>()).add(response);
-		}
-		return grouped;
-	}
-
-	/**
-	 * Appends one per-test subsection for a core record.
-	 *
-	 * @param builder the report being built; appended to in place
-	 * @param key the grouped test identity
-	 * @param responses the responses belonging to the test group
-	 */
-	private static void appendTestGroup(StringBuilder builder, TestGroupKey key, List<Response> responses) {
-		builder.append("  <h3>")
-				.append(escapeHtml(key.phase()))
-				.append(" · ")
-				.append(escapeHtml(key.testType()))
-				.append(" · <code>")
-				.append(escapeHtml(key.testId()))
-				.append("</code></h3>\n");
-
-		Response rollup = responses.stream().filter(Response::derived).findFirst().orElse(null);
-		List<Response> detailResponses = responses.stream()
-				.filter(response -> !response.derived())
-				.filter(response -> response.subjectRef() != null)
-				.toList();
-		List<Response> flatResponses = responses.stream()
-				.filter(response -> !response.derived())
-				.filter(response -> response.subjectRef() == null)
-				.toList();
-
-		builder.append("  <ul>\n")
-				.append("    <li><strong>Summary:</strong> ")
-				.append(escapeHtml(summaryLine(rollup, detailResponses, flatResponses)))
-				.append("</li>\n");
-		if (rollup != null && !rollup.contributingSubjectRefs().isEmpty()) {
-			builder.append("    <li><strong>Contributing subjects:</strong> ")
-					.append(rollup.contributingSubjectRefs().stream()
-							.map(StructuredSubjectSelectors::selectorLabel)
-							.map(StructuredHtmlReportExporter::escapeHtml)
-							.collect(Collectors.joining(", ")))
-					.append("</li>\n");
-		}
-		if (detailResponses.isEmpty()) {
-			appendFlatResponses(builder, flatResponses.isEmpty() && rollup != null ? List.of(rollup) : flatResponses);
-			builder.append("  </ul>\n");
-			return;
-		}
-		builder.append("  </ul>\n")
-				.append("  <details>\n")
-				.append("    <summary>")
-				.append(escapeHtml(detailResponses.size() + " structured detail assertion(s)"))
-				.append("</summary>\n")
-				.append("    <ul>\n");
-		for (Response detail : orderDetails(detailResponses, rollup)) {
-			appendDetailResponse(builder, detail);
-		}
-		builder.append("    </ul>\n")
-				.append("  </details>\n");
-	}
-
-	/**
-	 * Appends one bullet per flat response.
-	 *
-	 * @param builder the report being built; appended to in place
-	 * @param responses the flat responses to render
-	 */
-	private static void appendFlatResponses(StringBuilder builder, List<Response> responses) {
-		for (Response response : responses) {
-			builder.append("    <li>")
-					.append(escapeHtml(responseLine(response)))
-					.append("</li>\n");
-		}
-	}
-
-	/**
-	 * Orders structured detail responses using the rollup's contributing-subject order when
-	 * available, falling back to the responses' existing encounter order.
-	 *
-	 * @param detailResponses the structured detail responses to order
-	 * @param rollup the optional derived rollup that references those details
-	 * @return the ordered detail responses
-	 */
-	private static List<Response> orderDetails(List<Response> detailResponses, Response rollup) {
-		if (rollup == null || rollup.contributingSubjectRefs().isEmpty()) {
-			return detailResponses;
-		}
-		Map<String, List<Response>> detailsBySubject = detailResponses.stream()
-				.collect(Collectors.groupingBy(
-						response -> response.subjectRef().sortKey(),
-						LinkedHashMap::new,
-						Collectors.toCollection(ArrayList::new)));
-		List<Response> ordered = new ArrayList<>();
-		for (SubjectRef subjectRef : rollup.contributingSubjectRefs()) {
-			List<Response> matches = detailsBySubject.remove(subjectRef.sortKey());
-			if (matches != null) {
-				ordered.addAll(matches);
-			}
-		}
-		detailsBySubject.values().forEach(ordered::addAll);
-		return ordered;
-	}
-
-	/**
-	 * Appends one structured detail response bullet.
-	 *
-	 * @param builder the report being built; appended to in place
-	 * @param response the structured detail response to render
-	 */
-	private static void appendDetailResponse(StringBuilder builder, Response response) {
-		builder.append("      <li><strong>Subject <code>")
-				.append(escapeHtml(StructuredSubjectSelectors.subjectLabel(response.subjectRef())))
-				.append("</code> at <code>")
-				.append(escapeHtml(StructuredSubjectSelectors.selectorLabel(response.subjectRef())))
-				.append("</code>:</strong> ")
-				.append(escapeHtml(responseLine(response)))
-				.append("</li>\n");
-	}
-
-	/**
-	 * Appends any aggregate or unresolved responses that do not belong to a single core record.
-	 *
-	 * @param builder the report being built; appended to in place
-	 * @param responses the aggregate or unresolved responses to render
-	 */
-	private static void appendAggregateSection(StringBuilder builder, List<Response> responses) {
-		if (responses.isEmpty()) {
-			return;
-		}
-		builder.append("<section>\n")
-				.append("  <h2>Aggregate and unresolved responses</h2>\n")
-				.append("  <ul>\n");
-		for (Response response : responses) {
-			builder.append("    <li><code>")
-					.append(escapeHtml(response.recordId()))
-					.append("</code> · <code>")
-					.append(escapeHtml(response.testId()))
-					.append("</code> · ")
-					.append(escapeHtml(responseLine(response)))
-					.append("</li>\n");
-		}
-		builder.append("  </ul>\n")
-				.append("</section>\n");
-	}
-
-	/**
-	 * Renders a concise one-line summary for a grouped test section.
-	 *
-	 * @param rollup the optional derived rollup response
-	 * @param detailResponses the structured detail responses in the group
-	 * @param flatResponses the flat responses in the group
-	 * @return the human-readable summary line
-	 */
-	private static String summaryLine(Response rollup, List<Response> detailResponses, List<Response> flatResponses) {
-		if (rollup != null) {
-			return responseLine(rollup);
-		}
-		if (!flatResponses.isEmpty()) {
-			return responseLine(flatResponses.get(0));
-		}
-		return detailResponses.size() + " detail response(s); results: "
-				+ detailResponses.stream()
-						.collect(Collectors.groupingBy(
-								response -> Objects.toString(response.responseResult(), "<none>"),
-								LinkedHashMap::new,
-								Collectors.counting()))
-						.entrySet().stream()
-						.sorted(Map.Entry.comparingByKey())
-						.map(entry -> entry.getKey() + " × " + entry.getValue())
-						.collect(Collectors.joining(", "));
-	}
-
-	/**
-	 * Renders one response as a concise status/result/comment string.
-	 *
-	 * @param response the response to summarize
-	 * @return the rendered response line
-	 */
-	private static String responseLine(Response response) {
-		StringBuilder builder = new StringBuilder();
-		builder.append(nullSafe(response.responseStatus()));
-		if (response.responseResult() != null && !response.responseResult().isBlank()) {
-			builder.append(" / ").append(response.responseResult());
-		}
-		String comment = response.comment() != null && !response.comment().isBlank()
-				? response.comment()
-				: response.message();
-		if (comment != null && !comment.isBlank()) {
-			builder.append(" — ").append(comment);
-		}
-		return builder.toString();
-	}
-
-	/**
-	 * Reports whether a response belongs to a concrete core record section.
-	 *
-	 * @param response the response to inspect
-	 * @return {@code true} when the response belongs to one core record
-	 */
-	private static boolean isPerRecordResponse(Response response) {
-		return response.recordId() != null
-				&& !response.recordId().isBlank()
-				&& !MULTIRECORD_SENTINEL.equals(response.recordId())
-				&& !UNRESOLVED_SENTINEL.equals(response.recordId());
-	}
-
-	/**
 	 * Renders the use case identity for the report preamble.
 	 *
 	 * @param summary the execution summary carrying run metadata
@@ -1037,21 +929,5 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 	 */
 	private static String nullSafe(String raw) {
 		return raw == null ? "" : raw;
-	}
-
-	/**
-	 * Identity of one rendered per-test subsection.
-	 *
-	 * @param testId the test identifier
-	 * @param testType the test type name
-	 * @param phase the phase name
-	 */
-	private record TestGroupKey(String testId, String testType, String phase) {
-		private static TestGroupKey of(Response response) {
-			return new TestGroupKey(
-					response.testId(),
-					response.testType() == null ? "" : response.testType().name(),
-					response.phase() == null ? "" : response.phase().name());
-		}
 	}
 }

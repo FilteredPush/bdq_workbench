@@ -21,207 +21,6 @@ import org.junit.jupiter.api.Test;
 
 class StructuredHtmlReportExporterTest {
 
-	@Test
-	void rendersStructuredRecordSectionsWithNestedDetailSelectors() throws Exception {
-		StructuredHtmlReportExporter exporter = new StructuredHtmlReportExporter();
-		Instant startedAt = Instant.parse("2026-09-29T01:00:00Z");
-		Instant finishedAt = Instant.parse("2026-09-29T01:05:00Z");
-		Response detailOne = structuredDetail("identification", "identification.txt", "row-2", "COMPLIANT", "first detail");
-		Response detailTwo = structuredDetail("measurement", "flattened-view.csv", "row-7", "NOT_COMPLIANT", "Missing coordinates");
-		Response rollup = new Response(
-				"record-1",
-				"urn:test:structured",
-				TestType.VALIDATION,
-				"org.example.StructuredValidator",
-				"validate",
-				Phase.POST_AMENDMENT,
-				Map.of(),
-				OutcomeStatus.FAILED,
-				"RUN_HAS_RESULT",
-				"NOT_COMPLIANT",
-				"rollup",
-				"rollup",
-				Map.of(),
-				startedAt,
-				finishedAt,
-				null,
-				true,
-				List.of(detailOne.subjectRef(), detailTwo.subjectRef()));
-		Response issue = new Response(
-				"record-1",
-				"urn:test:issue",
-				TestType.ISSUE,
-				"org.example.IssueDetector",
-				"detect",
-				Phase.POST_AMENDMENT,
-				Map.of(),
-				OutcomeStatus.FAILED,
-				"RUN_HAS_RESULT",
-				"IS_ISSUE",
-				"Coordinate issue",
-				"Coordinate issue",
-				Map.of(),
-				startedAt,
-				finishedAt);
-		Response amendment = new Response(
-				"record-1",
-				"urn:test:amendment",
-				TestType.AMENDMENT,
-				"org.example.Amender",
-				"amend",
-				Phase.AMENDMENT,
-				Map.of(),
-				OutcomeStatus.AMENDED,
-				"AMENDED",
-				"",
-				"Filled in coordinates",
-				"Filled in coordinates",
-				Map.of("dwc:decimalLatitude", "42.0"),
-				startedAt,
-				finishedAt);
-		Response preMeasure = measureResponse(
-				"urn:test:count",
-				"Count compliant coordinates",
-				Phase.PRE_AMENDMENT,
-				"1",
-				"4",
-				"25.0");
-		Response postMeasure = measureResponse(
-				"urn:test:count",
-				"Count compliant coordinates",
-				Phase.POST_AMENDMENT,
-				"3",
-				"4",
-				"75.0");
-		Response unchangedPreMeasure = measureResponse(
-				"urn:test:unchanged",
-				"Count complete dates",
-				Phase.PRE_AMENDMENT,
-				"4",
-				"4",
-				"100.0");
-		Response unchangedPostMeasure = measureResponse(
-				"urn:test:unchanged",
-				"Count complete dates",
-				Phase.POST_AMENDMENT,
-				"4",
-				"4",
-				"100.0");
-
-		ExecutionSummary summary = new ExecutionSummary(
-				List.of(detailOne, detailTwo, rollup, issue, amendment, preMeasure, postMeasure, unchangedPreMeasure, unchangedPostMeasure),
-				new ExecutionSummaryMetadata(
-						"urn:usecase:1",
-						"Use Case One",
-						"/tmp/input.csv",
-						3,
-						1,
-						3,
-						1,
-						Map.of(),
-						Map.of(
-								"urn:test:structured", "Coordinates valid",
-								"urn:test:issue", "Coordinate issue",
-								"urn:test:amendment", "Fill missing coordinates"),
-						Map.of(),
-						Map.of()),
-				new RecordDataset(List.of(new CanonicalRecord(
-						"record-1",
-						Map.of("dwc:occurrenceID", "record-1", "dwc:countryCode", "GL")))));
-
-		ByteArrayOutputStream output = new ByteArrayOutputStream();
-		exporter.export(summary, output);
-		String report = output.toString(StandardCharsets.UTF_8);
-
-		assertThat(exporter.format()).isEqualTo("structured-html");
-		assertThat(exporter.fileExtension()).isEqualTo("html");
-		assertThat(report).contains("<!DOCTYPE html>");
-		assertThat(report).contains("<h1>BDQ Workbench Structured Report</h1>");
-		assertThat(report).contains("<h2>Run metadata</h2>");
-		assertThat(report).contains("<strong>Input file:</strong> /tmp/input.csv");
-		assertThat(report).contains("<strong>Run started:</strong> 2026-09-29T01:00:00Z");
-		assertThat(report).contains("<h2>High-impact action items</h2>");
-		assertThat(report).contains("<strong>Review issue findings:</strong> 1 confirmed issue response(s), 0 potential issue response(s)");
-		assertThat(report).contains("Coordinates valid — Missing coordinates — 1 response(s) across 1 record(s)");
-		assertThat(report).contains("Fill missing coordinates: dwc:decimalLatitude → 42.0 — 1 response(s) across 1 record(s)");
-		assertThat(report).contains("<h2>Measure differences between pre-amendment and post-amendment phases</h2>");
-		assertThat(report).contains("<h3>Measures with differences</h3>");
-		assertThat(report).contains("<h3>Measures with no differences</h3>");
-		assertThat(report).contains("Count compliant coordinates");
-		assertThat(report).contains("1/4 (25.0%)");
-		assertThat(report).contains("3/4 (75.0%)");
-		assertThat(report).contains("+50 percentage point(s)");
-		assertThat(report).contains("Count complete dates");
-		assertThat(report).contains("No percentage-point change");
-		assertThat(report).contains("1 of 2 measure(s) changed after amendment: 1 improved, 0 declined.");
-		assertThat(report).contains("<line x1=\"25%\" x2=\"75%\" y1=\"13\" y2=\"13\" stroke=\"var(--mc-link)\"");
-		assertThat(report).contains("<circle cx=\"25%\" cy=\"13\" r=\"6\" fill=\"#fcfcfb\" stroke=\"var(--mc-pre)\"");
-		assertThat(report).contains("<circle cx=\"75%\" cy=\"13\" r=\"6\" fill=\"var(--mc-post)\"");
-		assertThat(report).contains("<span class=\"mc-delta up\">▲ +50 pts</span>");
-		assertThat(report).contains("<summary>Table view</summary>");
-		assertThat(report.indexOf("Changed after amendment (1)")).isLessThan(report.indexOf("Unchanged (1)"));
-		assertThat(report).contains("<h2>Record <code>record-1</code></h2>");
-		assertThat(report).contains("<h3>POST_AMENDMENT · VALIDATION · <code>urn:test:structured</code></h3>");
-		assertThat(report).contains("<strong>Summary:</strong> RUN_HAS_RESULT / NOT_COMPLIANT — rollup");
-		assertThat(report).contains("identification.txt#row=2, flattened-view.csv#row=7");
-		assertThat(report).contains("<details>");
-		assertThat(report).contains("Subject <code>identification</code> at <code>identification.txt#row=2</code>");
-		assertThat(report).contains("Subject <code>measurement</code> at <code>flattened-view.csv#row=7</code>");
-	}
-
-	@Test
-	void flatRunRendersSimplifiedSingleLevelHtmlSummary() throws Exception {
-		StructuredHtmlReportExporter exporter = new StructuredHtmlReportExporter();
-		Instant startedAt = Instant.parse("2026-09-29T02:00:00Z");
-		Response flatResponse = new Response(
-				"record-1",
-				"urn:test:flat",
-				TestType.VALIDATION,
-				"org.example.FlatValidator",
-				"validate",
-				Phase.PRE_AMENDMENT,
-				Map.of(),
-				OutcomeStatus.PASSED,
-				"RUN_HAS_RESULT",
-				"COMPLIANT",
-				"flat ok",
-				"flat ok",
-				Map.of(),
-				startedAt,
-				startedAt);
-
-		ExecutionSummary summary = new ExecutionSummary(
-				List.of(flatResponse),
-				new ExecutionSummaryMetadata(
-						"urn:usecase:1",
-						"Use Case One",
-						"/tmp/input.csv",
-						3,
-						1,
-						3,
-						1,
-						Map.of("dwc:country", List.of("Canada")),
-						Map.of("urn:test:flat", "Flat validation"),
-						Map.of(),
-						Map.of()),
-				new RecordDataset(List.of(new CanonicalRecord("record-1", Map.of("dwc:occurrenceID", "record-1")))));
-
-		ByteArrayOutputStream output = new ByteArrayOutputStream();
-		exporter.export(summary, output);
-		String report = output.toString(StandardCharsets.UTF_8);
-
-		assertThat(report).contains("<h2>Run metadata</h2>");
-		assertThat(report).contains("<strong>Record filters:</strong>");
-		assertThat(report).contains("dwc:country = Canada");
-		assertThat(report).contains("<h2>High-impact action items</h2>");
-		assertThat(report).contains("<strong>Review issue findings:</strong> 0 confirmed issue response(s), 0 potential issue response(s)");
-		assertThat(report).contains("<h2>Record <code>record-1</code></h2>");
-		assertThat(report).contains("<h3>PRE_AMENDMENT · VALIDATION · <code>urn:test:flat</code></h3>");
-		assertThat(report).contains("<strong>Summary:</strong> RUN_HAS_RESULT / COMPLIANT — flat ok");
-		assertThat(report).contains("<li>RUN_HAS_RESULT / COMPLIANT — flat ok</li>");
-		assertThat(report).doesNotContain("<details>");
-	}
-
 	private static Response structuredDetail(
 			String relationName,
 			String sourceLocation,
@@ -280,6 +79,53 @@ class StructuredHtmlReportExporterTest {
 	}
 
 	@Test
+	void rendersQualityControlSectionsWithReadableNamesInOrder() {
+		String html = StructuredHtmlReportExporter.renderHtml(ReportFixtures.qualityControlRun());
+
+		assertThat(html).contains("<div class=\"data-notice\" role=\"note\"><strong>External prerequisites not met:"
+				+ "</strong> 2 result(s), in Country code not empty (2)");
+		assertThat(html).contains("<li><strong>Records with quality for this use case:</strong> 1 of 3 record(s) meet "
+				+ "all 2 multi-record QA measure(s) (post-amendment)</li>");
+		assertThat(html).contains("<p>Survey:77 (occurrence.txt line 3)</p>");
+		assertThat(html).contains("<tr><td>Geodetic datum standard</td><td class=\"num\">2 → 0 of 3</td>");
+		assertThat(html).contains("<tr><td><code>minimumDepthInMeters</code></td><td>no such column</td>"
+				+ "<td>Locality and depth</td></tr>");
+		assertThat(html).contains("<tr><td class=\"num\">2</td><td><code>geodeticDatum</code>: WGS 84 → "
+				+ "<strong>EPSG:4326</strong></td><td>Geodetic datum standardized</td>");
+		assertThat(html).contains("<tr><td>MCZ:Herp:A-1 (occurrence.txt line 2)</td><td>Scientific name found (1 of 2 "
+				+ "rows)</td><td>geodeticDatum: WGS 84 → EPSG:4326</td></tr>");
+		assertThat(html).contains("<li>Unresolved test <span class=\"muted\">— No implementation discovered</span></li>");
+		assertThat(html).doesNotContain("urn:test:").doesNotContain("<h2>Record <code>");
+		List<String> order = List.of("<h2>Run metadata</h2>", "<h2>Input data view</h2>",
+				"<h2>Records with quality for this use case</h2>", "<h2>Quality control by test</h2>",
+				"<h2>Information elements empty in every record</h2>", "<h2>Proposed amendments</h2>",
+				"<h2>Records needing attention</h2>", "<h2>Tests that could not run</h2>");
+		for (int index = 1; index < order.size(); index++) {
+			assertThat(html.indexOf(order.get(index - 1))).isLessThan(html.indexOf(order.get(index)));
+		}
+	}
+
+	@Test
+	void rendersMeasureDifferencesAsADumbbellChart() {
+		ExecutionSummary summary = new ExecutionSummary(List.of(
+				measureResponse("urn:test:count-coordinates", "Count compliant coordinates", Phase.PRE_AMENDMENT, "1", "4", "25.0"),
+				measureResponse("urn:test:count-coordinates", "Count compliant coordinates", Phase.POST_AMENDMENT, "3", "4", "75.0"),
+				measureResponse("urn:test:count-dates", "Count complete dates", Phase.PRE_AMENDMENT, "2", "4", "50.0"),
+				measureResponse("urn:test:count-dates", "Count complete dates", Phase.POST_AMENDMENT, "2", "4", "50.0")));
+
+		String report = StructuredHtmlReportExporter.renderHtml(summary);
+
+		assertThat(report).contains("<h2>Measure differences between pre-amendment and post-amendment phases</h2>");
+		assertThat(report).contains("1 of 2 measure(s) changed after amendment: 1 improved, 0 declined.");
+		assertThat(report).contains("<line x1=\"25%\" x2=\"75%\" y1=\"13\" y2=\"13\" stroke=\"var(--mc-link)\"");
+		assertThat(report).contains("<circle cx=\"25%\" cy=\"13\" r=\"6\" fill=\"#fcfcfb\" stroke=\"var(--mc-pre)\"");
+		assertThat(report).contains("<circle cx=\"75%\" cy=\"13\" r=\"6\" fill=\"var(--mc-post)\"");
+		assertThat(report).contains("<span class=\"mc-delta up\">▲ +50 pts</span>");
+		assertThat(report).contains("<summary>Table view</summary>").contains("<h3>Measures with no differences</h3>");
+		assertThat(report.indexOf("Changed after amendment (1)")).isLessThan(report.indexOf("Unchanged (1)"));
+	}
+
+	@Test
 	void rendersInputViewOverviewWithDiagramAndIgnoredTables() {
 		String html = StructuredHtmlReportExporter.renderHtml(InputViewFixtures.structuredSummary());
 
@@ -303,7 +149,7 @@ class StructuredHtmlReportExporterTest {
 		assertThat(html).contains("<strong>Ignored in view construction</strong> (no test binding reads any of their "
 				+ "terms): <code>measurement</code>, <code>audit</code>");
 		assertThat(html.indexOf("<h2>Input data view</h2>"))
-				.isLessThan(html.indexOf("<h2>High-impact action items</h2>"));
+				.isLessThan(html.indexOf("<h2>Records with quality for this use case</h2>"));
 	}
 
 	@Test

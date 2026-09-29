@@ -145,6 +145,11 @@ understanding how the stages connect — read its class Javadoc first. The pipel
    text summary, a run-metadata line in each, counts plus `rdfs:comment` on the RDF report, the GUI
    preflight summary, and the CLI completion output.
 
+   Every record also carries a `SourceRow` (data file within the archive/package and the 1-based
+   line it starts on, header lines included, counted from the parser's line numbers so multi-line
+   quoted values do not throw it off); relational ingest, view flattening, expanded rows, and
+   subject overlays all keep it, and reports use it to name records.
+
    Record IDs come from the descriptor's declared key (`<id index>`, `schema.primaryKey`), else
    the selected table's conventional identifier for its row type (`occurrenceID`/`taxonID`/
    `eventID`), else `id`/`occurrenceID`, else a synthesized `row-<n>`. A column that is present
@@ -252,7 +257,17 @@ understanding how the stages connect — read its class Javadoc first. The pipel
    rollups, contributing subjects) now flows through the normalized response stream, the
    tab-delimited detailed export, the RDF/Turtle exporter (which emits OA-style row selectors for
    structured subject targets and explicit rollup→detail links), and the standalone structured
-   HTML/Markdown reports. The structured HTML report draws pre/post multi-record measures as a
+   HTML/Markdown reports. The structured HTML and Markdown reports are quality-control summaries,
+   not per-record dumps: both render from `ReportDigest`, which names tests by label and records by
+   values from the original data (institution:collection:catalog, else dataset:catalog, plus the
+   `SourceRow` file and line; else the file and line), and condenses the run into records with
+   quality for the use case (every multi-record QA measure's target test COMPLETE, post-amendment),
+   per-test problem counts before → after amendment with internal/external prerequisites, terms the
+   tests read that are empty in 100% of records, amendments grouped by change and ranked by records
+   affected, a capped list of records needing attention (with "k of n rows" for expanded tests),
+   and tests that could not run. Headers of these reports and the text summary state external
+   prerequisites not met; the response list leads with `recordLabel`/`testLabel` columns. The
+   structured HTML report draws pre/post multi-record measures as a
    dumbbell chart (shared 0–100% axis; pre a hollow ring, post a filled dot, joined by a bar;
    changed measures first by improvement, unchanged ones muted; a collapsed table view keeps the
    numbers). The flat XLSX exporter writes, per test/phase/record, only the derived

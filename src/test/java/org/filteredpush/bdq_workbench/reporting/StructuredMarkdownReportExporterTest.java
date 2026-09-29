@@ -21,177 +21,6 @@ import org.junit.jupiter.api.Test;
 
 class StructuredMarkdownReportExporterTest {
 
-	@Test
-	void rendersStructuredRecordSectionsWithNestedDetailSelectors() throws Exception {
-		StructuredMarkdownReportExporter exporter = new StructuredMarkdownReportExporter();
-		Instant startedAt = Instant.parse("2026-09-29T01:00:00Z");
-		Instant finishedAt = Instant.parse("2026-09-29T01:05:00Z");
-		Response detailOne = structuredDetail("identification", "identification.txt", "row-2", "COMPLIANT", "first detail");
-		Response detailTwo = structuredDetail("measurement", "flattened-view.csv", "row-7", "NOT_COMPLIANT", "Missing coordinates");
-		Response rollup = new Response(
-				"record-1",
-				"urn:test:structured",
-				TestType.VALIDATION,
-				"org.example.StructuredValidator",
-				"validate",
-				Phase.POST_AMENDMENT,
-				Map.of(),
-				OutcomeStatus.FAILED,
-				"RUN_HAS_RESULT",
-				"NOT_COMPLIANT",
-				"rollup",
-				"rollup",
-				Map.of(),
-				startedAt,
-				finishedAt,
-				null,
-				true,
-				List.of(detailOne.subjectRef(), detailTwo.subjectRef()));
-		Response issue = new Response(
-				"record-1",
-				"urn:test:issue",
-				TestType.ISSUE,
-				"org.example.IssueDetector",
-				"detect",
-				Phase.POST_AMENDMENT,
-				Map.of(),
-				OutcomeStatus.FAILED,
-				"RUN_HAS_RESULT",
-				"IS_ISSUE",
-				"Coordinate issue",
-				"Coordinate issue",
-				Map.of(),
-				startedAt,
-				finishedAt);
-		Response amendment = new Response(
-				"record-1",
-				"urn:test:amendment",
-				TestType.AMENDMENT,
-				"org.example.Amender",
-				"amend",
-				Phase.AMENDMENT,
-				Map.of(),
-				OutcomeStatus.AMENDED,
-				"AMENDED",
-				"",
-				"Filled in coordinates",
-				"Filled in coordinates",
-				Map.of("dwc:decimalLatitude", "42.0"),
-				startedAt,
-				finishedAt);
-		Response preMeasure = measureResponse(
-				"urn:test:count",
-				"Count compliant coordinates",
-				Phase.PRE_AMENDMENT,
-				"1",
-				"4",
-				"25.0");
-		Response postMeasure = measureResponse(
-				"urn:test:count",
-				"Count compliant coordinates",
-				Phase.POST_AMENDMENT,
-				"3",
-				"4",
-				"75.0");
-
-		ExecutionSummary summary = new ExecutionSummary(
-				List.of(detailOne, detailTwo, rollup, issue, amendment, preMeasure, postMeasure),
-				new ExecutionSummaryMetadata(
-						"urn:usecase:1",
-						"Use Case One",
-						"/tmp/input.csv",
-						3,
-						1,
-						3,
-						1,
-						Map.of(),
-						Map.of(
-								"urn:test:structured", "Coordinates valid",
-								"urn:test:issue", "Coordinate issue",
-								"urn:test:amendment", "Fill missing coordinates"),
-						Map.of(),
-						Map.of()),
-				new RecordDataset(List.of(new CanonicalRecord(
-						"record-1",
-						Map.of("dwc:occurrenceID", "record-1", "dwc:countryCode", "GL")))));
-
-		ByteArrayOutputStream output = new ByteArrayOutputStream();
-		exporter.export(summary, output);
-		String report = output.toString(StandardCharsets.UTF_8);
-
-		assertThat(exporter.format()).isEqualTo("structured");
-		assertThat(exporter.fileExtension()).isEqualTo("md");
-		assertThat(report).contains("# BDQ Workbench Structured Report");
-		assertThat(report).contains("## Run metadata");
-		assertThat(report).contains("- Input file: /tmp/input.csv");
-		assertThat(report).contains("- Run started: 2026-09-29T01:00:00Z");
-		assertThat(report).contains("## High-impact action items");
-		assertThat(report).contains("- Review issue findings: 1 confirmed issue response(s), 0 potential issue response(s)");
-		assertThat(report).contains("Coordinates valid — Missing coordinates — 1 response(s) across 1 record(s)");
-		assertThat(report).contains("Fill missing coordinates: dwc:decimalLatitude → 42.0 — 1 response(s) across 1 record(s)");
-		assertThat(report).contains("## Measures with pre/post differences");
-		assertThat(report).contains("- Count compliant coordinates: 1/4 (25.0%) -> 3/4 (75.0%) (+50 percentage point(s))");
-		assertThat(report).contains("## Record `record-1`");
-		assertThat(report).contains("### POST_AMENDMENT · VALIDATION · `urn:test:structured`");
-		assertThat(report).contains("- Summary: RUN_HAS_RESULT / NOT_COMPLIANT — rollup");
-		assertThat(report).contains("Contributing subjects: identification.txt#row=2, flattened-view.csv#row=7");
-		assertThat(report).contains("<details>");
-		assertThat(report).contains("Subject `identification` at `identification.txt#row=2`");
-		assertThat(report).contains("Subject `measurement` at `flattened-view.csv#row=7`");
-	}
-
-	@Test
-	void flatRunDegradesToSingleLevelPerRecordSummary() throws Exception {
-		StructuredMarkdownReportExporter exporter = new StructuredMarkdownReportExporter();
-		Instant startedAt = Instant.parse("2026-09-29T02:00:00Z");
-		Response flatResponse = new Response(
-				"record-1",
-				"urn:test:flat",
-				TestType.VALIDATION,
-				"org.example.FlatValidator",
-				"validate",
-				Phase.PRE_AMENDMENT,
-				Map.of(),
-				OutcomeStatus.PASSED,
-				"RUN_HAS_RESULT",
-				"COMPLIANT",
-				"flat ok",
-				"flat ok",
-				Map.of(),
-				startedAt,
-				startedAt);
-
-		ExecutionSummary summary = new ExecutionSummary(
-				List.of(flatResponse),
-				new ExecutionSummaryMetadata(
-						"urn:usecase:1",
-						"Use Case One",
-						"/tmp/input.csv",
-						3,
-						1,
-						3,
-						1,
-						Map.of("dwc:country", List.of("Canada")),
-						Map.of("urn:test:flat", "Flat validation"),
-						Map.of(),
-						Map.of()),
-				new RecordDataset(List.of(new CanonicalRecord("record-1", Map.of("dwc:occurrenceID", "record-1")))));
-
-		ByteArrayOutputStream output = new ByteArrayOutputStream();
-		exporter.export(summary, output);
-		String report = output.toString(StandardCharsets.UTF_8);
-
-		assertThat(report).contains("## Run metadata");
-		assertThat(report).contains("- Record filters:");
-		assertThat(report).contains("  - dwc:country = Canada");
-		assertThat(report).contains("## High-impact action items");
-		assertThat(report).contains("- Review issue findings: 0 confirmed issue response(s), 0 potential issue response(s)");
-		assertThat(report).contains("## Record `record-1`");
-		assertThat(report).contains("### PRE_AMENDMENT · VALIDATION · `urn:test:flat`");
-		assertThat(report).contains("- Summary: RUN_HAS_RESULT / COMPLIANT — flat ok");
-		assertThat(report).doesNotContain("<details>");
-	}
-
 	private static Response structuredDetail(
 			String relationName,
 			String sourceLocation,
@@ -220,6 +49,34 @@ class StructuredMarkdownReportExporterTest {
 	}
 
 	@Test
+	void rendersQualityControlSectionsWithReadableNames() {
+		String markdown = StructuredMarkdownReportExporter.renderMarkdown(ReportFixtures.qualityControlRun());
+
+		assertThat(markdown).contains("> **External prerequisites not met:** 2 result(s), in Country code not empty (2)");
+		assertThat(markdown).contains("- Records with quality for this use case: 1 of 3 record(s) meet all 2 "
+				+ "multi-record QA measure(s) (post-amendment)\n");
+		assertThat(markdown).contains("| Geodetic datum standard | 2 → 0 of 3 | 0 / 0 |");
+		assertThat(markdown).contains("| `locality` | column present, always empty | Locality and depth |");
+		assertThat(markdown).contains("| 2 | `geodeticDatum`: WGS 84 → **EPSG:4326** | Geodetic datum standardized |");
+		assertThat(markdown).contains("| MCZ:Herp:A-1 (occurrence.txt line 2) | Scientific name found (1 of 2 rows) | "
+				+ "geodeticDatum: WGS 84 → EPSG:4326 |");
+		assertThat(markdown).contains("- Unresolved test — No implementation discovered\n");
+		assertThat(markdown).doesNotContain("urn:test:").doesNotContain("## Record `");
+	}
+
+	@Test
+	void listsChangedMeasures() {
+		ExecutionSummary summary = new ExecutionSummary(List.of(
+				measureResponse("urn:test:count-coordinates", "Count compliant coordinates", Phase.PRE_AMENDMENT, "1", "4", "25.0"),
+				measureResponse("urn:test:count-coordinates", "Count compliant coordinates", Phase.POST_AMENDMENT, "3", "4", "75.0")));
+
+		String report = StructuredMarkdownReportExporter.renderMarkdown(summary);
+
+		assertThat(report).contains("## Measures with pre/post differences");
+		assertThat(report).contains("- Count compliant coordinates: 1/4 (25.0%) -> 3/4 (75.0%) (+50 percentage point(s))");
+	}
+
+	@Test
 	void rendersInputViewOverviewWithTableCountsAndIgnoredTables() {
 		String markdown = StructuredMarkdownReportExporter.renderMarkdown(InputViewFixtures.structuredSummary());
 
@@ -237,7 +94,7 @@ class StructuredMarkdownReportExporterTest {
 		assertThat(markdown).contains("Ignored in view construction (no test binding reads any of their terms): "
 				+ "`measurement`, `audit`\n");
 		assertThat(markdown.indexOf("## Input data view"))
-				.isLessThan(markdown.indexOf("## High-impact action items"));
+				.isLessThan(markdown.indexOf("## Records with quality for this use case"));
 	}
 
 	@Test
