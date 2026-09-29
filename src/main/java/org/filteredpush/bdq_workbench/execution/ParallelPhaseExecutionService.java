@@ -369,6 +369,12 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
             progressListener.onPhaseCompleted(phase, completed, total);
             LOG.debug("Completed phase {} with {} responses", phase, completed);
             return responses;
+        } catch (CancellationException e) {
+            /*
+             * A user-requested stop must reach the caller unwrapped, so it can be told apart from
+             * an execution failure.
+             */
+            throw e;
         } catch (Exception e) {
             LOG.error("Execution failed in phase {} with {} records, {} direct bindings, {} built-in measures",
                     phase, dataset.records().size(), phaseBindings.size(), builtInMeasures.size(), e);

@@ -641,6 +641,7 @@ class BdqWorkbenchGuiTest {
                 Phase.class,
                 boolean.class,
                 boolean.class,
+                boolean.class,
                 boolean.class);
         helper.setAccessible(true);
         PreparedRun preparedRun = new PreparedRun(
@@ -659,7 +660,7 @@ class BdqWorkbenchGuiTest {
                         Map.of("dwc:country", List.of("Canada")),
                         List.of("Record filter field country resolved to input field dwc:country")));
 
-        String overview = (String) helper.invoke(null, preparedRun, null, false, false, false);
+        String overview = (String) helper.invoke(null, preparedRun, null, false, false, false, false);
 
         assertThat(overview).contains("Workflow progress: 5/9 stages completed");
         assertThat(overview).contains("[completed] Load dataset - 3 records loaded");
@@ -676,6 +677,7 @@ class BdqWorkbenchGuiTest {
                 Phase.class,
                 boolean.class,
                 boolean.class,
+                boolean.class,
                 boolean.class);
         helper.setAccessible(true);
         PreparedRun preparedRun = new PreparedRun(
@@ -687,7 +689,7 @@ class BdqWorkbenchGuiTest {
                 RecordFilterSummary.unfiltered(new RecordDataset(List.of(
                         new CanonicalRecord("r1", Map.of("dwc:country", "Canada"))))));
 
-        String overview = (String) helper.invoke(null, preparedRun, Phase.AMENDMENT, false, false, false);
+        String overview = (String) helper.invoke(null, preparedRun, Phase.AMENDMENT, false, false, false, false);
 
         assertThat(overview).contains("Workflow progress: 6/9 stages completed");
         assertThat(overview).contains("Current stage: AMENDMENT (stage 7/9)");
@@ -704,7 +706,8 @@ class BdqWorkbenchGuiTest {
 		Phase.class,
 		boolean.class,
 		boolean.class,
-		boolean.class);
+		boolean.class,
+                boolean.class);
         helper.setAccessible(true);
         PreparedRun preparedRun = new PreparedRun(
 		null,
@@ -715,7 +718,7 @@ class BdqWorkbenchGuiTest {
 		RecordFilterSummary.unfiltered(new RecordDataset(List.of(
 				new CanonicalRecord("r1", Map.of("dwc:country", "Canada"))))));
 
-        String overview = (String) helper.invoke(null, preparedRun, null, true, false, false);
+        String overview = (String) helper.invoke(null, preparedRun, null, true, false, false, false);
 
         assertThat(overview).contains("Workflow progress: 8/9 stages completed");
         assertThat(overview).contains("Current stage: Export reports (stage 9/9)");
