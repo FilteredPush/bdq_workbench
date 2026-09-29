@@ -26,12 +26,13 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import org.filteredpush.bdq_workbench.model.BoundMethodParameter;
 import org.filteredpush.bdq_workbench.model.BuiltInMeasureSpec;
 import org.filteredpush.bdq_workbench.model.CanonicalRecord;
@@ -73,8 +74,11 @@ import org.slf4j.LoggerFactory;
  *
  * <p><b>Amendment sequencing.</b> PRE_AMENDMENT and POST_AMENDMENT never mutate records mid-phase
  * (amendments are only ever applied for the AMENDMENT phase), so every eligible binding's groups
- * for either of those phases are computed and submitted together, and the resulting responses are
- * collected in submission order. The AMENDMENT phase is different: one binding's amendment can
+ * for either of those phases are computed together and then dispatched fairly, round-robin across
+ * bindings (group 1 of A, group 1 of B, …, group 2 of A, …; see {@link FairDispatchOrder}), so that
+ * one binding cannot monopolize every worker — and, if it calls an external service, burst that
+ * service with simultaneous requests. The resulting responses are still collected binding by
+ * binding and sorted deterministically. The AMENDMENT phase is different: one binding's amendment can
  * change term values a later binding in the same phase groups or reads by, so AMENDMENT-phase
  * bindings are processed one at a time — each binding's groups are computed, invoked, fanned out
  * to every group member, and its resulting amendments applied to the dataset, before the next
@@ -290,7 +294,8 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
             if (phase == Phase.AMENDMENT) {
                 for (ImplementationBinding binding : phaseBindings) {
                     throwIfCancellationRequested("during phase " + phase);
-                    BindingExecutionPlan plan = submitGroupedBinding(phase, binding, groupCache, discoveredByKey, executor);
+                    BindingExecutionPlan plan = planGroupedBinding(phase, binding, groupCache, discoveredByKey);
+                    plan.invocations().forEach(invocation -> dispatch(invocation, executor));
                     for (Response response : plan.preResponses()) {
                         throwIfCancellationRequested("during phase " + phase);
                         responses.add(response);
@@ -320,7 +325,16 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
                 List<BindingExecutionPlan> plans = new ArrayList<>();
                 for (ImplementationBinding binding : phaseBindings) {
                     throwIfCancellationRequested("during phase " + phase);
-                    plans.add(submitGroupedBinding(phase, binding, groupCache, discoveredByKey, executor));
+                    plans.add(planGroupedBinding(phase, binding, groupCache, discoveredByKey));
+                }
+                /*
+                 * Dispatch fairly across bindings (group 1 of A, group 1 of B, ..., group 2 of A, ...)
+                 * so that one binding's groups cannot monopolize every worker; responses are still
+                 * collected per binding below, in binding order.
+                 */
+                for (GroupInvocation invocation : FairDispatchOrder.roundRobin(plans, BindingExecutionPlan::invocations)) {
+                    throwIfCancellationRequested("during phase " + phase);
+                    dispatch(invocation, executor);
                 }
                 for (BindingExecutionPlan plan : plans) {
                     throwIfCancellationRequested("during phase " + phase);
@@ -390,24 +404,25 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
     /**
      * Partitions expanded evaluation subjects into groups for {@code binding} (via the shared
      * {@code groupCache} when {@code binding} is dedup-eligible and {@link #dedupEnabled}, or one
-     * singleton group per subject otherwise) and submits one {@link ExecutionAdapter#execute} task
-     * per group to {@code executor}, together with any pre-execution subject-expansion diagnostics.
+     * singleton group per subject otherwise) and prepares, without dispatching, one
+     * {@link ExecutionAdapter#execute} task per group, together with any pre-execution
+     * subject-expansion diagnostics. Dispatching is left to the caller so that the groups of
+     * several bindings can be interleaved fairly (see {@link FairDispatchOrder}).
      *
      * @param phase the phase being executed, passed through to progress reporting
-     * @param binding the binding to submit invocations for
+     * @param binding the binding to prepare invocations for
      * @param groupCache the phase-scoped shared partition cache
      * @param discoveredByKey discovered implementations keyed by
      *     {@code "<implementationClass>#<implementationMethod>"}
-     * @param executor the thread pool to submit invocations to
-     * @return the pending grouped invocations, any pre-execution diagnostic responses, and the
-     *     core records that should receive a derived rollup once detail responses are available
+     * @return the pending (not yet dispatched) grouped invocations, any pre-execution diagnostic
+     *     responses, and the core records that should receive a derived rollup once detail
+     *     responses are available
      */
-    private BindingExecutionPlan submitGroupedBinding(
+    private BindingExecutionPlan planGroupedBinding(
             Phase phase,
             ImplementationBinding binding,
             PhaseGroupCache groupCache,
-            Map<String, List<DiscoveredImplementation>> discoveredByKey,
-            ExecutorService executor) {
+            Map<String, List<DiscoveredImplementation>> discoveredByKey) {
         SubjectExpander.SubjectExpansionResult expansion = groupCache.expansionFor(canonicalFields(binding));
         List<RecordGroup> groups = groupsForBinding(binding, expansion, groupCache);
         List<DiscoveredImplementation> discoveredCandidates = discoveredByKey.getOrDefault(binding.legacyImplementationKey(), List.of());
@@ -419,7 +434,7 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
                 : null;
         List<GroupInvocation> invocations = new ArrayList<>(groups.size());
         for (RecordGroup group : groups) {
-            invocations.add(new GroupInvocation(binding, group, executor.submit(() -> {
+            Callable<Response> task = () -> {
                 progressListener.onTaskStarted(phase);
                 try {
                     return resolutionError == null
@@ -428,7 +443,8 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
                 } finally {
                     progressListener.onTaskFinished(phase);
                 }
-            })));
+            };
+            invocations.add(new GroupInvocation(binding, group, task, new CompletableFuture<>()));
         }
         return new BindingExecutionPlan(
                 binding,
@@ -437,6 +453,23 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
                         .map(problem -> errorResponse(problem.coreRecordId(), binding, new IllegalStateException(problem.detail())))
                         .toList(),
                 rollupCoreIds(binding, expansion.subjects()));
+    }
+
+    /**
+     * Submits one prepared group invocation to the worker pool, completing the invocation's
+     * result future with the task's response, or exceptionally with whatever it threw.
+     *
+     * @param invocation the prepared invocation to run
+     * @param executor the worker pool to run it on
+     */
+    private static void dispatch(GroupInvocation invocation, ExecutorService executor) {
+        executor.execute(() -> {
+            try {
+                invocation.result().complete(invocation.task().call());
+            } catch (Throwable t) {
+                invocation.result().completeExceptionally(t);
+            }
+        });
     }
 
     /**
@@ -567,7 +600,7 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
     private List<SubjectResponse> collectAndFanOut(Phase phase, GroupInvocation invocation) {
         Response representative;
         try {
-            representative = invocation.future().get();
+            representative = invocation.result().get();
         } catch (ExecutionException e) {
             Throwable cause = e.getCause() == null ? e : e.getCause();
             LOG.error("Unhandled execution failure in phase {} for test {} using {}.{} on record {}: {}",
@@ -1521,9 +1554,15 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
      * @param binding the binding the invocation was submitted for
      * @param group the distinct-value group the invocation was submitted for (invoked against
      *     {@link RecordGroup#representative()}, applicable to every {@link RecordGroup#members()})
-     * @param future the pending result of the invocation
+     * @param task the invocation to run against the group's representative
+     * @param result completed with the task's response (or exceptionally with its failure) once
+     *     the task has run
      */
-    private record GroupInvocation(ImplementationBinding binding, RecordGroup group, Future<Response> future) {
+    private record GroupInvocation(
+            ImplementationBinding binding,
+            RecordGroup group,
+            Callable<Response> task,
+            CompletableFuture<Response> result) {
     }
 
     private record SubjectResponse(EvaluationSubject subject, Response response) {
