@@ -15,6 +15,7 @@ import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import org.filteredpush.bdq_workbench.app.AppException;
+import org.filteredpush.bdq_workbench.model.CanonicalRecord;
 import org.filteredpush.bdq_workbench.model.DatasetInputDescription;
 import org.filteredpush.bdq_workbench.model.DatasetInputDescription.InputTable;
 import org.filteredpush.bdq_workbench.model.DatasetInputDescription.ViewMode;
@@ -438,7 +439,7 @@ class DataPackageDialectIngestTest {
 		assertThat(dataset.records().get(0).terms()).containsEntry("scientificName", "Abies balsamea");
 		DatasetInputDescription description = dataset.inputDescription();
 		assertThat(description.viewMode()).isEqualTo(ViewMode.FLATTENED);
-		assertThat(description.viewSource()).isEqualTo("built-in dataset view");
+		assertThat(description.viewSource()).isEqualTo("automatic dataset view (identification=FIRST_ROW)");
 		assertThat(description.grainTable()).isEqualTo("occurrence");
 		assertThat(description.tables())
 				.extracting(InputTable::name, InputTable::recordCount)
@@ -518,13 +519,93 @@ class DataPackageDialectIngestTest {
 	}
 
 	@Test
-	void defaultIngestServiceDescribesStructuredViewWithMultiplicityWhenNoBuiltInViewMatches(@TempDir Path tempDir)
-			throws Exception {
+	void multiTableDatasetWithMultiplicityNeedsAJoinPolicy(@TempDir Path tempDir) throws Exception {
+		Path manifest = writeTaxonWithVernacularNames(tempDir);
+
+		assertThatThrownBy(() -> new DefaultIngestService().ingest(manifest, "taxon"))
+				.isInstanceOf(DatasetViewRequiredException.class)
+				.hasMessageContaining("vernacular: up to 2 rows per taxon record");
+
+		RecordDataset dataset = new DefaultIngestService((grain, undecided) ->
+				Map.of("vernacular", DatasetViewCardinalityPolicy.EXPAND)).ingest(manifest, "taxon");
+
+		assertThat(dataset.hasStructuredGraphs()).isTrue();
+		DatasetInputDescription description = dataset.inputDescription();
+		assertThat(description.viewMode()).isEqualTo(ViewMode.STRUCTURED);
+		assertThat(description.viewSource()).isEqualTo("automatic dataset view (vernacular=EXPAND)");
+		assertThat(description.grainTable()).isEqualTo("taxon");
+		assertThat(description.viewRecordCount()).isEqualTo(2);
+		assertThat(description.tables())
+				.extracting(InputTable::name, InputTable::recordCount)
+				.containsExactly(tuple("taxon", 2), tuple("vernacular", 3));
+		assertThat(description.viewRelations()).singleElement().satisfies(relation -> {
+			assertThat(relation.sourceTable()).isEqualTo("vernacular");
+			assertThat(relation.cardinalityPolicy()).isEqualTo(DatasetViewCardinalityPolicy.EXPAND);
+			assertThat(relation.coreRecordsWithMultipleRows()).isEqualTo(1);
+			assertThat(relation.maxRowsPerCoreRecord()).isEqualTo(2);
+			assertThat(relation.relatedRowCount()).isEqualTo(3);
+			assertThat(relation.mappedTerms()).containsExactly("vernacularName");
+		});
+		assertThat(dataset.recordGraphs().get(0).relatedByRelation().get("vernacular"))
+				.extracting(row -> row.terms().get("vernacularName"))
+				.containsExactly("balsam fir", "sapin baumier");
+	}
+
+	@Test
+	void joinPolicyGivenUpFrontIsUsedWithoutAsking(@TempDir Path tempDir) throws Exception {
+		Path manifest = writeTaxonWithVernacularNames(tempDir);
+
+		RecordDataset dataset = new DefaultIngestService().ingest(manifest, "taxon", "",
+				Map.of("vernacular", DatasetViewCardinalityPolicy.FIRST_ROW));
+
+		assertThat(dataset.hasStructuredGraphs()).isFalse();
+		assertThat(dataset.records()).extracting(record -> record.terms().get("vernacularName"))
+				.containsExactly("balsam fir", "white spruce");
+	}
+
+	@Test
+	void eventAndOccurrencePackageUsesOccurrenceGrainWithEventValues(@TempDir Path tempDir) throws Exception {
+		writeFile(tempDir, "event.csv", StandardCharsets.UTF_8,
+				"eventID,eventDate,countryCode\nEV-1,2020-06-01,CA\n");
+		writeFile(tempDir, "occurrence.csv", StandardCharsets.UTF_8,
+				"occurrenceID,eventID,scientificName\nocc-1,EV-1,Abies balsamea\nocc-2,EV-1,Picea glauca\n");
+		Path manifest = writeManifest(tempDir, """
+				{
+				  "resources": [
+				    { "name": "event", "path": "event.csv",
+				      "schema": { "fields": [ { "name": "eventID" }, { "name": "eventDate" }, { "name": "countryCode" } ],
+				                  "primaryKey": "eventID" } },
+				    { "name": "occurrence", "path": "occurrence.csv",
+				      "schema": { "fields": [ { "name": "occurrenceID" }, { "name": "eventID" }, { "name": "scientificName" } ],
+				                  "primaryKey": "occurrenceID",
+				                  "foreignKeys": [ { "fields": "eventID", "reference": { "resource": "event", "fields": "eventID" } } ] } }
+				  ]
+				}
+				""");
+
+		RecordDataset dataset = new DefaultIngestService().ingest(manifest, "");
+
+		assertThat(dataset.inputDescription().grainTable()).isEqualTo("occurrence");
+		assertThat(dataset.records()).extracting(CanonicalRecord::id).containsExactly("occ-1", "occ-2");
+		assertThat(dataset.records()).allSatisfy(record -> assertThat(record.terms())
+				.containsEntry("eventDate", "2020-06-01")
+				.containsEntry("countryCode", "CA"));
+		assertThat(dataset.records().get(1).terms()).containsEntry("scientificName", "Picea glauca");
+	}
+
+	/**
+	 * Writes a two-resource package: taxa, and vernacular names with two names for the first taxon.
+	 *
+	 * @param tempDir the directory to write into
+	 * @return the manifest path
+	 * @throws Exception if the package cannot be written
+	 */
+	private Path writeTaxonWithVernacularNames(Path tempDir) throws Exception {
 		writeFile(tempDir, "taxon.csv", StandardCharsets.UTF_8,
 				"taxonID,scientificName\nT-1,Abies balsamea\nT-2,Picea glauca\n");
 		writeFile(tempDir, "vernacular.csv", StandardCharsets.UTF_8,
 				"taxonID,vernacularName\nT-1,balsam fir\nT-1,sapin baumier\nT-2,white spruce\n");
-		Path manifest = writeManifest(tempDir, """
+		return writeManifest(tempDir, """
 				{
 				  "resources": [
 				    {
@@ -548,26 +629,6 @@ class DataPackageDialectIngestTest {
 				  ]
 				}
 				""");
-
-		RecordDataset dataset = new DefaultIngestService().ingest(manifest, "taxon");
-
-		assertThat(dataset.hasStructuredGraphs()).isTrue();
-		DatasetInputDescription description = dataset.inputDescription();
-		assertThat(description.viewMode()).isEqualTo(ViewMode.STRUCTURED);
-		assertThat(description.grainTable()).isEqualTo("taxon");
-		assertThat(description.viewRecordCount()).isEqualTo(2);
-		assertThat(description.tables())
-				.extracting(InputTable::name, InputTable::recordCount)
-				.containsExactly(tuple("taxon", 2), tuple("vernacular", 3));
-		assertThat(description.viewRelations()).singleElement().satisfies(relation -> {
-			assertThat(relation.sourceTable()).isEqualTo("vernacular");
-			assertThat(relation.cardinalityPolicy()).isNull();
-			assertThat(relation.coreRecordsWithRows()).isEqualTo(2);
-			assertThat(relation.coreRecordsWithMultipleRows()).isEqualTo(1);
-			assertThat(relation.maxRowsPerCoreRecord()).isEqualTo(2);
-			assertThat(relation.relatedRowCount()).isEqualTo(3);
-		});
-		assertThat(description.hasObservedMultiplicity()).isTrue();
 	}
 
 	/**

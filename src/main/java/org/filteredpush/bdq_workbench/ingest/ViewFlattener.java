@@ -24,6 +24,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
+import org.filteredpush.bdq_workbench.app.AppException;
 import org.filteredpush.bdq_workbench.model.CanonicalRecord;
 import org.filteredpush.bdq_workbench.model.DatasetView;
 import org.filteredpush.bdq_workbench.model.DatasetViewCardinalityPolicy;
@@ -54,7 +55,13 @@ public class ViewFlattener {
 	 *     {@link DatasetViewCardinalityPolicy#EXPAND}) and non-fatal diagnostics
 	 */
 	public ViewFlattenResult flatten(RelationalIngestResult relational, DatasetView view) {
+		if (!relational.coreTable().isBlank() && !relational.coreTable().equalsIgnoreCase(view.grainTable())) {
+			throw new AppException("Dataset view grain table " + view.grainTable() + " does not match the table the "
+					+ "relational graphs were built around (" + relational.coreTable() + "); ingest with the view's "
+					+ "grain table so each record is one " + view.grainTable() + " row");
+		}
 		List<String> diagnostics = new ArrayList<>();
+		warnAboutDuplicateFlattenedTerms(view, diagnostics);
 		List<DatasetViewJoin> expandedJoins = view.joins().stream()
 				.filter(join -> join.cardinalityPolicy() == DatasetViewCardinalityPolicy.EXPAND)
 				.toList();
@@ -87,7 +94,7 @@ public class ViewFlattener {
 		Map<String, String> terms = new LinkedHashMap<>();
 		Map<String, List<SourceCell>> provenance = new LinkedHashMap<>();
 		for (DatasetViewMapping mapping : view.mappings()) {
-			if (isExpandedSource(mapping.sourceTable(), expandedJoins)) {
+			if (isExpandedSource(mapping.sourceTable(), expandedJoins) || terms.containsKey(mapping.term())) {
 				continue;
 			}
 			ValueSelection selected = selectValue(graph, mapping, view.grainTable(), view.joins(), diagnostics);
@@ -140,6 +147,31 @@ public class ViewFlattener {
 			provenance.put(mapping.term(), sourceCells(row, sourceTable, mapping.sourceColumn(), mapping.term()));
 		}
 		return new CanonicalRecord(row.id(), terms, provenance);
+	}
+
+	/**
+	 * Reports a term mapped from more than one flattened source; the first mapping wins. (A term may
+	 * legitimately be mapped from the grain and from an expanded table, since expanded rows keep
+	 * their own values.)
+	 *
+	 * @param view the view being applied
+	 * @param diagnostics receives one diagnostic per duplicated term
+	 */
+	private static void warnAboutDuplicateFlattenedTerms(DatasetView view, List<String> diagnostics) {
+		List<DatasetViewJoin> expandedJoins = view.joins().stream()
+				.filter(join -> join.cardinalityPolicy() == DatasetViewCardinalityPolicy.EXPAND)
+				.toList();
+		Map<String, String> firstSource = new LinkedHashMap<>();
+		for (DatasetViewMapping mapping : view.mappings()) {
+			if (isExpandedSource(mapping.sourceTable(), expandedJoins)) {
+				continue;
+			}
+			String previous = firstSource.putIfAbsent(mapping.term(), mapping.sourceTable());
+			if (previous != null) {
+				diagnostics.add("Term " + mapping.term() + " is mapped from both " + previous + " and "
+						+ mapping.sourceTable() + "; using " + previous);
+			}
+		}
 	}
 
 	/**

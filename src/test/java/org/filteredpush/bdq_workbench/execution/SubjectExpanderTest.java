@@ -170,6 +170,45 @@ class SubjectExpanderTest {
 		});
 	}
 
+	@Test
+	void joinKeyColumnsDoNotMakeARelationSupplyAField() {
+		CanonicalRecord core = core("occ-1", Map.of("occurrenceID", "occ-1"));
+		RecordDataset dataset = new RecordDataset(
+				List.of(core),
+				List.of(new RecordGraph(core, Map.of("identification", List.of(
+						related("row-1", "identification", Map.of("occurrenceID", "occ-1", "scientificName", "Aus bus")),
+						related("row-2", "identification", Map.of("occurrenceID", "occ-1", "scientificName", "Cus dus")))))),
+				new org.filteredpush.bdq_workbench.model.DatasetInputDescription(
+						org.filteredpush.bdq_workbench.model.DatasetInputDescription.ViewMode.STRUCTURED, "", "occurrence",
+						1, List.of(),
+						List.of(new org.filteredpush.bdq_workbench.model.RelationshipSchema(
+								"identification", "occurrenceID", "occurrence", "occurrenceID", "identification")),
+						List.of(), List.of()));
+
+		SubjectExpander.SubjectExpansionResult expansion = new SubjectExpander(dataset).expand(List.of("occurrenceID"));
+
+		assertThat(expansion.subjects()).singleElement()
+				.satisfies(subject -> assertThat(subject.hasStructuredReference()).isFalse());
+	}
+
+	@Test
+	void termOnBothGrainAndExpandedRowsEvaluatesTheGrainValueToo() {
+		CanonicalRecord core = core("occ-1", Map.of("occurrenceID", "occ-1", "scientificName", "Aus bus"));
+		SubjectExpander expander = new SubjectExpander(new RecordDataset(
+				List.of(core),
+				List.of(new RecordGraph(core, Map.of("identification", List.of(
+						related("row-1", "identification", Map.of("scientificName", "Aus cus")),
+						related("row-2", "identification", Map.of("scientificName", "Aus dus"))))))));
+
+		SubjectExpander.SubjectExpansionResult expansion = expander.expand(List.of("scientificName"));
+
+		assertThat(expansion.subjects()).extracting(subject -> subject.effectiveRecord().terms().get("scientificName"))
+				.containsExactly("Aus bus", "Aus cus", "Aus dus");
+		assertThat(expansion.subjects()).extracting(subject -> subject.subjectRef().sourceTable()
+				+ ":" + subject.subjectRef().rowRef())
+				.containsExactly("occurrence:occ-1", "identification:row-1", "identification:row-2");
+	}
+
 	private static CanonicalRecord core(String id, Map<String, String> terms) {
 		return new CanonicalRecord(id, terms, provenance("occurrence", id, terms.keySet()));
 	}

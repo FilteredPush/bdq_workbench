@@ -52,6 +52,16 @@ import org.filteredpush.bdq_workbench.model.SubjectRef;
  *       every per-row evaluation.
  * </ul>
  *
+ * <p>When the core record itself carries every field a binding reads from the governing relation
+ * (a view mapped the term from the grain as well as from the expanded table, e.g. the current
+ * identification on an occurrence and the identification history in a related table), the core
+ * record is evaluated too, as one more subject referencing the grain row, so both the grain's
+ * value and each related row's value are tested and rolled up together.
+ *
+ * <p>Join-key columns (from the dataset's recorded relationships) never make a relation supply a
+ * field: an identification row's {@code occurrenceID} links it to its occurrence and is not a
+ * reason to evaluate a test reading {@code occurrenceID} once per identification.
+ *
  * <p>A binding whose fields need two different multi-valued relations is rejected, since no single
  * row grain covers both. A core record with no rows in the governing relation is still evaluated,
  * once, at core grain, with that relation's fields blank: the record lacks those information
@@ -70,13 +80,34 @@ final class SubjectExpander {
 	 */
 	SubjectExpander(RecordDataset dataset) {
 		this.dataset = dataset;
+		Map<String, Set<String>> keyColumns = keyColumnsByTable(dataset);
 		dataset.recordGraphs().forEach(graph -> graph.relatedByRelation().forEach((relation, records) -> {
 			if (records.size() > 1) {
 				multiValuedRelations.add(relation);
 			}
-			records.forEach(record -> record.terms().keySet().forEach(field ->
-					relationsByField.computeIfAbsent(field, ignored -> new LinkedHashSet<>()).add(relation)));
+			Set<String> keys = keyColumns.getOrDefault(relation.toLowerCase(), Set.of());
+			records.forEach(record -> record.terms().keySet().stream()
+					.filter(field -> !keys.contains(field))
+					.forEach(field -> relationsByField.computeIfAbsent(field, ignored -> new LinkedHashSet<>())
+							.add(relation)));
 		}));
+	}
+
+	/**
+	 * Collects the columns each table uses in a recorded relationship.
+	 *
+	 * @param dataset the execution dataset, whose input description records the relationships
+	 * @return join-key columns keyed by lower-cased table name (which is also the relation name)
+	 */
+	private static Map<String, Set<String>> keyColumnsByTable(RecordDataset dataset) {
+		Map<String, Set<String>> keys = new LinkedHashMap<>();
+		dataset.inputDescription().relationships().forEach(relationship -> {
+			keys.computeIfAbsent(relationship.fromTable().toLowerCase(), ignored -> new LinkedHashSet<>())
+					.add(relationship.fromColumn());
+			keys.computeIfAbsent(relationship.toTable().toLowerCase(), ignored -> new LinkedHashSet<>())
+					.add(relationship.toColumn());
+		});
+		return keys;
 	}
 
 	/**
@@ -169,6 +200,14 @@ final class SubjectExpander {
 					null));
 			return;
 		}
+		if (base.terms().keySet().containsAll(governance.governedFields())) {
+			subjects.add(new EvaluationSubject(
+					graph.core().id(),
+					base,
+					graph.core(),
+					graph,
+					subjectRef(graph.core().id(), "", graph.core())));
+		}
 		for (CanonicalRecord row : governingRows) {
 			subjects.add(new EvaluationSubject(
 					graph.core().id(),
@@ -241,14 +280,25 @@ final class SubjectExpander {
 		return new CanonicalRecord(base.id(), terms, provenance);
 	}
 
+	/**
+	 * Builds the subject reference for one evaluated row.
+	 *
+	 * @param coreRecordId the core record the subject belongs to
+	 * @param governingRelation the governing relation, or {@code ""} for the core record itself
+	 * @param row the evaluated row
+	 * @return the subject reference, located by the row's own source cell
+	 */
 	private SubjectRef subjectRef(String coreRecordId, String governingRelation, CanonicalRecord row) {
+		/* A flattened core record also holds cells from joined tables; prefer the row's own. */
 		SourceCell cell = row.provenanceByTerm().values().stream()
 				.flatMap(List::stream)
+				.filter(candidate -> !governingRelation.isEmpty() || row.id().equals(candidate.rowRef()))
 				.findFirst()
 				.orElse(null);
+		String relationName = governingRelation.isEmpty() && cell != null ? cell.table() : governingRelation;
 		return new SubjectRef(
 				coreRecordId,
-				governingRelation,
+				relationName,
 				cell == null ? governingRelation : cell.table(),
 				cell == null ? governingRelation : cell.sourceLocation(),
 				cell == null ? row.id() : cell.rowRef());

@@ -84,15 +84,26 @@ public class RelationalDatasetIngestor {
 						table == selected);
 				rowsByTable.put(table.label(), rows);
 			}
+			/*
+			 * Every extension's coreid refers to the archive's declared core, whichever table was
+			 * selected as the graph core; with an extension (e.g. occurrences of an event-core
+			 * archive) selected, its link to the declared core then makes that core its parent.
+			 */
+			CoreTableCandidate<DwcArchiveCoreMeta> declaredCore = tables.stream()
+					.filter(CoreTableCandidate::declaredCore)
+					.findFirst()
+					.orElse(selected);
+			String declaredCoreId = declaredCore.descriptor().idColumn().isBlank()
+					? declaredCore.rowType().identifierTerm()
+					: declaredCore.descriptor().idColumn();
 			List<RelationshipSchema> relationships = tables.stream()
+					.filter(table -> table != declaredCore)
 					.filter(table -> !table.descriptor().coreIdColumn().isBlank())
 					.map(table -> new RelationshipSchema(
 							table.label(),
 							table.descriptor().coreIdColumn(),
-							selected.label(),
-							selected.descriptor().idColumn().isBlank()
-									? selected.rowType().identifierTerm()
-									: selected.descriptor().idColumn(),
+							declaredCore.label(),
+							declaredCoreId,
 							table.label()))
 					.toList();
 			return assembleResult(selected.label(), rowsByTable, tables.stream()
