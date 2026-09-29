@@ -303,11 +303,14 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
                         throwIfCancellationRequested("during phase " + phase);
                         for (SubjectResponse fanned : collectAndFanOut(phase, invocation)) {
                             throwIfCancellationRequested("during phase " + phase);
-                            Response response = applyAmendments(recordsById, fanned.subject(), fanned.response());
+                            Map<String, String> recordAmendments = recordKeyedAmendments(
+                                    fanned.response().amendments(), fanned.subject(), plan.binding());
+                            Response response = applyAmendments(
+                                    recordsById, fanned.subject(), fanned.response(), recordAmendments);
                             responses.add(response);
                             detailResponses.add(response);
                             completed++;
-                            changedFields.addAll(response.amendments().keySet());
+                            changedFields.addAll(recordAmendments.keySet());
                             progressListener.onResponse(phase, response, completed, total);
                         }
                     }
@@ -918,7 +921,8 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
                     totalRecords,
                     finishedAt);
         }
-        long matchingCount = targetResponses.stream()
+        List<Response> recordResponses = recordLevelResponses(targetResponsesWithRollups(spec, phaseResponses));
+        long matchingCount = recordResponses.stream()
                 .filter(response -> spec.responseResult().equals(response.responseResult()))
                 .count();
         double percentage = totalRecords == 0 ? 0.0d : (matchingCount * 100.0d) / totalRecords;
@@ -992,8 +996,9 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
                     totalRecords,
                     finishedAt);
         }
-        long eligibleCount = targetResponses.size();
-        long matchingCount = targetResponses.stream()
+        List<Response> recordResponses = recordLevelResponses(targetResponsesWithRollups(spec, phaseResponses));
+        long eligibleCount = recordResponses.size();
+        long matchingCount = recordResponses.stream()
                 .filter(spec::matchesQaCondition)
                 .count();
         if (eligibleCount == 0 && totalRecords > 0) {
@@ -1131,6 +1136,42 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
      * @param phaseResponses the phase's responses
      * @return the target responses for {@code spec}
      */
+    /**
+     * Reduces a target test's responses to one per record, so a multi-record measure counts records
+     * rather than evaluations: where a record's evaluations over expanded related rows were rolled
+     * up, the derived rollup stands for the record; otherwise the record's own response(s) do
+     * (normally exactly one). Without this, a test run once per identification would count each
+     * identification, giving results above 100% of the records.
+     *
+     * @param targetResponses the target test's responses, derived rollups included
+     * @return the record-level responses
+     */
+    private static List<Response> recordLevelResponses(List<Response> targetResponses) {
+        Map<String, List<Response>> byRecord = new LinkedHashMap<>();
+        targetResponses.forEach(response -> byRecord
+                .computeIfAbsent(response.recordId(), ignored -> new ArrayList<>())
+                .add(response));
+        List<Response> recordLevel = new ArrayList<>();
+        for (List<Response> responses : byRecord.values()) {
+            List<Response> rollups = responses.stream().filter(Response::derived).toList();
+            recordLevel.addAll(rollups.isEmpty() ? responses : rollups);
+        }
+        return recordLevel;
+    }
+
+    /**
+     * Selects the target test's responses, derived rollups included, from a phase's responses.
+     *
+     * @param spec the built-in measure's specification
+     * @param phaseResponses the phase's responses
+     * @return the target test's responses
+     */
+    private static List<Response> targetResponsesWithRollups(BuiltInMeasureSpec spec, List<Response> phaseResponses) {
+        return phaseResponses.stream()
+                .filter(response -> spec.targetTestId().equals(response.testId()))
+                .toList();
+    }
+
     private static List<Response> targetResponses(BuiltInMeasureSpec spec, List<Response> phaseResponses) {
         return phaseResponses.stream()
                 .filter(response -> !response.derived())
@@ -1246,16 +1287,19 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
      * @param recordsById the phase's records, keyed by ID, whose matching entry's terms are
      *     updated in place
      * @param response the response whose {@link Response#amendments()} are to be applied
+     * @param recordAmendments the response's amendments keyed by the record's own term names
+     *     (see {@link #recordKeyedAmendments})
      */
     private static Response applyAmendments(
             Map<String, CanonicalRecord> recordsById,
             EvaluationSubject subject,
-            Response response) {
-        if (response.amendments().isEmpty()) {
+            Response response,
+            Map<String, String> recordAmendments) {
+        if (recordAmendments.isEmpty()) {
             return response;
         }
         try {
-            Map<CanonicalRecord, Map<String, String>> writes = resolveAmendmentTargets(subject, response.amendments(), recordsById);
+            Map<CanonicalRecord, Map<String, String>> writes = resolveAmendmentTargets(subject, recordAmendments, recordsById);
             LOG.debug("Applying amendments for record {} subject {}: {}",
                     response.recordId(),
                     response.subjectRef() == null ? "<core>" : response.subjectRef().sortKey(),
@@ -1268,6 +1312,37 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
         } catch (IllegalStateException e) {
             return amendmentWriteBackError(response, e.getMessage());
         }
+    }
+
+    /**
+     * Re-keys an amendment's proposed values by the record's own term names. Implementations name
+     * the terms they amend as they declare them (e.g. {@code dwc:geodeticDatum}), while ingested
+     * records use the terms' local names ({@code geodeticDatum}); writing under the implementation's
+     * key would leave the value tests read unchanged, so post-amendment tests would still see the
+     * original data.
+     *
+     * @param amendments the proposed values, keyed as the implementation returned them
+     * @param subject the evaluated subject, whose effective record supplies the term names
+     * @param binding the binding, whose bound input names are used for terms the record lacks
+     * @return the proposed values keyed by record term name, in the original order
+     */
+    static Map<String, String> recordKeyedAmendments(
+            Map<String, String> amendments,
+            EvaluationSubject subject,
+            ImplementationBinding binding) {
+        if (amendments.isEmpty()) {
+            return Map.of();
+        }
+        java.util.Set<String> recordTerms = subject.effectiveRecord().terms().keySet();
+        List<String> boundNames = binding.parameterBindings().stream()
+                .map(BoundMethodParameter::resolvedSource)
+                .filter(java.util.Objects::nonNull)
+                .toList();
+        Map<String, String> keyed = new LinkedHashMap<>();
+        amendments.forEach((term, value) -> keyed.put(
+                org.filteredpush.bdq_workbench.model.DarwinCoreTermResolver.recordTermFor(term, recordTerms, boundNames),
+                value));
+        return keyed;
     }
 
     private static void ensureProvenance(CanonicalRecord record, String term, EvaluationSubject subject) {

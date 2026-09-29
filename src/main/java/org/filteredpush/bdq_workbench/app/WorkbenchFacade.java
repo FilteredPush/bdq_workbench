@@ -33,6 +33,7 @@ import org.filteredpush.bdq_workbench.filtering.RecordFilterService;
 import org.filteredpush.bdq_workbench.execution.TestExecutionService;
 import org.filteredpush.bdq_workbench.model.BindingReview;
 import org.filteredpush.bdq_workbench.model.BindingStatus;
+import org.filteredpush.bdq_workbench.model.DarwinCoreTermResolver;
 import org.filteredpush.bdq_workbench.ingest.IngestService;
 import org.filteredpush.bdq_workbench.model.ExecutionPlan;
 import org.filteredpush.bdq_workbench.model.ExecutionSummary;
@@ -586,7 +587,8 @@ public class WorkbenchFacade {
                             java.util.Map.of());
                     response.amendments().forEach((term, amendedValue) -> counts.merge(
                             term + ": "
-                                    + describeValue(sourceTerms.get(term))
+                                    + describeValue(sourceTerms.get(DarwinCoreTermResolver.recordTermFor(
+                                            term, sourceTerms.keySet(), List.of())))
                                     + " -> "
                                     + describeValue(amendedValue),
                             1L,
