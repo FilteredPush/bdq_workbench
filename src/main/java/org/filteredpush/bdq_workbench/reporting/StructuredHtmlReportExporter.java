@@ -56,6 +56,40 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 
 	private static final String MULTIRECORD_SENTINEL = "MULTIRECORD";
 	private static final String UNRESOLVED_SENTINEL = "*";
+	/** Height, in pixels, of one dumbbell-chart row's plot. */
+	private static final int MEASURE_ROW_HEIGHT = 26;
+	/** Radius, in pixels, of a dumbbell-chart marker. */
+	private static final int MEASURE_MARKER_RADIUS = 6;
+	/** Axis tick positions, in percent, on the dumbbell chart. */
+	private static final int[] MEASURE_AXIS_TICKS = {0, 25, 50, 75, 100};
+	/**
+	 * Styles for the pre/post measure dumbbell chart. One hue in two shades (validated as an
+	 * ordinal pair): pre-amendment is a light hollow ring, post-amendment a dark filled dot, so the
+	 * phases differ by shape as well as shade; the change label carries an arrow and sign, never
+	 * colour alone.
+	 */
+	private static final String MEASURE_CHART_CSS = ""
+			+ "    .mc { --mc-pre: #86b6ef; --mc-post: #1c5cab; --mc-link: #9ec5f4; --mc-grid: #e6e5e0;"
+			+ " --mc-ink: #1f2328; --mc-muted: #57606a; --mc-up: #006300; --mc-down: #b42318; margin-top: 0.75rem; }\n"
+			+ "    .mc-summary { margin: 0.25rem 0 0.5rem; }\n"
+			+ "    .mc-legend { display: flex; gap: 1.25rem; font-size: 0.85rem; color: var(--mc-muted); margin-bottom: 0.25rem; }\n"
+			+ "    .mc-legend svg { vertical-align: -0.2rem; margin-right: 0.3rem; }\n"
+			+ "    .mc-row { display: grid; grid-template-columns: minmax(10rem, 2fr) minmax(12rem, 5fr) minmax(10rem, 1.6fr);"
+			+ " gap: 0.75rem; align-items: center; padding: 0.2rem 0; }\n"
+			+ "    .mc-row + .mc-row { border-top: 1px solid var(--mc-grid); }\n"
+			+ "    .mc-row svg.mc-plot { width: 100%; overflow: visible; display: block; }\n"
+			+ "    .mc-label { font-size: 0.9rem; color: var(--mc-ink); }\n"
+			+ "    .mc-values { font-size: 0.85rem; color: var(--mc-muted); font-variant-numeric: tabular-nums; }\n"
+			+ "    .mc-delta { font-weight: 600; margin-left: 0.4rem; white-space: nowrap; }\n"
+			+ "    .mc-delta.up { color: var(--mc-up); }\n"
+			+ "    .mc-delta.down { color: var(--mc-down); }\n"
+			+ "    .mc-delta.same { color: var(--mc-muted); font-weight: 400; }\n"
+			+ "    .mc-group { font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;"
+			+ " color: var(--mc-muted); margin: 0.9rem 0 0.2rem; }\n"
+			+ "    .mc-row.unchanged .mc-label { color: var(--mc-muted); }\n"
+			+ "    .mc-axis { font-size: 0.75rem; fill: var(--mc-muted); }\n"
+			+ "    .mc-row.mc-axis-row { border-top: none; padding-bottom: 0; }\n"
+			+ "    @media (max-width: 40rem) { .mc-row { grid-template-columns: 1fr; gap: 0.2rem; } .mc-axis-row { display: none; } }\n";
 	/** The most bound terms named per table in the input-view overview. */
 	private static final int MAX_LISTED_TERMS = 6;
 
@@ -125,14 +159,7 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 				.append("    table { border-collapse: collapse; width: 100%; margin-top: 0.75rem; }\n")
 				.append("    th, td { border: 1px solid #d0d7de; padding: 0.5rem; text-align: left; vertical-align: top; }\n")
 				.append("    th { background: #f6f8fa; }\n")
-				.append("    .measure-track { width: 100%; min-width: 12rem; background: #edf2f7; border-radius: 999px; overflow: hidden; margin-top: 0.25rem; }\n")
-				.append("    .measure-fill { height: 0.9rem; }\n")
-				.append("    .measure-fill.pre { background: #6a1b9a; }\n")
-				.append("    .measure-fill.post { background: #00897b; }\n")
-				.append("    .measure-value { display: block; font-weight: 600; }\n")
-				.append("    .measure-change.positive { color: #0b6e4f; }\n")
-				.append("    .measure-change.negative { color: #b42318; }\n")
-				.append("    .measure-change.neutral { color: #57606a; }\n")
+				.append(MEASURE_CHART_CSS)
 				.append(InputViewDiagram.CSS)
 				.append("  </style>\n")
 				.append("</head>\n")
@@ -367,8 +394,13 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 	}
 
 	/**
-	 * Appends one HTML visualization section comparing pre-amendment and post-amendment
-	 * multi-record measures.
+	 * Appends the section comparing pre-amendment and post-amendment multi-record measures.
+	 *
+	 * <p>The comparison is drawn as a dumbbell chart: one row per measure on a shared 0–100% axis,
+	 * with the pre-amendment value as a hollow ring and the post-amendment value as a filled dot
+	 * joined by a bar, so an improvement reads as a dot to the right of its ring and the bar's
+	 * length is the size of the change. Measures that changed come first, largest improvement at
+	 * the top; unchanged measures follow, muted. The same numbers are in a table view below.
 	 *
 	 * @param builder the report being built; appended to in place
 	 * @param summary the execution summary supplying measure responses
@@ -380,20 +412,223 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 		}
 		List<StructuredMeasureComparisons.MeasureComparison> changed = comparisons.stream()
 				.filter(StructuredMeasureComparisons.MeasureComparison::changed)
+				.sorted(java.util.Comparator.comparingInt(
+						(StructuredMeasureComparisons.MeasureComparison comparison) -> comparison.deltaPercent() == null
+								? Integer.MIN_VALUE
+								: comparison.deltaPercent())
+						.reversed())
 				.toList();
 		List<StructuredMeasureComparisons.MeasureComparison> unchanged = comparisons.stream()
 				.filter(comparison -> !comparison.changed())
 				.toList();
+		long improved = changed.stream().filter(comparison -> deltaOf(comparison) > 0).count();
+		long declined = changed.stream().filter(comparison -> deltaOf(comparison) < 0).count();
 		builder.append("<section>\n")
-				.append("  <h2>Measure differences between pre-amendment and post-amendment phases</h2>\n");
+				.append("  <h2>Measure differences between pre-amendment and post-amendment phases</h2>\n")
+				.append("  <p class=\"mc-summary\">")
+				.append(changed.size())
+				.append(" of ")
+				.append(comparisons.size())
+				.append(" measure(s) changed after amendment: ")
+				.append(improved)
+				.append(" improved, ")
+				.append(declined)
+				.append(" declined.</p>\n")
+				.append("  <div class=\"mc\">\n")
+				.append("    <div class=\"mc-legend\">")
+				.append("<span>").append(measureMarkerIcon(false)).append("Pre-amendment</span>")
+				.append("<span>").append(measureMarkerIcon(true)).append("Post-amendment</span>")
+				.append("</div>\n");
+		appendMeasureAxisRow(builder);
+		appendMeasureChartGroup(builder, "Changed after amendment", changed, false);
+		appendMeasureChartGroup(builder, "Unchanged", unchanged, true);
+		builder.append("  </div>\n")
+				.append("  <details>\n")
+				.append("    <summary>Table view</summary>\n");
 		appendMeasureComparisonTable(builder, "Measures with differences", changed);
 		appendMeasureComparisonTable(builder, "Measures with no differences", unchanged);
-		builder
+		builder.append("  </details>\n")
 				.append("</section>\n");
 	}
 
 	/**
-	 * Appends one measure-comparison table.
+	 * @param comparison a measure comparison
+	 * @return its percentage-point change, or {@code 0} when unavailable
+	 */
+	private static int deltaOf(StructuredMeasureComparisons.MeasureComparison comparison) {
+		return comparison.deltaPercent() == null ? 0 : comparison.deltaPercent();
+	}
+
+	/**
+	 * Appends the chart's axis row, labelling the shared 0–100% scale.
+	 *
+	 * @param builder the report being built; appended to in place
+	 */
+	private static void appendMeasureAxisRow(StringBuilder builder) {
+		builder.append("    <div class=\"mc-row mc-axis-row\" aria-hidden=\"true\"><span></span>")
+				.append("<svg class=\"mc-plot\" height=\"14\">");
+		for (int tick : MEASURE_AXIS_TICKS) {
+			String anchor = tick == 0 ? "start" : tick == 100 ? "end" : "middle";
+			builder.append("<text class=\"mc-axis\" x=\"").append(tick).append("%\" y=\"11\" text-anchor=\"")
+					.append(anchor).append("\">").append(tick).append("%</text>");
+		}
+		builder.append("</svg><span></span></div>\n");
+	}
+
+	/**
+	 * Appends one group of chart rows under a small heading.
+	 *
+	 * @param builder the report being built; appended to in place
+	 * @param title the group heading
+	 * @param comparisons the comparisons in the group, in display order
+	 * @param muted whether the rows are drawn de-emphasized
+	 */
+	private static void appendMeasureChartGroup(
+			StringBuilder builder,
+			String title,
+			List<StructuredMeasureComparisons.MeasureComparison> comparisons,
+			boolean muted) {
+		if (comparisons.isEmpty()) {
+			return;
+		}
+		builder.append("    <div class=\"mc-group\">")
+				.append(escapeHtml(title))
+				.append(" (")
+				.append(comparisons.size())
+				.append(")</div>\n");
+		for (StructuredMeasureComparisons.MeasureComparison comparison : comparisons) {
+			appendMeasureChartRow(builder, comparison, muted);
+		}
+	}
+
+	/**
+	 * Appends one dumbbell row: the measure label, its pre/post plot, and its values and change.
+	 *
+	 * @param builder the report being built; appended to in place
+	 * @param comparison the measure comparison
+	 * @param muted whether the row is drawn de-emphasized
+	 */
+	private static void appendMeasureChartRow(
+			StringBuilder builder,
+			StructuredMeasureComparisons.MeasureComparison comparison,
+			boolean muted) {
+		builder.append("    <div class=\"mc-row").append(muted ? " unchanged" : "").append("\">")
+				.append("<span class=\"mc-label\">").append(escapeHtml(comparison.label())).append("</span>")
+				.append(renderMeasurePlot(comparison))
+				.append("<span class=\"mc-values\">")
+				.append(escapeHtml(compactValues(comparison)))
+				.append(" <span class=\"mc-delta ").append(deltaCssClass(comparison)).append("\">")
+				.append(escapeHtml(deltaLabel(comparison)))
+				.append("</span></span></div>\n");
+	}
+
+	/**
+	 * Draws one row's plot: gridlines, the bar joining pre to post, and the two markers.
+	 *
+	 * @param comparison the measure comparison
+	 * @return the plot's SVG, or a short note when the measure has no percentages
+	 */
+	private static String renderMeasurePlot(StructuredMeasureComparisons.MeasureComparison comparison) {
+		Integer pre = clampPercent(comparison.prePercent());
+		Integer post = clampPercent(comparison.postPercent());
+		if (pre == null && post == null) {
+			return "<span class=\"mc-values\">no percentage to plot</span>";
+		}
+		int middle = MEASURE_ROW_HEIGHT / 2;
+		StringBuilder svg = new StringBuilder("<svg class=\"mc-plot\" height=\"").append(MEASURE_ROW_HEIGHT)
+				.append("\" role=\"img\" aria-label=\"")
+				.append(escapeAttribute(comparison.label() + ": " + comparison.preText() + " before, "
+						+ comparison.postText() + " after amendment"))
+				.append("\"><title>")
+				.append(escapeHtml(comparison.label() + "\npre-amendment: " + comparison.preText()
+						+ "\npost-amendment: " + comparison.postText() + "\n" + comparison.changeText()))
+				.append("</title>");
+		for (int tick : MEASURE_AXIS_TICKS) {
+			svg.append("<line x1=\"").append(tick).append("%\" x2=\"").append(tick).append("%\" y1=\"2\" y2=\"")
+					.append(MEASURE_ROW_HEIGHT - 2).append("\" stroke=\"var(--mc-grid)\" stroke-width=\"1\"/>");
+		}
+		if (pre != null && post != null && !pre.equals(post)) {
+			svg.append("<line x1=\"").append(pre).append("%\" x2=\"").append(post).append("%\" y1=\"").append(middle)
+					.append("\" y2=\"").append(middle)
+					.append("\" stroke=\"var(--mc-link)\" stroke-width=\"6\" stroke-linecap=\"round\"/>");
+		}
+		if (pre != null) {
+			svg.append("<circle cx=\"").append(pre).append("%\" cy=\"").append(middle).append("\" r=\"")
+					.append(MEASURE_MARKER_RADIUS)
+					.append("\" fill=\"#fcfcfb\" stroke=\"var(--mc-pre)\" stroke-width=\"3\"/>");
+		}
+		if (post != null) {
+			svg.append("<circle cx=\"").append(post).append("%\" cy=\"").append(middle).append("\" r=\"")
+					.append(pre != null && pre.equals(post) ? MEASURE_MARKER_RADIUS - 3 : MEASURE_MARKER_RADIUS)
+					.append("\" fill=\"var(--mc-post)\" stroke=\"#fcfcfb\" stroke-width=\"2\"/>");
+		}
+		return svg.append("</svg>").toString();
+	}
+
+	/**
+	 * Draws a legend marker.
+	 *
+	 * @param post whether to draw the post-amendment (filled) marker rather than the pre-amendment ring
+	 * @return the marker's SVG
+	 */
+	private static String measureMarkerIcon(boolean post) {
+		return post
+				? "<svg width=\"14\" height=\"14\" aria-hidden=\"true\"><circle cx=\"7\" cy=\"7\" r=\"6\" "
+						+ "fill=\"var(--mc-post)\"/></svg>"
+				: "<svg width=\"14\" height=\"14\" aria-hidden=\"true\"><circle cx=\"7\" cy=\"7\" r=\"5\" "
+						+ "fill=\"#fcfcfb\" stroke=\"var(--mc-pre)\" stroke-width=\"3\"/></svg>";
+	}
+
+	/**
+	 * Renders a row's values compactly: rounded percentages when both phases have them, otherwise
+	 * the phases' text; counts are in the row's tooltip and the table view.
+	 *
+	 * @param comparison the measure comparison
+	 * @return the compact values
+	 */
+	private static String compactValues(StructuredMeasureComparisons.MeasureComparison comparison) {
+		if (comparison.prePercent() != null && comparison.postPercent() != null) {
+			return comparison.prePercent() + "% → " + comparison.postPercent() + "%";
+		}
+		return comparison.preText() + " → " + comparison.postText();
+	}
+
+	/**
+	 * Labels a measure's change with a direction arrow and signed percentage points.
+	 *
+	 * @param comparison the measure comparison
+	 * @return the change label
+	 */
+	private static String deltaLabel(StructuredMeasureComparisons.MeasureComparison comparison) {
+		Integer delta = comparison.deltaPercent();
+		if (delta == null) {
+			return comparison.changed() ? "changed" : "no change";
+		}
+		if (delta == 0) {
+			return "no change";
+		}
+		return delta > 0 ? "▲ +" + delta + " pts" : "▼ −" + Math.abs(delta) + " pts";
+	}
+
+	/**
+	 * @param comparison the measure comparison
+	 * @return {@code up}, {@code down}, or {@code same}
+	 */
+	private static String deltaCssClass(StructuredMeasureComparisons.MeasureComparison comparison) {
+		int delta = deltaOf(comparison);
+		return delta > 0 ? "up" : delta < 0 ? "down" : "same";
+	}
+
+	/**
+	 * @param percent a percentage, possibly {@code null}
+	 * @return the percentage clamped to 0–100, or {@code null}
+	 */
+	private static Integer clampPercent(Integer percent) {
+		return percent == null ? null : Math.max(0, Math.min(100, percent));
+	}
+
+	/**
+	 * Appends one measure-comparison table (the chart's table view).
 	 *
 	 * @param builder the report being built; appended to in place
 	 * @param title the table title
@@ -414,61 +649,28 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 				.append("    <thead><tr><th>Measure</th><th>Pre-amendment</th><th>Post-amendment</th><th>Observed change</th></tr></thead>\n")
 				.append("    <tbody>\n");
 		for (StructuredMeasureComparisons.MeasureComparison comparison : comparisons) {
-			builder.append("      <tr>\n")
-					.append("        <td>")
+			builder.append("      <tr><td>")
 					.append(escapeHtml(comparison.label()))
-					.append("</td>\n")
-					.append("        <td>")
-					.append(renderMeasurePhaseCell(comparison.preText(), comparison.prePercent(), "pre"))
-					.append("</td>\n")
-					.append("        <td>")
-					.append(renderMeasurePhaseCell(comparison.postText(), comparison.postPercent(), "post"))
-					.append("</td>\n")
-					.append("        <td><span class=\"measure-change ")
-					.append(changeCssClass(comparison.deltaPercent()))
-					.append("\">")
+					.append("</td><td>")
+					.append(escapeHtml(comparison.preText()))
+					.append("</td><td>")
+					.append(escapeHtml(comparison.postText()))
+					.append("</td><td>")
 					.append(escapeHtml(comparison.changeText()))
-					.append("</span></td>\n")
-					.append("      </tr>\n");
+					.append("</td></tr>\n");
 		}
 		builder.append("    </tbody>\n")
 				.append("  </table>\n");
 	}
 
 	/**
-	 * Renders one measure phase cell, including a percentage bar when a percentage is available.
+	 * Escapes text for a double-quoted HTML attribute value.
 	 *
-	 * @param text the textual phase summary
-	 * @param percent the optional percentage value
-	 * @param cssVariant the CSS variant to apply to the percentage fill
-	 * @return the HTML fragment for the phase cell
+	 * @param raw the raw text
+	 * @return the escaped text
 	 */
-	private static String renderMeasurePhaseCell(String text, Integer percent, String cssVariant) {
-		StringBuilder builder = new StringBuilder()
-				.append("<span class=\"measure-value\">")
-				.append(escapeHtml(text))
-				.append("</span>");
-		if (percent != null) {
-			builder.append("<div class=\"measure-track\"><div class=\"measure-fill ")
-					.append(cssVariant)
-					.append("\" style=\"width: ")
-					.append(Math.max(0, Math.min(100, percent)))
-					.append("%;\"></div></div>");
-		}
-		return builder.toString();
-	}
-
-	/**
-	 * Chooses the CSS class for one change summary.
-	 *
-	 * @param deltaPercent the signed percentage delta, or {@code null} when unavailable
-	 * @return {@code positive}, {@code negative}, or {@code neutral}
-	 */
-	private static String changeCssClass(Integer deltaPercent) {
-		if (deltaPercent == null || deltaPercent == 0) {
-			return "neutral";
-		}
-		return deltaPercent > 0 ? "positive" : "negative";
+	private static String escapeAttribute(String raw) {
+		return escapeHtml(raw).replace("\"", "&quot;");
 	}
 
 	/**

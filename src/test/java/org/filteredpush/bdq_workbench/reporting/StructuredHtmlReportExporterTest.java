@@ -153,8 +153,13 @@ class StructuredHtmlReportExporterTest {
 		assertThat(report).contains("+50 percentage point(s)");
 		assertThat(report).contains("Count complete dates");
 		assertThat(report).contains("No percentage-point change");
-		assertThat(report).contains("class=\"measure-fill pre\" style=\"width: 25%;\"");
-		assertThat(report).contains("class=\"measure-fill post\" style=\"width: 75%;\"");
+		assertThat(report).contains("1 of 2 measure(s) changed after amendment: 1 improved, 0 declined.");
+		assertThat(report).contains("<line x1=\"25%\" x2=\"75%\" y1=\"13\" y2=\"13\" stroke=\"var(--mc-link)\"");
+		assertThat(report).contains("<circle cx=\"25%\" cy=\"13\" r=\"6\" fill=\"#fcfcfb\" stroke=\"var(--mc-pre)\"");
+		assertThat(report).contains("<circle cx=\"75%\" cy=\"13\" r=\"6\" fill=\"var(--mc-post)\"");
+		assertThat(report).contains("<span class=\"mc-delta up\">▲ +50 pts</span>");
+		assertThat(report).contains("<summary>Table view</summary>");
+		assertThat(report.indexOf("Changed after amendment (1)")).isLessThan(report.indexOf("Unchanged (1)"));
 		assertThat(report).contains("<h2>Record <code>record-1</code></h2>");
 		assertThat(report).contains("<h3>POST_AMENDMENT · VALIDATION · <code>urn:test:structured</code></h3>");
 		assertThat(report).contains("<strong>Summary:</strong> RUN_HAS_RESULT / NOT_COMPLIANT — rollup");

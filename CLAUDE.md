@@ -199,7 +199,13 @@ understanding how the stages connect — read its class Javadoc first. The pipel
    before the next binding's groups are computed; PRE_AMENDMENT and POST_AMENDMENT never mutate
    records mid-phase, so their bindings' groups are all submitted together. Ambiguous write-backs
    (for example aggregated or multi-source provenance) are refused and surfaced as error responses
-   rather than silently writing to an arbitrary row. `ReflectionExecutionAdapter` is the actual
+   rather than silently writing to an arbitrary row. Implementations name the terms they amend as
+   they declare them (`dwc:geodeticDatum`), while ingested records are keyed by local names
+   (`geodeticDatum`), so write-back (and partition invalidation, and the run summary's before→after
+   pairing) maps each amendment key onto the record's own term via
+   `DarwinCoreTermResolver.recordTermFor`; `Response.amendments()` keeps the implementation's keys.
+   Built-in multi-record measures count *records*, not evaluations: a record's derived rollup stands
+   for its per-row evaluations, so an expanded test cannot exceed 100% of the records. `ReflectionExecutionAdapter` is the actual
    per-invocation adapter: it builds a reflective argument array from the effective subject's bound
    parameters, invokes the target method, and reads back an ffdq-style result purely reflectively
    (`getResultState()`, `getValue().getObject()`, `getComment()`) so this module has no
@@ -235,7 +241,10 @@ understanding how the stages connect — read its class Javadoc first. The pipel
    rollups, contributing subjects) now flows through the normalized response stream, the
    tab-delimited detailed export, the RDF/Turtle exporter (which emits OA-style row selectors for
    structured subject targets and explicit rollup→detail links), and the standalone structured
-   HTML/Markdown reports. The flat XLSX exporter writes, per test/phase/record, only the derived
+   HTML/Markdown reports. The structured HTML report draws pre/post multi-record measures as a
+   dumbbell chart (shared 0–100% axis; pre a hollow ring, post a filled dot, joined by a bar;
+   changed measures first by improvement, unchanged ones muted; a collapsed table view keeps the
+   numbers). The flat XLSX exporter writes, per test/phase/record, only the derived
    rollup where one exists (VALIDATION/ISSUE over expanded rows), since the spreadsheet has one place
    per record for each test; AMENDMENT and MEASURE details, which have no rollups, are all written.
 
