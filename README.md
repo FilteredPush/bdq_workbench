@@ -51,8 +51,9 @@ Configuration defaults are in `src/main/resources/application.properties` and ca
 java -jar target/bdq_workbench-0.1.0-SNAPSHOT.jar --dataset path/to/dataset.zip
 ```
 
-Reusable relational dataset views can be supplied with `--dataset-view` (`bdq.dataset.view` in config),
-and built interactively in the GUI with `Build Dataset View...`:
+A dataset with more than one table (a Darwin Core Archive with extensions, a data package with
+several resources) always runs through a *dataset view*. You can supply one with `--dataset-view`
+(`bdq.dataset.view` in config), or build it interactively in the GUI with `Build Dataset View...`:
 
 ```bash
 java -jar target/bdq_workbench-0.1.0-SNAPSHOT.jar \
@@ -77,6 +78,28 @@ time with that identification's `dateIdentified` and the occurrence's event date
 come from two different `EXPAND` tables cannot run and reports an error, so expand only the tables
 whose rows each need testing. The builder shows the multiplicity observed in the data for each join,
 previews expanded rows beneath each grain record, and warns where a policy drops or garbles rows.
+
+When a term is mapped both from the grain and from an `EXPAND` table — for example, an occurrence
+core that carries its current identification and an identification-history extension — both are
+tested: the grain's value once, and each expanded row's value once, all rolled up to the record.
+
+Without `--dataset-view`, the workbench builds the view itself: the grain is the table it would read
+anyway (occurrence when there is one), every column of the grain and its directly related tables is
+mapped, and related tables with at most one row per grain record (such as the event of an
+occurrence) are joined `FIRST_ROW`. For each related table that has more than one row for some
+record, you decide how to handle it:
+
+```bash
+java -jar target/bdq_workbench-0.1.0-SNAPSHOT.jar \
+  --dataset path/to/dataset.zip \
+  --join-policy identification=EXPAND --join-policy multimedia.txt=FIRST_ROW
+```
+
+`--join-policy` is repeatable (`bdq.dataset.join.policies=identification=EXPAND,multimedia.txt=FIRST_ROW`
+in config). Any table still undecided is asked about on the console when running interactively; in
+a script or CI the run stops before testing and lists each such table with its observed rows per
+record. In the GUI, the dataset view builder opens with those tables highlighted, and `Use View`
+saves the view to `reports/bdq-dataset-view.json` and continues the run.
 
 Configuration precedence is:
 

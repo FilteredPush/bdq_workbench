@@ -56,7 +56,8 @@ mistyped path fails fast and offline — keep that ordering, it is what keeps th
 touching the network.
 
 Configuration defaults live in `src/main/resources/application.properties`
-(`bdq.usecase.file`, `bdq.rdf.files`, `bdq.dataset`, `bdq.dataset.table`, `bdq.dataset.view`, `bdq.usecase.id`,
+(`bdq.usecase.file`, `bdq.rdf.files`, `bdq.dataset`, `bdq.dataset.table`, `bdq.dataset.view`,
+`bdq.dataset.join.policies`, `bdq.usecase.id`,
 `bdq.discovery.packages`, `bdq.threads`, `bdq.execution.dedup`) and are merged with CLI/GUI
 overrides by `ConfigLoader`. `bdq.usecase.file` and `bdq.rdf.files` ship blank, which means "use
 the `WorkbenchDefaults` published sources"; set either to a local path or an HTTP URL to pin a
@@ -75,7 +76,16 @@ always-visible policy legend) above the term mappings on the right, and below th
 expanded rows beneath each grain record plus policy warnings (logic in `DatasetViewDraftPreview`).
 Changing the grain table re-reads the relational graphs for that table, since relationships and
 multiplicity are measured relative to the grain. Views are still saved/loaded as standalone JSON
-keyed by the schema fingerprint. Logging is DEBUG-by-default to the
+keyed by the schema fingerprint. A multi-table dataset *always* runs through a view: without
+`bdq.dataset.view`, `DefaultIngestService` builds one with `AutomaticDatasetViews` (the grain is the
+table `CoreTableSelector` picks, so occurrence when present; every column of the grain and its
+directly related tables is mapped; single-valued relations join `FIRST_ROW`). Each related table
+with more than one row per grain record needs the user's decision — `bdq.dataset.join.policies`
+(CLI `--join-policy table=POLICY`, repeatable), else the `JoinPolicyResolver`
+(`ConsoleJoinPolicyResolver` on an interactive console), else `DatasetViewRequiredException` stops
+the run listing those tables; the GUI catches it and opens the builder in a "decisions needed" mode
+whose `Use View` saves `reports/bdq-dataset-view.json` and restarts preflight. There are no built-in
+views any more (they mapped only five terms and could pick event as the grain). Logging is DEBUG-by-default to the
 console via `src/main/resources/logback.xml`.
 
 ## Architecture
@@ -171,10 +181,13 @@ understanding how the stages connect — read its class Javadoc first. The pipel
    the single-valued row is overlaid onto the core record, so a test reading `eventDate` and
    `dateIdentified` still runs once per identification. Only a binding that needs two *multi-row*
    relations is rejected. A core record with no rows in the governing relation is evaluated once
-   with that relation's fields blank, not reported as an error. Note that for automatic structured
-   ingest (no view), relations own the raw column names on their rows, so a column shared with the
-   core (a foreign key, say) can make a relation govern; views avoid this, since expanded rows carry
-   only the terms the view maps from them. Relational ingest gives a related table's rows
+   with that relation's fields blank, not reported as an error. When the core record itself carries
+   every field the binding reads from the governing relation (a view mapped the term from the grain
+   and from an `EXPAND` table: current identification on the occurrence, history in a related table),
+   the core record is evaluated as one more subject, referencing the grain row, so both are tested
+   and rolled up together. Join-key columns (from the dataset's recorded relationships) never make a
+   relation supply a field, so an identification's `occurrenceID` does not turn a test reading
+   `occurrenceID` into a per-identification test. Relational ingest gives a related table's rows
    positional references (`row-<n>`) when their fallback IDs are not unique, so selectors and
    amendment write-back always identify one row. Bindings with a `LEGACY_RECORD`/`LEGACY_PARAMETERS` parameter (whole
    record/parameter map, not specific declared terms) are never dedup-eligible and always run once
@@ -222,8 +235,9 @@ understanding how the stages connect — read its class Javadoc first. The pipel
    rollups, contributing subjects) now flows through the normalized response stream, the
    tab-delimited detailed export, the RDF/Turtle exporter (which emits OA-style row selectors for
    structured subject targets and explicit rollup→detail links), and the standalone structured
-   HTML/Markdown reports. The flat XLSX exporter still deliberately projects only core-grain
-   rows/derived rollups and ignores structured detail rows.
+   HTML/Markdown reports. The flat XLSX exporter writes, per test/phase/record, only the derived
+   rollup where one exists (VALIDATION/ISSUE over expanded rows), since the spreadsheet has one place
+   per record for each test; AMENDMENT and MEASURE details, which have no rollups, are all written.
 
    Both structured reports open with an "Input data view" overview: the view mode (single table,
    flattened view, or structured view with related-row multiplicity retained), the grain table,
@@ -305,8 +319,11 @@ run.
    provenance-tracked dataset views, can execute bindings over structured `EvaluationSubject`s
    with subject-grain diagnostics, deduplication, write-back, and VALIDATION/ISSUE rollups, and
    can report those structured subjects through OA-style RDF row selectors plus dedicated
-   structured HTML/Markdown reports. Per-row execution is reachable from a dataset view by joining
-   a table with `EXPAND` (built-in views still flatten with `FIRST_ROW`). Remaining work is any future ingest/model changes needed if
+   structured HTML/Markdown reports. Per-row execution is reachable by joining a table with
+   `EXPAND`, in a view file or through the join-policy decisions of an automatic view. DwC-A
+   extensions are related to the archive's declared core (so an occurrence extension of an
+   event-core archive gets its event as a parent), but joins still reach only tables directly
+   related to the grain. Remaining work is any future ingest/model changes needed if
    datasets require more than the current core + direct-child relation graph, along with richer
    future presentation formats if maintainers want something beyond the current Markdown export.
 
