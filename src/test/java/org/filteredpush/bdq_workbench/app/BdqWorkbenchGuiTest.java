@@ -438,6 +438,36 @@ class BdqWorkbenchGuiTest {
     }
 
     @Test
+    void stageOverviewMarksUserStoppedRunWithoutTreatingItAsFailure() throws Exception {
+        Method renderOverview = BdqWorkbenchGui.class.getDeclaredMethod(
+                "renderStageOverview",
+                PreparedRun.class,
+                Phase.class,
+                boolean.class,
+                boolean.class,
+                boolean.class,
+                boolean.class);
+        renderOverview.setAccessible(true);
+        PreparedRun preparedRun = new PreparedRun(
+                null,
+                new RecordDataset(List.of(new CanonicalRecord("r1", Map.of("dwc:eventDate", "2025-01-01")))),
+                new ExecutionPlan(new UseCase("urn:usecase", "Use case", "urn:policy"), new Policy("urn:policy", List.of()), List.of(), List.of()),
+                List.of(),
+                new TestBindingResult(List.of(), List.of(), List.of()),
+                RecordFilterSummary.unfiltered(new RecordDataset(List.of(new CanonicalRecord("r1", Map.of("dwc:eventDate", "2025-01-01"))))));
+
+        String overview = (String) renderOverview.invoke(null, preparedRun, Phase.AMENDMENT, false, false, false, true);
+
+        assertThat(overview).contains("Workflow progress: 6/9 stages completed");
+        assertThat(overview).contains("[completed] PRE_AMENDMENT - phase complete");
+        assertThat(overview).contains("[stopped] AMENDMENT - run stopped by user");
+        assertThat(overview).contains("[pending] POST_AMENDMENT - phase not started");
+        assertThat(overview).contains("[skipped] Export reports - run stopped before export");
+        assertThat(overview).doesNotContain("Current stage:");
+        assertThat(overview).doesNotContain("[failed]");
+    }
+
+    @Test
     void configurableParametersIncludeParameterizedVariantWhenDefaultMethodIsSelected() throws Exception {
         Method helper = BdqWorkbenchGui.class.getDeclaredMethod(
                 "configurableParametersFor",

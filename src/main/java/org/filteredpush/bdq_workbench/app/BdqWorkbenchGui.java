@@ -40,6 +40,7 @@ import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CancellationException;
 import javax.swing.BorderFactory;
 import javax.swing.BoxLayout;
 import javax.swing.DefaultCellEditor;
@@ -301,12 +302,15 @@ final class BdqWorkbenchGui {
         JButton backToSetup = new JButton("Back to Select Inputs");
         JButton startRun = new JButton("Start Run");
         startRun.setEnabled(false);
+        JButton stopRun = new JButton("Stop Run");
+        stopRun.setEnabled(false);
         JButton closeButton = new JButton("Quit");
         monitorControls.add(loadParameters);
         monitorControls.add(saveParameters);
         monitorControls.add(toggleWorkflowView);
         monitorControls.add(backToSetup);
         monitorControls.add(startRun);
+        monitorControls.add(stopRun);
         monitorControls.add(closeButton);
         monitorPanel.add(monitorControls, BorderLayout.SOUTH);
 
@@ -444,6 +448,8 @@ final class BdqWorkbenchGui {
         root.add(cardPanel, BorderLayout.CENTER);
 
         final PreflightState[] state = new PreflightState[1];
+        final SwingWorker<?, ?>[] activeRunWorker = new SwingWorker<?, ?>[1];
+        final Phase[] activeRunPhase = new Phase[1];
         installBindingDebugPopup(
                 frame,
                 bindingGrid,
@@ -492,6 +498,21 @@ final class BdqWorkbenchGui {
 
         exit.addActionListener(e -> exitApplication(frame));
         closeButton.addActionListener(e -> exitApplication(frame));
+        stopRun.addActionListener(e -> {
+            SwingWorker<?, ?> runningWorker = activeRunWorker[0];
+            if (runningWorker == null || runningWorker.isDone()) {
+                return;
+            }
+            stopRun.setEnabled(false);
+            stopRun.setText("Stopping...");
+            appendStatus(statusArea, "Stop requested by user\n");
+            PreparedRun runningRun = state[0] == null ? null : state[0].preparedRun();
+            if (runningRun != null) {
+                resultSummaryArea.setText(renderStageOverview(runningRun, activeRunPhase[0], false, false, false, true)
+                        + "\nStopping run at user request...\n");
+            }
+            runningWorker.cancel(true);
+        });
         saveParameters.addActionListener(e -> saveParameterSettings(frame, bindingGrid));
         loadParameters.addActionListener(e -> loadParameterSettings(
                 frame,
@@ -701,7 +722,11 @@ final class BdqWorkbenchGui {
             appendStatus(statusArea, "\nStarting execution...\n");
             showTextSummary.run();
             toggleWorkflowView.setEnabled(false);
+            stopRun.setText("Stop Run");
+            stopRun.setEnabled(true);
+            activeRunPhase[0] = null;
             final PreparedRun[] executedRun = new PreparedRun[1];
+            final ExecutionProgressTracker[] trackers = new ExecutionProgressTracker[1];
             final int[] exportStageTotalSteps = {FINALIZATION_STAGE_STEP_COUNT};
             final int[] completedExporters = {0};
 
@@ -713,10 +738,12 @@ final class BdqWorkbenchGui {
                     PreparedRun editedRun = applyParameterEdits(state[0].preparedRun(), reviewModel);
                     executedRun[0] = editedRun;
                     ExecutionProgressTracker tracker = new ExecutionProgressTracker();
+                    trackers[0] = tracker;
                     return runWorkbench(
 	editedRun,
 	tracker,
 	snapshot -> SwingUtilities.invokeLater(() -> {
+                                activeRunPhase[0] = snapshot.phase();
                                 int max = Math.max(1, snapshot.total());
                                 progress.setMaximum(max);
                                 progress.setValue(snapshot.completed());
@@ -731,7 +758,7 @@ final class BdqWorkbenchGui {
 		snapshot.queued(),
 		snapshot.completed(),
 		snapshot.total()));
-                                resultSummaryArea.setText(renderStageOverview(editedRun, snapshot.phase(), false, false, false)
+                                resultSummaryArea.setText(renderStageOverview(editedRun, snapshot.phase(), false, false, false, false)
 		+ "\n"
 		+ renderProgressSnapshot(snapshot));
 	}),
@@ -753,6 +780,9 @@ final class BdqWorkbenchGui {
 
                 @Override
                 protected void done() {
+                    stopRun.setEnabled(false);
+                    stopRun.setText("Stop Run");
+                    activeRunWorker[0] = null;
                     try {
                         ExecutionSummary summary = get();
                         PreparedRun completedRun = executedRun[0] == null ? state[0].preparedRun() : executedRun[0];
@@ -820,9 +850,22 @@ final class BdqWorkbenchGui {
 		"Workflow stage %d/%d • Export reports complete",
 		totalWorkflowStageCount(),
 		totalWorkflowStageCount()));
-                        resultSummaryArea.setText(renderStageOverview(completedRun, null, false, true, false)
+                        resultSummaryArea.setText(renderStageOverview(completedRun, null, false, true, false, false)
 		+ "\n"
 		+ renderResultSummary(summary));
+                    } catch (CancellationException ex) {
+                        PreparedRun cancelledRun = executedRun[0] == null ? state[0].preparedRun() : executedRun[0];
+                        Phase cancelledPhase = trackers[0] == null ? activeRunPhase[0] : trackers[0].snapshot().phase();
+                        LOG.info("BDQ Workbench execution stopped by user");
+                        appendStatus(statusArea, "Stopped by user\n");
+                        monitorHeader.setText(monitorHeaderText("Run Stopped", cancelledRun));
+                        progress.setValue(0);
+                        progress.setString("Run stopped by user");
+                        resultSummaryArea.setText(renderStageOverview(cancelledRun, cancelledPhase, false, false, false, true)
+                                + "\nExecution stopped at user request.\n");
+                        toggleWorkflowView.setEnabled(false);
+                        showTextSummary.run();
+                        resetWorkflowVisualizationPanel(workflowVisualizationPanel);
                     } catch (Exception ex) {
                         Throwable cause = ex.getCause() == null ? ex : ex.getCause();
                         LOG.error("BDQ Workbench execution failed", cause);
@@ -833,7 +876,7 @@ final class BdqWorkbenchGui {
                                 "Execution failed",
                                 JOptionPane.ERROR_MESSAGE);
                         PreparedRun failedRun = executedRun[0] == null ? state[0].preparedRun() : executedRun[0];
-                        resultSummaryArea.setText(renderStageOverview(failedRun, null, false, false, true)
+                        resultSummaryArea.setText(renderStageOverview(failedRun, null, false, false, true, false)
                                 + "\nExecution failed: "
                                 + cause.getMessage()
                                 + "\n");
@@ -841,11 +884,13 @@ final class BdqWorkbenchGui {
                         showTextSummary.run();
                         resetWorkflowVisualizationPanel(workflowVisualizationPanel);
                     } finally {
+                        activeRunPhase[0] = null;
                         progress.setVisible(false);
                         backToSetup.setEnabled(true);
                     }
                 }
             };
+            activeRunWorker[0] = worker;
             worker.execute();
         });
 
@@ -958,7 +1003,7 @@ final class BdqWorkbenchGui {
 		detail,
 		Math.max(0, Math.min(completedSteps, totalSteps)),
 		Math.max(1, totalSteps)));
-        resultSummaryArea.setText(renderStageOverview(preparedRun, null, exportRunning, false, false)
+        resultSummaryArea.setText(renderStageOverview(preparedRun, null, exportRunning, false, false, false)
 		+ "\n"
 		+ "Export progress\n"
 		+ "Current stage: Export reports (stage "
@@ -3272,6 +3317,7 @@ final class BdqWorkbenchGui {
      * @param exportRunning whether stage 9 (report export/finalization) is in progress
      * @param runCompleted whether the run has finished successfully
      * @param runFailed whether the run has failed
+     * @param runCancelled whether the run was stopped at user request
      * @return a multi-line stage overview
      */
     private static String renderStageOverview(
@@ -3279,16 +3325,29 @@ final class BdqWorkbenchGui {
             Phase activePhase,
             boolean exportRunning,
             boolean runCompleted,
-            boolean runFailed) {
-        int completedStages = completedWorkflowStageCount(preparedRun, activePhase, exportRunning, runCompleted, runFailed);
-        List<WorkflowStageStatus> stages = workflowStageStatuses(preparedRun, activePhase, exportRunning, runCompleted, runFailed);
+            boolean runFailed,
+            boolean runCancelled) {
+        int completedStages = completedWorkflowStageCount(
+                preparedRun,
+                activePhase,
+                exportRunning,
+                runCompleted,
+                runFailed,
+                runCancelled);
+        List<WorkflowStageStatus> stages = workflowStageStatuses(
+                preparedRun,
+                activePhase,
+                exportRunning,
+                runCompleted,
+                runFailed,
+                runCancelled);
         StringBuilder builder = new StringBuilder("Process stages\n");
         builder.append("Workflow progress: ")
                 .append(completedStages)
                 .append("/")
                 .append(totalWorkflowStageCount())
                 .append(" stages completed\n");
-        if (preparedRun != null && (activePhase != null || exportRunning) && !runCompleted && !runFailed) {
+        if (preparedRun != null && (activePhase != null || exportRunning) && !runCompleted && !runFailed && !runCancelled) {
             builder.append("Current stage: ")
                     .append(exportRunning ? "Export reports" : activePhase)
                     .append(" (stage ")
@@ -3342,6 +3401,7 @@ final class BdqWorkbenchGui {
      * @param exportRunning whether stage 9 (report export/finalization) is in progress
      * @param runCompleted whether execution has completed
      * @param runFailed whether execution has failed
+     * @param runCancelled whether execution was stopped at user request
      * @return ordered stage statuses for the overall workflow
      */
     private static List<WorkflowStageStatus> workflowStageStatuses(
@@ -3349,7 +3409,8 @@ final class BdqWorkbenchGui {
             Phase activePhase,
             boolean exportRunning,
             boolean runCompleted,
-            boolean runFailed) {
+            boolean runFailed,
+            boolean runCancelled) {
         RecordFilterSummary filterSummary = preparedRun == null ? RecordFilterSummary.unfiltered(new RecordDataset(List.of()))
                 : preparedRun.filterSummary();
         ExecutionPlan plan = preparedRun == null
@@ -3385,13 +3446,15 @@ final class BdqWorkbenchGui {
                 preparedRun == null ? "pending" : "completed",
                 runnable + " runnable, " + unresolved + " unresolved",
                 preparedRun == null ? 0 : 100));
-        stages.add(workflowStageStatusForPhase(Phase.PRE_AMENDMENT, activePhase, exportRunning, runCompleted, runFailed));
-        stages.add(workflowStageStatusForPhase(Phase.AMENDMENT, activePhase, exportRunning, runCompleted, runFailed));
-        stages.add(workflowStageStatusForPhase(Phase.POST_AMENDMENT, activePhase, exportRunning, runCompleted, runFailed));
+        stages.add(workflowStageStatusForPhase(Phase.PRE_AMENDMENT, activePhase, exportRunning, runCompleted, runFailed, runCancelled));
+        stages.add(workflowStageStatusForPhase(Phase.AMENDMENT, activePhase, exportRunning, runCompleted, runFailed, runCancelled));
+        stages.add(workflowStageStatusForPhase(Phase.POST_AMENDMENT, activePhase, exportRunning, runCompleted, runFailed, runCancelled));
         stages.add(new WorkflowStageStatus(
                 "Export reports",
-                runCompleted ? "completed" : exportRunning ? "running" : runFailed ? "failed" : "pending",
-                runCompleted ? "reports written" : exportRunning ? "reports in progress" : "reports not written yet",
+                runCompleted ? "completed" : exportRunning ? "running" : runFailed ? "failed" : runCancelled ? "skipped" : "pending",
+                runCompleted ? "reports written" : exportRunning ? "reports in progress" : runFailed
+                        ? "reports not written"
+                        : runCancelled ? "run stopped before export" : "reports not written yet",
                 runCompleted ? 100 : exportRunning ? 50 : runFailed ? 25 : 0));
         return List.copyOf(stages);
     }
@@ -3404,6 +3467,7 @@ final class BdqWorkbenchGui {
      * @param exportRunning whether stage 9 (report export/finalization) is in progress
      * @param runCompleted whether execution has completed
      * @param runFailed whether execution has failed
+     * @param runCancelled whether execution was stopped at user request
      * @return the formatted phase state for the workflow UI
      */
     private static WorkflowStageStatus workflowStageStatusForPhase(
@@ -3411,7 +3475,8 @@ final class BdqWorkbenchGui {
             Phase activePhase,
             boolean exportRunning,
             boolean runCompleted,
-            boolean runFailed) {
+            boolean runFailed,
+            boolean runCancelled) {
         String state;
         String detail;
         int progressPercent;
@@ -3419,6 +3484,10 @@ final class BdqWorkbenchGui {
             state = "completed";
             detail = "phase complete";
             progressPercent = 100;
+        } else if (runCancelled && phase == activePhase) {
+            state = "stopped";
+            detail = "run stopped by user";
+            progressPercent = 25;
         } else if (runFailed && phase == activePhase) {
             state = "failed";
             detail = "phase incomplete";
@@ -3456,6 +3525,7 @@ final class BdqWorkbenchGui {
      * @param exportRunning whether stage 9 (report export/finalization) is in progress
      * @param runCompleted whether the full run has completed
      * @param runFailed whether the full run has failed after execution phases completed
+     * @param runCancelled whether the run was stopped at user request
      * @return the number of completed stages in the monitor view
      */
     private static int completedWorkflowStageCount(
@@ -3463,7 +3533,8 @@ final class BdqWorkbenchGui {
             Phase activePhase,
             boolean exportRunning,
             boolean runCompleted,
-            boolean runFailed) {
+            boolean runFailed,
+            boolean runCancelled) {
         if (preparedRun == null) {
             return 0;
         }
@@ -3477,6 +3548,8 @@ final class BdqWorkbenchGui {
             completed = totalWorkflowStageCount() - 1;
         } else if (runFailed) {
             completed = totalWorkflowStageCount() - 1;
+        } else if (runCancelled) {
+            completed = activePhase == null ? 5 : 5 + activePhase.ordinal();
         }
         return completed;
     }
@@ -3495,7 +3568,7 @@ final class BdqWorkbenchGui {
             Phase activePhase,
             boolean exportRunning,
             boolean runCompleted) {
-        int completed = completedWorkflowStageCount(preparedRun, activePhase, exportRunning, runCompleted, false);
+        int completed = completedWorkflowStageCount(preparedRun, activePhase, exportRunning, runCompleted, false, false);
         if (runCompleted || preparedRun == null) {
             return completed;
         }
@@ -3923,7 +3996,7 @@ final class BdqWorkbenchGui {
         setStatus(statusArea, renderPreflightMessage(state[0]));
         bindingGrid.setModel(new BindingReviewTableModel(state[0].preparedRun().bindingResult().reviews()));
         configureBindingGrid(bindingGrid);
-        resultSummaryArea.setText(renderStageOverview(preparedRun, null, false, false, false)
+        resultSummaryArea.setText(renderStageOverview(preparedRun, null, false, false, false, false)
                 + "\nParameter review ready. Edit parameter values, right-click a single test row to inspect it or run it in isolation, or save/load settings before starting the run.\n");
         boolean complete = state[0].isFullyResolved();
         if (!complete && !runWithAvailableOnly.isSelected()) {

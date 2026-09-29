@@ -26,6 +26,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -104,6 +105,11 @@ import org.slf4j.LoggerFactory;
  * from a submitted task, or a built-in measure synthesis failure, is caught and converted into an
  * {@link OutcomeStatus#ERROR} response (fanned out to every member of the group that failed, since
  * they would have failed identically) rather than aborting the phase.
+ *
+ * <p>If the calling thread is interrupted (for example because the GUI requested that a running
+ * session stop), execution is cancelled promptly: queued work is not collected, worker threads are
+ * interrupted via the phase executor's shutdown, and a {@link CancellationException} is raised to
+ * the caller instead of being converted into misleading partial results.
  */
 public class ParallelPhaseExecutionService implements TestExecutionService {
     private static final Logger LOG = LoggerFactory.getLogger(ParallelPhaseExecutionService.class);
@@ -201,6 +207,7 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
             RecordDataset dataset,
             List<ImplementationBinding> bindings,
             List<DiscoveredImplementation> discovered) {
+        throwIfCancellationRequested("before PRE_AMENDMENT phase");
         Map<String, List<DiscoveredImplementation>> discoveredByKey = new ConcurrentHashMap<>();
         discovered.forEach(d -> discoveredByKey.computeIfAbsent(d.legacyImplementationKey(), key -> new ArrayList<>()).add(d));
 
@@ -209,7 +216,9 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
         RecordDataset amendmentCopy = dataset.copy();
 
         results.addAll(executePhase(Phase.PRE_AMENDMENT, immutableSource, bindingsForPhase(Phase.PRE_AMENDMENT, bindings), discoveredByKey));
+        throwIfCancellationRequested("before AMENDMENT phase");
         results.addAll(executePhase(Phase.AMENDMENT, amendmentCopy, bindingsForPhase(Phase.AMENDMENT, bindings), discoveredByKey));
+        throwIfCancellationRequested("before POST_AMENDMENT phase");
         results.addAll(executePhase(Phase.POST_AMENDMENT, amendmentCopy, bindingsForPhase(Phase.POST_AMENDMENT, bindings), discoveredByKey));
 
         results.sort(Comparator
@@ -251,6 +260,7 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
             RecordDataset dataset,
             List<ImplementationBinding> bindings,
             Map<String, List<DiscoveredImplementation>> discoveredByKey) {
+        throwIfCancellationRequested("before phase " + phase);
         List<ImplementationBinding> phaseBindings = bindings.stream()
                 .filter(binding -> !BuiltInMeasureSpec.isBuiltIn(binding))
                 .filter(ImplementationBinding::isRunnable)
@@ -279,8 +289,10 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
             int completed = 0;
             if (phase == Phase.AMENDMENT) {
                 for (ImplementationBinding binding : phaseBindings) {
+                    throwIfCancellationRequested("during phase " + phase);
                     BindingExecutionPlan plan = submitGroupedBinding(phase, binding, groupCache, discoveredByKey, executor);
                     for (Response response : plan.preResponses()) {
+                        throwIfCancellationRequested("during phase " + phase);
                         responses.add(response);
                         completed++;
                         progressListener.onResponse(phase, response, completed, total);
@@ -288,7 +300,9 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
                     Set<String> changedFields = new LinkedHashSet<>();
                     List<Response> detailResponses = new ArrayList<>();
                     for (GroupInvocation invocation : plan.invocations()) {
+                        throwIfCancellationRequested("during phase " + phase);
                         for (SubjectResponse fanned : collectAndFanOut(phase, invocation)) {
+                            throwIfCancellationRequested("during phase " + phase);
                             Response response = applyAmendments(recordsById, fanned.subject(), fanned.response());
                             responses.add(response);
                             detailResponses.add(response);
@@ -302,17 +316,22 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
             } else {
                 List<BindingExecutionPlan> plans = new ArrayList<>();
                 for (ImplementationBinding binding : phaseBindings) {
+                    throwIfCancellationRequested("during phase " + phase);
                     plans.add(submitGroupedBinding(phase, binding, groupCache, discoveredByKey, executor));
                 }
                 for (BindingExecutionPlan plan : plans) {
+                    throwIfCancellationRequested("during phase " + phase);
                     List<Response> bindingResponses = new ArrayList<>(plan.preResponses());
                     for (Response response : plan.preResponses()) {
+                        throwIfCancellationRequested("during phase " + phase);
                         responses.add(response);
                         completed++;
                         progressListener.onResponse(phase, response, completed, total);
                     }
                     for (GroupInvocation invocation : plan.invocations()) {
+                        throwIfCancellationRequested("during phase " + phase);
                         for (SubjectResponse fanned : collectAndFanOut(phase, invocation)) {
+                            throwIfCancellationRequested("during phase " + phase);
                             Response response = fanned.response();
                             responses.add(response);
                             bindingResponses.add(response);
@@ -321,6 +340,7 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
                         }
                     }
                     for (Response response : deriveRollups(phase, plan.binding(), bindingResponses, plan.rollupCoreIds())) {
+                        throwIfCancellationRequested("during phase " + phase);
                         responses.add(response);
                         completed++;
                         progressListener.onResponse(phase, response, completed, total);
@@ -328,6 +348,7 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
                 }
             }
             for (ImplementationBinding measureBinding : builtInMeasures) {
+                throwIfCancellationRequested("during phase " + phase);
                 Response response;
                 try {
                     response = !measureBinding.isRunnable()
@@ -431,6 +452,20 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
         }
         return groupCache.groupsFor(canonicalFields(binding));
     }
+
+	/**
+	 * Throws a {@link CancellationException} when the calling thread has been interrupted.
+	 *
+	 * @param detail human-readable detail about where cancellation was observed
+	 */
+	private static void throwIfCancellationRequested(String detail) {
+		if (!Thread.currentThread().isInterrupted()) {
+			return;
+		}
+		CancellationException cancelled = new CancellationException("Execution cancelled " + detail);
+		cancelled.initCause(new InterruptedException("Execution interrupted"));
+		throw cancelled;
+	}
 
 	/**
 	 * Counts how many response rows {@code binding} is expected to emit in this phase: one per
@@ -537,7 +572,9 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
             representative = errorResponse(invocation.group().representative().effectiveRecord().id(), invocation.binding(), cause);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new RuntimeException("Execution interrupted in phase " + phase, e);
+            CancellationException cancelled = new CancellationException("Execution cancelled during phase " + phase);
+            cancelled.initCause(e);
+            throw cancelled;
         }
         List<EvaluationSubject> members = invocation.group().members();
         List<SubjectResponse> fanned = new ArrayList<>(members.size());
