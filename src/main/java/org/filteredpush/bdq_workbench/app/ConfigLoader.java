@@ -27,6 +27,7 @@ import java.util.Arrays;
 import java.util.Map;
 import java.util.List;
 import java.util.Properties;
+import org.filteredpush.bdq_workbench.model.DatasetViewCardinalityPolicy;
 import org.filteredpush.bdq_workbench.model.RecordFilterSpec;
 
 /**
@@ -124,7 +125,38 @@ public class ConfigLoader {
                 parseBoolean(getValue(defaults, overrides, "bdq.execution.dedup", "true"), "bdq.execution.dedup"),
                 RecordFilterSpec.parse(getValue(defaults, overrides, "bdq.record.filters", "")),
                 getValue(defaults, overrides, "bdq.dataset.table", ""),
-                getValue(defaults, overrides, "bdq.dataset.view", ""));
+                getValue(defaults, overrides, "bdq.dataset.view", ""),
+                parseJoinPolicies(getValue(defaults, overrides, "bdq.dataset.join.policies", "")));
+    }
+
+    /**
+     * Parses {@code bdq.dataset.join.policies}: comma-separated {@code table=POLICY} entries, the
+     * policy being one of {@link DatasetViewCardinalityPolicy}'s names (case-insensitive).
+     *
+     * @param raw the configured value, possibly blank
+     * @return policies keyed by table name, in the order given
+     * @throws AppException if an entry is malformed or names an unknown policy
+     */
+    static Map<String, DatasetViewCardinalityPolicy> parseJoinPolicies(String raw) {
+        Map<String, DatasetViewCardinalityPolicy> policies = new java.util.LinkedHashMap<>();
+        for (String entry : raw == null ? new String[0] : raw.split(",")) {
+            if (entry.isBlank()) {
+                continue;
+            }
+            int separator = entry.lastIndexOf('=');
+            if (separator <= 0 || separator == entry.length() - 1) {
+                throw new AppException("Invalid join policy '" + entry.trim() + "': expected table=POLICY");
+            }
+            String table = entry.substring(0, separator).trim();
+            String policy = entry.substring(separator + 1).trim();
+            try {
+                policies.put(table, DatasetViewCardinalityPolicy.valueOf(policy.toUpperCase(java.util.Locale.ROOT)));
+            } catch (IllegalArgumentException e) {
+                throw new AppException("Invalid join policy '" + policy + "' for table " + table + ": expected one of "
+                        + java.util.Arrays.toString(DatasetViewCardinalityPolicy.values()));
+            }
+        }
+        return policies;
     }
 
     /**

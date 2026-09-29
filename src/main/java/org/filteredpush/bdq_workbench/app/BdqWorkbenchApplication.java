@@ -184,17 +184,7 @@ public final class BdqWorkbenchApplication {
                     + "; name one with --usecase-id or point --usecase-file at a source that has some");
         }
         LOG.info("No use case given; defaulting to {}", useCaseId);
-        return new AppConfig(
-                config.useCaseXml(),
-                config.rdfDefinitions(),
-                config.datasetPath(),
-                useCaseId,
-                config.implementationPackages(),
-                config.threadCount(),
-                config.dedupEnabled(),
-                config.recordFilter(),
-                config.datasetTable(),
-                config.datasetView());
+        return config.withUseCaseId(useCaseId);
     }
 
     /**
@@ -259,6 +249,7 @@ public final class BdqWorkbenchApplication {
                 case "--threads" -> "bdq.threads";
                 case "--dedup" -> "bdq.execution.dedup";
                 case "--record-filter" -> "bdq.record.filters";
+                case "--join-policy" -> "bdq.dataset.join.policies";
                 default -> null;
             };
             if (key == null) {
@@ -270,6 +261,8 @@ public final class BdqWorkbenchApplication {
             String value = args[++i];
             if ("bdq.record.filters".equals(key) && overrides.containsKey(key) && !overrides.get(key).isBlank()) {
                 overrides.put(key, overrides.get(key) + "; " + value);
+            } else if ("bdq.dataset.join.policies".equals(key) && overrides.containsKey(key)) {
+                overrides.put(key, overrides.get(key) + "," + value);
             } else {
                 overrides.put(key, value);
             }
@@ -295,6 +288,14 @@ public final class BdqWorkbenchApplication {
         out.println("                                 location, resource name or Darwin Core row type");
         out.println("                                 (default: the best-ranked table the dataset offers)");
         out.println("  --dataset-view <path>          Standalone dataset view JSON file");
+        out.println("  --join-policy <table=POLICY>   For a multi-table dataset run without --dataset-view:");
+        out.println("                                 how to handle a related table with more than one row");
+        out.println("                                 per record; repeatable. POLICY is EXPAND (test each");
+        out.println("                                 row), FIRST_ROW (use the first), AGGREGATE (join values");
+        out.println("                                 with \" | \") or REJECT (leave empty when several). Tables");
+        out.println("                                 with at most one row per record need none; for others");
+        out.println("                                 you are asked when running interactively, and the run");
+        out.println("                                 stops with a list otherwise");
         out.println("  --usecase-file <path>          Use case XML file");
         out.println("  --rdf-files <paths>            Comma-separated RDF/OWL files");
         out.println("  --usecase-id <id>              Optional use case identifier");
@@ -328,7 +329,7 @@ public final class BdqWorkbenchApplication {
      */
     static ExecutionSummary execute(AppConfig config) {
         WorkbenchFacade facade = new WorkbenchFacade(
-                new DefaultIngestService(),
+                new DefaultIngestService(ConsoleJoinPolicyResolver.forSystemConsole()),
                 new RdfPolicyResolverService(config.useCaseXml(), config.rdfDefinitions()),
                 new ClasspathAnnotationTestDiscoveryService(config.implementationPackages()),
                 new DefaultTestBindingService(),

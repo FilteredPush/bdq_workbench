@@ -63,6 +63,37 @@ class BdqWorkbenchApplicationTest {
     }
 
     @Test
+    void acceptsRepeatableJoinPoliciesAndRejectsUnknownPolicies() {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        ByteArrayOutputStream err = new ByteArrayOutputStream();
+
+        int accepted = BdqWorkbenchApplication.run(new String[] {
+                "--dataset", "missing-dataset.zip",
+                "--join-policy", "identification=EXPAND",
+                "--join-policy", "multimedia.txt=first_row"}, printStream(out), printStream(err));
+
+        assertThat(err.toString()).doesNotContain("Unknown argument")
+                .contains("Dataset input not found: missing-dataset.zip");
+
+        ByteArrayOutputStream badErr = new ByteArrayOutputStream();
+        int rejected = BdqWorkbenchApplication.run(new String[] {
+                "--dataset", "missing-dataset.zip", "--join-policy", "identification=SOMETIMES"},
+                printStream(new ByteArrayOutputStream()), printStream(badErr));
+
+        assertThat(rejected).isEqualTo(accepted);
+        assertThat(badErr.toString()).contains("Invalid join policy 'SOMETIMES' for table identification");
+    }
+
+    @Test
+    void helpDescribesJoinPolicies() {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+
+        BdqWorkbenchApplication.run(new String[] {"--help"}, printStream(out), printStream(new ByteArrayOutputStream()));
+
+        assertThat(out.toString()).contains("--join-policy <table=POLICY>").contains("EXPAND (test each");
+    }
+
+    @Test
     void rejectsOptionWithoutValueWithUsage() {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         ByteArrayOutputStream err = new ByteArrayOutputStream();

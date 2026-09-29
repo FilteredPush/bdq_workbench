@@ -159,7 +159,8 @@ public class WorkbenchFacade {
      * @return the prepared run, ready for execution
      */
     public PreparedRun prepare(AppConfig config) {
-        var ingestedDataset = ingestService.ingest(config.datasetPath(), config.datasetTable(), config.datasetView());
+        var ingestedDataset = ingestService.ingest(
+                config.datasetPath(), config.datasetTable(), config.datasetView(), config.datasetJoinPolicies());
         RecordFilterSummary filterSummary = recordFilterService.apply(ingestedDataset, config.recordFilter());
         var dataset = filterSummary.filteredDataset();
         ExecutionPlan plan = policyResolverService.resolve(config.useCaseId());
