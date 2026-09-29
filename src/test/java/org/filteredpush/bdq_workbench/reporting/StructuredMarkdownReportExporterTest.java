@@ -7,6 +7,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import org.filteredpush.bdq_workbench.model.BuiltInMeasureSpec;
 import org.filteredpush.bdq_workbench.model.CanonicalRecord;
 import org.filteredpush.bdq_workbench.model.ExecutionSummary;
 import org.filteredpush.bdq_workbench.model.ExecutionSummaryMetadata;
@@ -78,9 +79,23 @@ class StructuredMarkdownReportExporterTest {
 				Map.of("dwc:decimalLatitude", "42.0"),
 				startedAt,
 				finishedAt);
+		Response preMeasure = measureResponse(
+				"urn:test:count",
+				"Count compliant coordinates",
+				Phase.PRE_AMENDMENT,
+				"1",
+				"4",
+				"25.0");
+		Response postMeasure = measureResponse(
+				"urn:test:count",
+				"Count compliant coordinates",
+				Phase.POST_AMENDMENT,
+				"3",
+				"4",
+				"75.0");
 
 		ExecutionSummary summary = new ExecutionSummary(
-				List.of(detailOne, detailTwo, rollup, issue, amendment),
+				List.of(detailOne, detailTwo, rollup, issue, amendment, preMeasure, postMeasure),
 				new ExecutionSummaryMetadata(
 						"urn:usecase:1",
 						"Use Case One",
@@ -114,6 +129,8 @@ class StructuredMarkdownReportExporterTest {
 		assertThat(report).contains("- Review issue findings: 1 confirmed issue response(s), 0 potential issue response(s)");
 		assertThat(report).contains("Coordinates valid — Missing coordinates — 1 response(s) across 1 record(s)");
 		assertThat(report).contains("Fill missing coordinates: dwc:decimalLatitude → 42.0 — 1 response(s) across 1 record(s)");
+		assertThat(report).contains("## Measures with pre/post differences");
+		assertThat(report).contains("- Count compliant coordinates: 1/4 (25.0%) -> 3/4 (75.0%) (+50 percentage point(s))");
 		assertThat(report).contains("## Record `record-1`");
 		assertThat(report).contains("### POST_AMENDMENT · VALIDATION · `urn:test:structured`");
 		assertThat(report).contains("- Summary: RUN_HAS_RESULT / NOT_COMPLIANT — rollup");
@@ -200,5 +217,35 @@ class StructuredMarkdownReportExporterTest {
 				new SubjectRef("record-1", relationName, relationName, sourceLocation, rowRef),
 				false,
 				List.of());
+	}
+
+	private static Response measureResponse(
+			String testId,
+			String label,
+			Phase phase,
+			String matchingCount,
+			String totalRecords,
+			String percentage) {
+		return new Response(
+				"MULTIRECORD",
+				testId,
+				TestType.MEASURE,
+				BuiltInMeasureSpec.IMPLEMENTATION_CLASS,
+				BuiltInMeasureSpec.IMPLEMENTATION_METHOD,
+				phase,
+				Map.of(
+						BuiltInMeasureSpec.KIND_KEY, BuiltInMeasureSpec.MeasureKind.COUNT.name(),
+						BuiltInMeasureSpec.MEASURE_LABEL_KEY, label,
+						BuiltInMeasureSpec.MATCHING_COUNT_KEY, matchingCount,
+						BuiltInMeasureSpec.TOTAL_RECORDS_KEY, totalRecords,
+						BuiltInMeasureSpec.PERCENTAGE_KEY, percentage),
+				OutcomeStatus.PASSED,
+				"RUN_HAS_RESULT",
+				matchingCount,
+				matchingCount,
+				matchingCount,
+				Map.of(),
+				Instant.now(),
+				Instant.now());
 	}
 }
