@@ -35,6 +35,7 @@ public final class CanonicalRecord {
 	private final String id;
 	private final Map<String, String> terms;
 	private final Map<String, List<SourceCell>> provenanceByTerm;
+	private final SourceRow sourceRow;
 
     /**
      * Creates a canonical record, copying the supplied terms into a new mutable map.
@@ -54,7 +55,24 @@ public final class CanonicalRecord {
 	 * @param provenanceByTerm provenance cells for each term value
 	 */
 	public CanonicalRecord(String id, Map<String, String> terms, Map<String, List<SourceCell>> provenanceByTerm) {
+		this(id, terms, provenanceByTerm, SourceRow.unknown());
+	}
+
+	/**
+	 * Creates a canonical record with value-level provenance and its position in the input.
+	 *
+	 * @param id the record's identifier
+	 * @param terms the record's Darwin Core term values, keyed by term name
+	 * @param provenanceByTerm provenance cells for each term value
+	 * @param sourceRow the data file and line the record was read from
+	 */
+	public CanonicalRecord(
+			String id,
+			Map<String, String> terms,
+			Map<String, List<SourceCell>> provenanceByTerm,
+			SourceRow sourceRow) {
 		this.id = id;
+		this.sourceRow = sourceRow == null ? SourceRow.unknown() : sourceRow;
 		this.terms = new HashMap<>(terms);
 		Map<String, List<SourceCell>> copy = new LinkedHashMap<>();
 		provenanceByTerm.forEach((term, cells) -> copy.put(term, List.copyOf(cells)));
@@ -94,6 +112,15 @@ public final class CanonicalRecord {
      * @return a new {@code CanonicalRecord} with the same ID and a copy of the current term values
      */
 	public CanonicalRecord copy() {
-		return new CanonicalRecord(id, terms, provenanceByTerm);
+		return new CanonicalRecord(id, terms, provenanceByTerm, sourceRow);
+	}
+
+	/**
+	 * Returns the data file and line this record was read from.
+	 *
+	 * @return the record's source position, {@link SourceRow#unknown()} when not recorded
+	 */
+	public SourceRow sourceRow() {
+		return sourceRow;
 	}
 }

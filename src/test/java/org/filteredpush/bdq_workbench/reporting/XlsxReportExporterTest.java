@@ -40,6 +40,7 @@ import org.filteredpush.bdq_workbench.model.ParameterizationCapability;
 import org.filteredpush.bdq_workbench.model.Phase;
 import org.filteredpush.bdq_workbench.model.RecordDataset;
 import org.filteredpush.bdq_workbench.model.Response;
+import org.filteredpush.bdq_workbench.model.SubjectRef;
 import org.filteredpush.bdq_workbench.model.TestType;
 import org.junit.jupiter.api.Test;
 
@@ -153,6 +154,37 @@ class XlsxReportExporterTest {
             assertThat(workbook.getSheet("Unresolved & Multi-record")).isNull();
             assertThat(workbook.getSheet("Measures")).as("Measures sheet").isNotNull();
         }
+    }
+
+    @Test
+    void writesOnlyTheRollupWherePerRowValidationsWereRolledUp() throws Exception {
+        CanonicalRecord record1 = new CanonicalRecord("REC1", Map.of("occurrenceID", "REC1", "country", "Greenland"));
+        List<ImplementationBinding> bindings = List.of(actedUponBinding(VALIDATION_TEST, TestType.VALIDATION, "country"));
+        SubjectRef rowA = new SubjectRef("REC1", "identification", "identification", "identification", "row-1");
+        SubjectRef rowB = new SubjectRef("REC1", "identification", "identification", "identification", "row-2");
+        Response detailA = detailValidation(rowA, "COMPLIANT", "detail-comment-a", false, List.of());
+        Response detailB = detailValidation(rowB, "NOT_COMPLIANT", "detail-comment-b", false, List.of());
+        Response rollup = detailValidation(null, "NOT_COMPLIANT", "rollup-comment", true, List.of(rowA, rowB));
+
+        ExecutionSummary summary = new ExecutionSummary(
+                List.of(detailA, detailB, rollup), null, new RecordDataset(List.of(record1)), bindings);
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        new XlsxReportExporter().export(summary, output);
+
+        try (XSSFWorkbook workbook = new XSSFWorkbook(new ByteArrayInputStream(output.toByteArray()))) {
+            Sheet validations = workbook.getSheet("Validations");
+            assertThat(sheetContains(validations, "rollup-comment")).isTrue();
+            assertThat(sheetContains(validations, "detail-comment-a")).isFalse();
+            assertThat(sheetContains(validations, "detail-comment-b")).isFalse();
+        }
+    }
+
+    private static Response detailValidation(
+            SubjectRef subjectRef, String result, String comment, boolean derived, List<SubjectRef> contributors) {
+        return new Response(
+                "REC1", VALIDATION_TEST, TestType.VALIDATION, "org.example.Impl", "method", Phase.PRE_AMENDMENT,
+                Map.of(), OutcomeStatus.PASSED, "RUN_HAS_RESULT", result, comment, comment, Map.of(),
+                Instant.EPOCH, Instant.EPOCH, subjectRef, derived, contributors);
     }
 
     @Test

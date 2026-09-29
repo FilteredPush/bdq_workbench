@@ -20,6 +20,8 @@
 package org.filteredpush.bdq_workbench.ingest;
 
 import java.nio.file.Path;
+import java.util.Map;
+import org.filteredpush.bdq_workbench.model.DatasetViewCardinalityPolicy;
 import org.filteredpush.bdq_workbench.model.RecordDataset;
 
 /**
@@ -67,5 +69,26 @@ public interface IngestService {
      */
     default RecordDataset ingest(Path inputPath, String requestedTable, String datasetView) {
         return ingest(inputPath, requestedTable);
+    }
+
+    /**
+     * Ingests the dataset, supplying multiplicity-handling policies for a view built when a
+     * multi-table dataset is run without a view file.
+     *
+     * <p>The default implementation ignores the policies and defers to
+     * {@link #ingest(Path, String, String)}.
+     *
+     * @param inputPath path to dataset input file
+     * @param requestedTable optional requested (grain) table name
+     * @param datasetView optional dataset view JSON path
+     * @param joinPolicies join policies keyed by related table name
+     * @return ingested dataset
+     */
+    default RecordDataset ingest(
+            Path inputPath,
+            String requestedTable,
+            String datasetView,
+            Map<String, DatasetViewCardinalityPolicy> joinPolicies) {
+        return ingest(inputPath, requestedTable, datasetView);
     }
 }

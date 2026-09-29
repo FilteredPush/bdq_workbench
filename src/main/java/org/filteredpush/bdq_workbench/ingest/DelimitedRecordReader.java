@@ -32,6 +32,7 @@ import org.apache.commons.csv.CSVParser;
 import org.apache.commons.csv.CSVRecord;
 import org.filteredpush.bdq_workbench.model.CanonicalRecord;
 import org.filteredpush.bdq_workbench.model.RecordDataset;
+import org.filteredpush.bdq_workbench.model.SourceRow;
 
 /**
  * Reads delimited text into canonical BDQ workbench records.
@@ -135,8 +136,26 @@ final class DelimitedRecordReader {
 	 */
 	static RecordDataset read(ReaderSupplier readerSupplier, CSVFormat csvFormat, String idColumn)
 			throws IOException {
+		return read(readerSupplier, csvFormat, idColumn, "", 0);
+	}
+
+	/**
+	 * Reads a delimited source into canonical records, recording each record's position in its
+	 * data file.
+	 *
+	 * @param readerSupplier supplies a fresh reader for the source
+	 * @param csvFormat primary Commons CSV format to use
+	 * @param idColumn the column declared as the record identifier, blank when none is declared
+	 * @param sourceFile the data file's path within the archive or package, for record positions
+	 * @param skippedLines the number of lines {@link #prepare} consumes before parsing, so record
+	 *     positions are lines of the file as a person sees it
+	 * @return the parsed dataset
+	 * @throws IOException if the source cannot be opened or read
+	 */
+	static RecordDataset read(ReaderSupplier readerSupplier, CSVFormat csvFormat, String idColumn, String sourceFile,
+			int skippedLines) throws IOException {
 		try {
-			return readWithCommonsCsv(readerSupplier, csvFormat, idColumn);
+			return readWithCommonsCsv(readerSupplier, csvFormat, idColumn, sourceFile, Math.max(0, skippedLines));
 		} catch (UncheckedIOException e) {
 			throw e.getCause();
 		} catch (RuntimeException e) {
@@ -158,15 +177,29 @@ final class DelimitedRecordReader {
 	 * @throws IOException if the source cannot be opened or parsed
 	 */
 	private static RecordDataset readWithCommonsCsv(ReaderSupplier readerSupplier, CSVFormat csvFormat,
-			String idColumn) throws IOException {
+			String idColumn, String sourceFile, int skippedLines) throws IOException {
 		try (BufferedReader reader = readerSupplier.open();
 				CSVParser parser = csvFormat.parse(reader)) {
 			List<CanonicalRecord> records = new ArrayList<>();
-			parser.forEach(row -> {
+			Iterator<CSVRecord> rows = parser.iterator();
+			while (true) {
+				/*
+				 * The parser's line count after the previous record (or the header it consumed) is
+				 * the line before this record starts; reading ahead happens in hasNext(), so take it
+				 * first. Counting lines rather than records keeps positions right when a quoted
+				 * value spans lines.
+				 */
+				long linesBefore = parser.getCurrentLineNumber();
+				if (!rows.hasNext()) {
+					break;
+				}
+				CSVRecord row = rows.next();
 				Map<String, String> values = new LinkedHashMap<>();
 				row.toMap().forEach((key, value) -> values.put(normalize(key), normalize(value)));
-				records.add(new CanonicalRecord(resolveRecordId(values, row.getRecordNumber(), idColumn), values));
-			});
+				SourceRow position = new SourceRow(sourceFile, skippedLines + linesBefore + 1);
+				records.add(new CanonicalRecord(resolveRecordId(values, row.getRecordNumber(), idColumn), values,
+						Map.of(), position));
+			}
 			return new RecordDataset(records);
 		}
 	}

@@ -88,7 +88,21 @@ public class SummaryReportExporter implements ReportExporter {
     public static String renderSummaryText(String title, ExecutionSummary executionSummary) {
         ExecutionResultSummary summary = ExecutionResultSummary.from(executionSummary);
         StringBuilder builder = new StringBuilder(title).append('\n');
+        org.filteredpush.bdq_workbench.model.SyntheticDataMarkers markers =
+                executionSummary.dataset().inputDescription().syntheticMarkers();
+        if (markers.found()) {
+            builder.append("WARNING: ").append(markers.summaryLine()).append(".\n")
+                    .append(markers.warning()).append("\n\n");
+        }
+        ReportDigest digest = ReportDigest.from(executionSummary);
+        if (digest.externalPrerequisiteCount() > 0) {
+            builder.append("NOTE: external prerequisites not met: ").append(digest.externalPrerequisiteLine())
+                    .append(".\n\n");
+        }
         appendExecutionContext(builder, executionSummary.metadata());
+        builder.append("Synthetic or modified example data: ").append(markers.summaryLine()).append('\n');
+        builder.append("Records with quality for this use case: ").append(digest.qualityLine()).append('\n');
+        builder.append("External prerequisites not met: ").append(digest.externalPrerequisiteLine()).append('\n');
         appendCountExplanation(builder);
         appendPhaseCounts(builder, summary.phaseCounts());
         appendCountSection(builder, "By response status", summary.responseStatusCounts());

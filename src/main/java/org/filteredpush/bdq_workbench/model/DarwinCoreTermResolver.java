@@ -61,6 +61,38 @@ public final class DarwinCoreTermResolver {
 	}
 
 	/**
+	 * Maps a term named by a test implementation (typically prefixed, e.g. {@code dwc:geodeticDatum})
+	 * onto the name a record uses for it, so an amendment is written to, and read back from, the
+	 * same key the tests read.
+	 *
+	 * <p>Tries, in order: the record's own key for the term (exact, or matching by local name); the
+	 * name a binding bound the term to; and finally, for a term the record does not carry yet,
+	 * the record's own naming convention: the term as named when the record's keys are prefixed
+	 * (e.g. {@code dwc:countryCode}), otherwise its local name, which is how ingest names columns
+	 * for both Darwin Core Archives and data packages.
+	 *
+	 * @param term the term as the implementation named it
+	 * @param recordTerms the record's term names
+	 * @param boundNames names the binding bound its inputs to, consulted when the record lacks the term
+	 * @return the record-side term name
+	 */
+	public static String recordTermFor(String term, Collection<String> recordTerms, Collection<String> boundNames) {
+		if (term == null || recordTerms.contains(term)) {
+			return term;
+		}
+		String fromRecord = resolve(term, indexAvailableTerms(recordTerms)).preferredMatch();
+		if (fromRecord != null) {
+			return fromRecord;
+		}
+		String fromBinding = resolve(term, indexAvailableTerms(boundNames)).preferredMatch();
+		if (fromBinding != null) {
+			return fromBinding;
+		}
+		boolean prefixedKeys = recordTerms.stream().anyMatch(key -> !localName(key).equals(key));
+		return prefixedKeys ? term : localName(term);
+	}
+
+	/**
 	 * Resolves a requested term name against the given alias index.
 	 *
 	 * <p>The lookup first tries the requested value itself, then its local name form.

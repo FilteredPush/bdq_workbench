@@ -63,6 +63,37 @@ class BdqWorkbenchApplicationTest {
     }
 
     @Test
+    void acceptsRepeatableJoinPoliciesAndRejectsUnknownPolicies() {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        ByteArrayOutputStream err = new ByteArrayOutputStream();
+
+        int accepted = BdqWorkbenchApplication.run(new String[] {
+                "--dataset", "missing-dataset.zip",
+                "--join-policy", "identification=EXPAND",
+                "--join-policy", "multimedia.txt=first_row"}, printStream(out), printStream(err));
+
+        assertThat(err.toString()).doesNotContain("Unknown argument")
+                .contains("Dataset input not found: missing-dataset.zip");
+
+        ByteArrayOutputStream badErr = new ByteArrayOutputStream();
+        int rejected = BdqWorkbenchApplication.run(new String[] {
+                "--dataset", "missing-dataset.zip", "--join-policy", "identification=SOMETIMES"},
+                printStream(new ByteArrayOutputStream()), printStream(badErr));
+
+        assertThat(rejected).isEqualTo(accepted);
+        assertThat(badErr.toString()).contains("Invalid join policy 'SOMETIMES' for table identification");
+    }
+
+    @Test
+    void helpDescribesJoinPolicies() {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+
+        BdqWorkbenchApplication.run(new String[] {"--help"}, printStream(out), printStream(new ByteArrayOutputStream()));
+
+        assertThat(out.toString()).contains("--join-policy <table=POLICY>").contains("EXPAND (test each");
+    }
+
+    @Test
     void rejectsOptionWithoutValueWithUsage() {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         ByteArrayOutputStream err = new ByteArrayOutputStream();
@@ -156,5 +187,20 @@ class BdqWorkbenchApplicationTest {
 
     private static PrintStream printStream(ByteArrayOutputStream buffer) {
         return new PrintStream(buffer);
+    }
+
+    @Test
+    void completionOutputWarnsAboutSyntheticInput() {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        org.filteredpush.bdq_workbench.model.ExecutionSummary summary = new org.filteredpush.bdq_workbench.model.ExecutionSummary(
+                java.util.List.of(), null, new org.filteredpush.bdq_workbench.model.RecordDataset(java.util.List.of(),
+                        java.util.List.of(), org.filteredpush.bdq_workbench.model.DatasetInputDescription.none()
+                                .withSyntheticMarkers(new org.filteredpush.bdq_workbench.model.SyntheticDataMarkers(
+                                        2, 2, 0, 0, java.util.List.of("s1", "s2")))));
+
+        BdqWorkbenchApplication.render(summary, printStream(out));
+
+        assertThat(out.toString()).startsWith("WARNING: 2 of 2 input record(s) are marked as synthetic or modified "
+                + "example data (2 wholly synthetic).").contains("BDQ Workbench completed: 0 outcomes");
     }
 }

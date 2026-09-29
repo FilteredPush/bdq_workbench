@@ -48,7 +48,9 @@ public class DetailedResponseStreamExporter implements ReportExporter {
 
     /**
      * Writes the tab-delimited response stream — a header line followed by one line per
-     * response — to the given output stream as UTF-8 text.
+     * response — to the given output stream as UTF-8 text. The first two columns name the record by
+     * values from the original data (catalog number triplet and source file line) and the test by
+     * its label; {@code subjectRow} gives the file and line of an expanded related row.
      *
      * @param summary the execution summary whose responses are exported
      * @param outputStream the stream to write the tab-delimited text to; not closed by this
@@ -58,10 +60,14 @@ public class DetailedResponseStreamExporter implements ReportExporter {
     @Override
     public void export(ExecutionSummary summary, OutputStream outputStream) throws IOException {
         StringBuilder builder = new StringBuilder();
-        builder.append("recordId\tsubjectRef\tderived\tcontributingSubjects\ttestId\ttestType\tphase\tresponseStatus\tresponseResult\tcomment\timplementation\tparameters\tamendments\n");
+        ReportDigest digest = ReportDigest.from(summary);
+        builder.append("recordLabel\ttestLabel\trecordId\tsubjectRef\tsubjectRow\tderived\tcontributingSubjects\ttestId\ttestType\tphase\tresponseStatus\tresponseResult\tcomment\timplementation\tparameters\tamendments\n");
         for (Response response : summary.responses()) {
-            builder.append(value(response.recordId())).append('\t')
+            builder.append(value(digest.recordLabel(response.recordId()))).append('\t')
+                    .append(value(digest.testLabel(response.testId()))).append('\t')
+                    .append(value(response.recordId())).append('\t')
                     .append(value(response.subjectRef() == null ? null : response.subjectRef().sortKey())).append('\t')
+                    .append(value(digest.subjectRowLabel(response.subjectRef()))).append('\t')
                     .append(Boolean.toString(response.derived())).append('\t')
                     .append(value(response.contributingSubjectRefs().stream()
                             .map(org.filteredpush.bdq_workbench.model.SubjectRef::sortKey)

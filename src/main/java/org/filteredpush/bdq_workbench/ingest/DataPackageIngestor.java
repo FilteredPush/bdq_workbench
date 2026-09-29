@@ -168,11 +168,25 @@ public class DataPackageIngestor {
 			CSVFormat csvFormat, int linesToSkip, String idColumn) {
 		try {
 			return DelimitedRecordReader.read(() -> openDataReader(dataPath, resourceMeta, linesToSkip), csvFormat,
-					idColumn);
+					idColumn, packageRelativePath(dataPackagePath, dataPath), linesToSkip);
 		} catch (IOException e) {
 			throw new AppException("Failed to parse data file '" + dataPath + "' of data package "
 					+ dataPackagePath + ": " + e.getMessage(), e);
 		}
+	}
+
+	/**
+	 * Names a data file by its path within the package, as its resource declares it.
+	 *
+	 * @param dataPackagePath path of the manifest
+	 * @param dataPath path of the data file
+	 * @return the data file's path relative to the manifest's directory, with {@code /} separators
+	 */
+	private static String packageRelativePath(Path dataPackagePath, Path dataPath) {
+		Path packageDir = dataPackagePath.toAbsolutePath().getParent();
+		Path absolute = dataPath.toAbsolutePath();
+		Path relative = packageDir != null && absolute.startsWith(packageDir) ? packageDir.relativize(absolute) : dataPath.getFileName();
+		return relative.toString().replace('\\', '/');
 	}
 
 	/**

@@ -11,7 +11,6 @@ import org.filteredpush.bdq_workbench.model.DatasetView;
 import org.filteredpush.bdq_workbench.model.DatasetViewCardinalityPolicy;
 import org.filteredpush.bdq_workbench.model.DatasetViewJoin;
 import org.filteredpush.bdq_workbench.model.DatasetViewMapping;
-import org.filteredpush.bdq_workbench.model.RelationshipSchema;
 import org.filteredpush.bdq_workbench.model.TableSchema;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -56,49 +55,6 @@ class DatasetViewSchemaTest {
 		assertThatThrownBy(() -> io.validateCompatibility(loaded, incompatible))
 				.isInstanceOf(AppException.class)
 				.hasMessageContaining("fingerprint does not match");
-	}
-
-	@Test
-	void builtInViewIsOnlyAppliedWhenRelationshipsArePresent() {
-		DatasetSchema withoutRelationship = new DatasetSchema(
-				List.of(
-						new TableSchema("event", "event", "EVENT", "eventID", List.of("eventID")),
-						new TableSchema("occurrence", "occurrence", "OCCURRENCE", "occurrenceID", List.of("occurrenceID"))),
-				List.of(),
-				"fp");
-		DatasetSchema withRelationship = new DatasetSchema(
-				withoutRelationship.tables(),
-				List.of(new RelationshipSchema("occurrence", "coreid", "event", "eventID", "occurrence")),
-				"fp");
-
-		assertThat(BuiltInDatasetViews.select(withoutRelationship, new java.util.ArrayList<>())).isEmpty();
-		assertThat(BuiltInDatasetViews.select(withRelationship, new java.util.ArrayList<>())).isPresent();
-	}
-
-	@Test
-	void builtInDataPackageViewSourcesScientificNameFromJoinedTableWhenOccurrenceLacksColumn() {
-		DatasetSchema schema = new DatasetSchema(
-				List.of(
-						new TableSchema("occurrence", "occurrence", "OCCURRENCE", "occurrenceID",
-								List.of("occurrenceID", "eventDate", "decimalLatitude", "decimalLongitude")),
-						new TableSchema("identification", "identification", "OTHER", "identificationID",
-								List.of("occurrenceID", "scientificName"))),
-				List.of(new RelationshipSchema(
-						"identification",
-						"occurrenceID",
-						"occurrence",
-						"occurrenceID",
-						"identification")),
-				"fp");
-
-		DatasetView view = BuiltInDatasetViews.select(schema, new java.util.ArrayList<>()).orElseThrow();
-
-		assertThat(view.mappings())
-				.anySatisfy(mapping -> {
-					assertThat(mapping.term()).isEqualTo("scientificName");
-					assertThat(mapping.sourceTable()).isEqualTo("identification");
-					assertThat(mapping.sourceColumn()).isEqualTo("scientificName");
-				});
 	}
 
 	@Test

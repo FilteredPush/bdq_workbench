@@ -39,6 +39,10 @@ import org.filteredpush.bdq_workbench.model.TableSchema;
  */
 public class DatasetViewSuggester {
 
+	/** Terms suggested when no use-case terms are known and only requested terms are mapped. */
+	private static final List<String> STARTER_TERMS = List.of(
+			"occurrenceID", "scientificName", "eventDate", "decimalLatitude", "decimalLongitude");
+
 	/**
 	 * Chooses a default grain table, preferring occurrence rows and then other recognized core row
 	 * types before falling back to the first declared table.
@@ -91,33 +95,173 @@ public class DatasetViewSuggester {
 	/**
 	 * Suggests an editable dataset view for the chosen grain table and requested terms.
 	 *
+	 * <p>Every directly related table is joined with {@link DatasetViewCardinalityPolicy#FIRST_ROW},
+	 * the flattening default; switching a join to {@link DatasetViewCardinalityPolicy#EXPAND} is a
+	 * deliberate choice, made where each related row needs testing. Every grain-table column is
+	 * mapped too, so the view never drops the grain's own data.
+	 *
 	 * @param schema discovered schema
 	 * @param grainTable selected grain table
-	 * @param requestedTerms requested Darwin Core terms
+	 * @param requestedTerms requested Darwin Core terms; starter occurrence terms when empty
 	 * @return suggested dataset view
 	 */
 	public DatasetView suggest(DatasetSchema schema, String grainTable, List<String> requestedTerms) {
+		return suggest(schema, grainTable, requestedTerms, Map.of(), false);
+	}
+
+	/**
+	 * Suggests a dataset view with explicit per-table join policies.
+	 *
+	 * <p>Each term is mapped from one primary source: the grain table when it has the column,
+	 * otherwise the first joined table that has it. A related table's join-key column (such as an
+	 * identification's {@code occurrenceID}) is never used as a source, since the grain supplies
+	 * that value. In addition, a table joined with {@link DatasetViewCardinalityPolicy#EXPAND} maps
+	 * every term it carries from itself, even when the grain also maps that term: the grain's value
+	 * (say, the current identification on an occurrence) and each expanded row's value (the
+	 * identification history) are then both tested.
+	 *
+	 * @param schema discovered schema
+	 * @param grainTable selected grain table
+	 * @param requestedTerms requested Darwin Core terms
+	 * @param policiesByTable join policies keyed by related table name (case-insensitive); tables
+	 *     not named get {@link DatasetViewCardinalityPolicy#FIRST_ROW}
+	 * @param mapEveryColumn whether to map every column of every joined table, not just the
+	 *     requested terms and the grain's columns
+	 * @return suggested dataset view
+	 */
+	public DatasetView suggest(
+			DatasetSchema schema,
+			String grainTable,
+			List<String> requestedTerms,
+			Map<String, DatasetViewCardinalityPolicy> policiesByTable,
+			boolean mapEveryColumn) {
 		List<JoinCandidate> joinCandidates = joinCandidates(schema, grainTable);
+		Map<String, DatasetViewCardinalityPolicy> policies = new LinkedHashMap<>();
+		policiesByTable.forEach((table, policy) -> policies.put(table.toLowerCase(), policy));
 		List<DatasetViewJoin> joins = joinCandidates.stream()
 				.map(candidate -> new DatasetViewJoin(
 						candidate.relationName(),
 						candidate.sourceTable(),
-						DatasetViewCardinalityPolicy.REJECT))
+						policies.getOrDefault(candidate.sourceTable().toLowerCase(), DatasetViewCardinalityPolicy.FIRST_ROW)))
 				.toList();
+		Map<String, Set<String>> keyColumns = new LinkedHashMap<>();
+		joinCandidates.forEach(candidate -> keyColumns
+				.computeIfAbsent(candidate.sourceTable().toLowerCase(), ignored -> new LinkedHashSet<>())
+				.add(candidate.sourceColumn()));
 		Set<String> allowedSourceTables = new LinkedHashSet<>();
 		allowedSourceTables.add(grainTable);
 		joinCandidates.forEach(candidate -> allowedSourceTables.add(candidate.sourceTable()));
+		Set<String> terms = mappedTermCandidates(schema, grainTable, requestedTerms, joinCandidates, keyColumns,
+				mapEveryColumn);
 		List<DatasetViewMapping> mappings = new ArrayList<>();
-		List<String> terms = requestedTerms.isEmpty()
-				? List.of("occurrenceID", "scientificName", "eventDate", "decimalLatitude", "decimalLongitude")
-				: requestedTerms;
 		for (String term : terms) {
-			ColumnMatch match = bestMatch(schema, allowedSourceTables, grainTable, term);
+			ColumnMatch match = bestMatch(schema, allowedSourceTables, grainTable, term, keyColumns);
 			if (match != null) {
 				mappings.add(new DatasetViewMapping(term, match.sourceTable(), match.sourceColumn()));
 			}
 		}
+		for (DatasetViewJoin join : joins) {
+			if (join.cardinalityPolicy() == DatasetViewCardinalityPolicy.EXPAND) {
+				mappings.addAll(expandedMappings(schema, join.sourceTable(), terms, mappings, keyColumns));
+			}
+		}
 		return new DatasetView(grainTable, schema.schemaFingerprint(), joins, mappings);
+	}
+
+	/**
+	 * Suggests the extra mappings an expanded table contributes: every candidate term it carries
+	 * (other than its join key) that is not already mapped from it.
+	 *
+	 * @param schema discovered schema
+	 * @param grainTable selected grain table
+	 * @param expandedTable the table joined with {@link DatasetViewCardinalityPolicy#EXPAND}
+	 * @param terms candidate terms
+	 * @param existing mappings already in the view
+	 * @return the additional mappings sourced from the expanded table
+	 */
+	public List<DatasetViewMapping> expandedMappings(
+			DatasetSchema schema,
+			String grainTable,
+			String expandedTable,
+			List<String> terms,
+			List<DatasetViewMapping> existing) {
+		Map<String, Set<String>> keyColumns = new LinkedHashMap<>();
+		joinCandidates(schema, grainTable).forEach(candidate -> keyColumns
+				.computeIfAbsent(candidate.sourceTable().toLowerCase(), ignored -> new LinkedHashSet<>())
+				.add(candidate.sourceColumn()));
+		return expandedMappings(schema, expandedTable, new LinkedHashSet<>(terms), existing, keyColumns);
+	}
+
+	/**
+	 * Builds the extra mappings an expanded table contributes.
+	 *
+	 * @param schema discovered schema
+	 * @param expandedTable the expanded table
+	 * @param terms candidate terms
+	 * @param existing mappings already in the view
+	 * @param keyColumns join-key columns keyed by lower-cased related table name
+	 * @return the additional mappings
+	 */
+	private List<DatasetViewMapping> expandedMappings(
+			DatasetSchema schema,
+			String expandedTable,
+			Set<String> terms,
+			List<DatasetViewMapping> existing,
+			Map<String, Set<String>> keyColumns) {
+		List<String> columns = usableColumns(schema, expandedTable, keyColumns);
+		List<DatasetViewMapping> added = new ArrayList<>();
+		for (String term : terms) {
+			boolean alreadyFromTable = existing.stream().anyMatch(mapping -> mapping.term().equals(term)
+					&& mapping.sourceTable().equalsIgnoreCase(expandedTable));
+			String column = findColumn(columns, term);
+			if (!alreadyFromTable && column != null) {
+				added.add(new DatasetViewMapping(term, expandedTable, column));
+			}
+		}
+		return added;
+	}
+
+	/**
+	 * Collects the terms a suggested view should try to map.
+	 *
+	 * @param schema discovered schema
+	 * @param grainTable selected grain table
+	 * @param requestedTerms requested Darwin Core terms
+	 * @param joinCandidates the grain's join candidates
+	 * @param keyColumns join-key columns keyed by lower-cased related table name
+	 * @param mapEveryColumn whether to include every joined table's columns
+	 * @return the candidate terms, in a stable order
+	 */
+	private Set<String> mappedTermCandidates(
+			DatasetSchema schema,
+			String grainTable,
+			List<String> requestedTerms,
+			List<JoinCandidate> joinCandidates,
+			Map<String, Set<String>> keyColumns,
+			boolean mapEveryColumn) {
+		Set<String> terms = new LinkedHashSet<>(requestedTerms.isEmpty() && !mapEveryColumn
+				? STARTER_TERMS
+				: requestedTerms);
+		terms.addAll(columnsForTable(schema, grainTable));
+		if (mapEveryColumn) {
+			joinCandidates.forEach(candidate -> terms.addAll(usableColumns(schema, candidate.sourceTable(), keyColumns)));
+		}
+		return terms;
+	}
+
+	/**
+	 * Lists a table's columns other than its join-key columns.
+	 *
+	 * @param schema discovered schema
+	 * @param table the table
+	 * @param keyColumns join-key columns keyed by lower-cased related table name
+	 * @return the table's usable columns
+	 */
+	private List<String> usableColumns(DatasetSchema schema, String table, Map<String, Set<String>> keyColumns) {
+		Set<String> keys = keyColumns.getOrDefault(table.toLowerCase(), Set.of());
+		return columnsForTable(schema, table).stream()
+				.filter(column -> !keys.contains(column))
+				.toList();
 	}
 
 	/**
@@ -142,13 +286,15 @@ public class DatasetViewSuggester {
 	 * @param allowedSourceTables tables currently included in the view
 	 * @param grainTable selected grain table
 	 * @param requestedTerm requested Darwin Core term
+	 * @param keyColumns join-key columns keyed by lower-cased related table name, never matched
 	 * @return the best matching source column, or {@code null} if none matched
 	 */
 	private ColumnMatch bestMatch(
 			DatasetSchema schema,
 			Set<String> allowedSourceTables,
 			String grainTable,
-			String requestedTerm) {
+			String requestedTerm,
+			Map<String, Set<String>> keyColumns) {
 		Map<String, Integer> sourcePriority = new LinkedHashMap<>();
 		int priority = 0;
 		sourcePriority.put(grainTable.toLowerCase(), priority++);
@@ -160,7 +306,7 @@ public class DatasetViewSuggester {
 			if (!allowedSourceTables.contains(table.name())) {
 				continue;
 			}
-			String matchedColumn = findColumn(table.columns(), requestedTerm);
+			String matchedColumn = findColumn(usableColumns(schema, table.name(), keyColumns), requestedTerm);
 			if (matchedColumn == null) {
 				continue;
 			}

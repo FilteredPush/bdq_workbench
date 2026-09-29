@@ -32,6 +32,9 @@ import org.filteredpush.bdq_workbench.model.ExecutionSummary;
  * and {@link #export(ExecutionSummary, OutputStream)} to write its content. Current implementations
  * are {@link DetailedResponseStreamExporter} (a tab-delimited dump of every response),
  * {@link SummaryReportExporter} (a human-readable aggregate report),
+ * {@link StructuredHtmlReportExporter} (a human-readable per-record HTML report for flat and
+ * structured results), {@link StructuredMarkdownReportExporter} (the same report family rendered
+ * as Markdown),
  * {@link XlsxReportExporter} (an XLSX spreadsheet via kurator-ffdq's {@code XLSXPostProcessor}),
  * {@link UnresolvedResponsesExporter} (a small companion XLSX workbook for responses that don't
  * apply to a single real record), and {@link RdfResponseExporter} (an RDF

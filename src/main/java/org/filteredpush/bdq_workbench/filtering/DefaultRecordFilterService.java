@@ -92,9 +92,7 @@ public class DefaultRecordFilterService implements RecordFilterService {
 		List<RecordGraph> keptGraphs = safeDataset.recordGraphs().stream()
 				.filter(graph -> keptIds.contains(graph.core().id()))
 				.toList();
-		RecordDataset filteredDataset = keptGraphs.isEmpty()
-				? new RecordDataset(kept)
-				: new RecordDataset(kept, keptGraphs);
+		RecordDataset filteredDataset = new RecordDataset(kept, keptGraphs, safeDataset.inputDescription());
 		if (kept.isEmpty()) {
 			diagnostics.add("No records matched the configured record filters");
 		}

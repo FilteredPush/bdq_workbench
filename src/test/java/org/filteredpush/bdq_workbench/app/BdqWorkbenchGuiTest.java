@@ -432,8 +432,39 @@ class BdqWorkbenchGuiTest {
         assertThat(text).contains("Pre-amendment: 1/2 (50.0%)");
         assertThat(text).contains("Top filled-in amendment values:");
         assertThat(text).contains("Top amended original -> proposed values:");
+        assertThat(text).contains("Saved files: reports/bdq-report-summary.txt, reports/bdq-report-responses.txt, reports/bdq-report-structured-html.html, reports/bdq-report-structured.md, reports/bdq-report-xls.xlsx, reports/bdq-report-xls-unresolved.xlsx, reports/bdq-report-rdf.ttl");
         assertThat(text).doesNotContain("Phase counts: {");
         assertThat(text).doesNotContain("Response result counts: {");
+    }
+
+    @Test
+    void stageOverviewMarksUserStoppedRunWithoutTreatingItAsFailure() throws Exception {
+        Method renderOverview = BdqWorkbenchGui.class.getDeclaredMethod(
+                "renderStageOverview",
+                PreparedRun.class,
+                Phase.class,
+                boolean.class,
+                boolean.class,
+                boolean.class,
+                boolean.class);
+        renderOverview.setAccessible(true);
+        PreparedRun preparedRun = new PreparedRun(
+                null,
+                new RecordDataset(List.of(new CanonicalRecord("r1", Map.of("dwc:eventDate", "2025-01-01")))),
+                new ExecutionPlan(new UseCase("urn:usecase", "Use case", "urn:policy"), new Policy("urn:policy", List.of()), List.of(), List.of()),
+                List.of(),
+                new TestBindingResult(List.of(), List.of(), List.of()),
+                RecordFilterSummary.unfiltered(new RecordDataset(List.of(new CanonicalRecord("r1", Map.of("dwc:eventDate", "2025-01-01"))))));
+
+        String overview = (String) renderOverview.invoke(null, preparedRun, Phase.AMENDMENT, false, false, false, true);
+
+        assertThat(overview).contains("Workflow progress: 6/9 stages completed");
+        assertThat(overview).contains("[completed] PRE_AMENDMENT - phase complete");
+        assertThat(overview).contains("[stopped] AMENDMENT - run stopped by user");
+        assertThat(overview).contains("[pending] POST_AMENDMENT - phase not started");
+        assertThat(overview).contains("[skipped] Export reports - run stopped before export");
+        assertThat(overview).doesNotContain("Current stage:");
+        assertThat(overview).doesNotContain("[failed]");
     }
 
     @Test
@@ -610,6 +641,7 @@ class BdqWorkbenchGuiTest {
                 Phase.class,
                 boolean.class,
                 boolean.class,
+                boolean.class,
                 boolean.class);
         helper.setAccessible(true);
         PreparedRun preparedRun = new PreparedRun(
@@ -628,7 +660,7 @@ class BdqWorkbenchGuiTest {
                         Map.of("dwc:country", List.of("Canada")),
                         List.of("Record filter field country resolved to input field dwc:country")));
 
-        String overview = (String) helper.invoke(null, preparedRun, null, false, false, false);
+        String overview = (String) helper.invoke(null, preparedRun, null, false, false, false, false);
 
         assertThat(overview).contains("Workflow progress: 5/9 stages completed");
         assertThat(overview).contains("[completed] Load dataset - 3 records loaded");
@@ -645,6 +677,7 @@ class BdqWorkbenchGuiTest {
                 Phase.class,
                 boolean.class,
                 boolean.class,
+                boolean.class,
                 boolean.class);
         helper.setAccessible(true);
         PreparedRun preparedRun = new PreparedRun(
@@ -656,7 +689,7 @@ class BdqWorkbenchGuiTest {
                 RecordFilterSummary.unfiltered(new RecordDataset(List.of(
                         new CanonicalRecord("r1", Map.of("dwc:country", "Canada"))))));
 
-        String overview = (String) helper.invoke(null, preparedRun, Phase.AMENDMENT, false, false, false);
+        String overview = (String) helper.invoke(null, preparedRun, Phase.AMENDMENT, false, false, false, false);
 
         assertThat(overview).contains("Workflow progress: 6/9 stages completed");
         assertThat(overview).contains("Current stage: AMENDMENT (stage 7/9)");
@@ -673,7 +706,8 @@ class BdqWorkbenchGuiTest {
 		Phase.class,
 		boolean.class,
 		boolean.class,
-		boolean.class);
+		boolean.class,
+                boolean.class);
         helper.setAccessible(true);
         PreparedRun preparedRun = new PreparedRun(
 		null,
@@ -684,7 +718,7 @@ class BdqWorkbenchGuiTest {
 		RecordFilterSummary.unfiltered(new RecordDataset(List.of(
 				new CanonicalRecord("r1", Map.of("dwc:country", "Canada"))))));
 
-        String overview = (String) helper.invoke(null, preparedRun, null, true, false, false);
+        String overview = (String) helper.invoke(null, preparedRun, null, true, false, false, false);
 
         assertThat(overview).contains("Workflow progress: 8/9 stages completed");
         assertThat(overview).contains("Current stage: Export reports (stage 9/9)");

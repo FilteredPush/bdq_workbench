@@ -40,6 +40,7 @@ import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CancellationException;
 import javax.swing.BorderFactory;
 import javax.swing.BoxLayout;
 import javax.swing.DefaultCellEditor;
@@ -103,6 +104,8 @@ import org.filteredpush.bdq_workbench.rdf_policy.UseCaseXmlParser;
 import org.filteredpush.bdq_workbench.reporting.DetailedResponseStreamExporter;
 import org.filteredpush.bdq_workbench.reporting.RdfResponseExporter;
 import org.filteredpush.bdq_workbench.reporting.ReportingService;
+import org.filteredpush.bdq_workbench.reporting.StructuredHtmlReportExporter;
+import org.filteredpush.bdq_workbench.reporting.StructuredMarkdownReportExporter;
 import org.filteredpush.bdq_workbench.reporting.SummaryReportExporter;
 import org.filteredpush.bdq_workbench.reporting.TestResultsSummaryService;
 import org.filteredpush.bdq_workbench.reporting.UnresolvedResponsesExporter;
@@ -136,6 +139,36 @@ import org.slf4j.LoggerFactory;
 final class BdqWorkbenchGui {
     private static final Logger LOG = LoggerFactory.getLogger(BdqWorkbenchGui.class);
     private static final int RECORD_FILTER_SUGGESTION_LIMIT = 20;
+	/** Dataset-view builder dialog's default width. */
+	private static final int DATASET_VIEW_DIALOG_WIDTH = 1240;
+	/** Dataset-view builder dialog's default height. */
+	private static final int DATASET_VIEW_DIALOG_HEIGHT = 820;
+	/** Preferred width of the dataset-view join grid. */
+	private static final int DATASET_VIEW_JOINS_WIDTH = 860;
+	/** Join-grid rows kept visible at the dialog's default size. */
+	private static final int DATASET_VIEW_VISIBLE_JOIN_ROWS = 5;
+	/** Extra height for the join grid's scroll-pane border. */
+	private static final int DATASET_VIEW_SCROLL_PADDING = 6;
+	/** Preferred width of the dataset-view builder's schema/requested-terms tabs. */
+	private static final int DATASET_VIEW_SCHEMA_WIDTH = 300;
+	/** Narrowest preview column width. */
+	private static final int DATASET_VIEW_PREVIEW_MIN_COLUMN_WIDTH = 70;
+	/** Widest preview column width. */
+	private static final int DATASET_VIEW_PREVIEW_MAX_COLUMN_WIDTH = 280;
+	/** Horizontal padding added to a preview column's widest cell. */
+	private static final int DATASET_VIEW_PREVIEW_COLUMN_PADDING = 12;
+	/** Join-grid column holding the include checkbox. */
+	private static final int JOIN_INCLUDE_COLUMN = 0;
+	/** Join-grid column holding the related table name. */
+	private static final int JOIN_TABLE_COLUMN = 1;
+	/** Join-grid column holding the observed rows per grain record. */
+	private static final int JOIN_OBSERVED_COLUMN = 3;
+	/** Join-grid column holding the multiplicity-handling policy. */
+	private static final int JOIN_POLICY_COLUMN = 4;
+	/** Background marking join rows whose multiplicity needs a handling decision. */
+	private static final Color DATASET_VIEW_DECISION_COLOR = new Color(0xFF, 0xF4, 0xCE);
+	/** File name, under the reports directory, of a view saved with "Use View". */
+	private static final String DATASET_VIEW_DEFAULT_FILE = "bdq-dataset-view.json";
     private static final int FINALIZATION_STAGE_STEP_COUNT = 5;
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
@@ -299,12 +332,15 @@ final class BdqWorkbenchGui {
         JButton backToSetup = new JButton("Back to Select Inputs");
         JButton startRun = new JButton("Start Run");
         startRun.setEnabled(false);
+        JButton stopRun = new JButton("Stop Run");
+        stopRun.setEnabled(false);
         JButton closeButton = new JButton("Quit");
         monitorControls.add(loadParameters);
         monitorControls.add(saveParameters);
         monitorControls.add(toggleWorkflowView);
         monitorControls.add(backToSetup);
         monitorControls.add(startRun);
+        monitorControls.add(stopRun);
         monitorControls.add(closeButton);
         monitorPanel.add(monitorControls, BorderLayout.SOUTH);
 
@@ -442,6 +478,8 @@ final class BdqWorkbenchGui {
         root.add(cardPanel, BorderLayout.CENTER);
 
         final PreflightState[] state = new PreflightState[1];
+        final SwingWorker<?, ?>[] activeRunWorker = new SwingWorker<?, ?>[1];
+        final Phase[] activeRunPhase = new Phase[1];
         installBindingDebugPopup(
                 frame,
                 bindingGrid,
@@ -490,6 +528,21 @@ final class BdqWorkbenchGui {
 
         exit.addActionListener(e -> exitApplication(frame));
         closeButton.addActionListener(e -> exitApplication(frame));
+        stopRun.addActionListener(e -> {
+            SwingWorker<?, ?> runningWorker = activeRunWorker[0];
+            if (runningWorker == null || runningWorker.isDone()) {
+                return;
+            }
+            stopRun.setEnabled(false);
+            stopRun.setText("Stopping...");
+            appendStatus(statusArea, "Stop requested by user\n");
+            PreparedRun runningRun = state[0] == null ? null : state[0].preparedRun();
+            if (runningRun != null) {
+                resultSummaryArea.setText(renderStageOverview(runningRun, activeRunPhase[0], false, false, false, true)
+                        + "\nStopping run at user request...\n");
+            }
+            runningWorker.cancel(true);
+        });
         saveParameters.addActionListener(e -> saveParameterSettings(frame, bindingGrid));
         loadParameters.addActionListener(e -> loadParameterSettings(
                 frame,
@@ -521,7 +574,10 @@ final class BdqWorkbenchGui {
                 useCaseSource.getText().trim(),
                 testDefinitionsSource.getText().trim(),
                 additionalTestDefinitions.getText().trim(),
-                ontologySource.getText().trim()));
+                ontologySource.getText().trim(),
+                "",
+                () -> {
+                }));
         clearDatasetView.addActionListener(e -> {
             datasetView.field().setText("");
             clearDatasetView.setEnabled(false);
@@ -668,6 +724,28 @@ final class BdqWorkbenchGui {
                         resetWorkflowVisualizationPanel(workflowVisualizationPanel);
                     } catch (Exception ex) {
                         Throwable cause = ex.getCause() == null ? ex : ex.getCause();
+                        if (cause instanceof org.filteredpush.bdq_workbench.ingest.DatasetViewRequiredException required) {
+                            setStatus(statusArea, "The dataset has related tables with more than one row per "
+                                    + required.grainTable() + " record. Choose how to handle each in the dataset "
+                                    + "view builder, then use the view to continue.\n");
+                            resultSummaryArea.setText("Waiting for a dataset view.\n");
+                            startRun.setEnabled(false);
+                            cards.show(cardPanel, "setup");
+                            loadDatasetViewDialog(
+                                    frame,
+                                    dataset.field().getText().trim(),
+                                    datasetView.field(),
+                                    datasetTable.getText().trim(),
+                                    availableUseCaseChoices(useCaseChoice),
+                                    selectedUseCaseId(useCaseChoice),
+                                    useCaseSource.getText().trim(),
+                                    testDefinitionsSource.getText().trim(),
+                                    additionalTestDefinitions.getText().trim(),
+                                    ontologySource.getText().trim(),
+                                    requiredViewReason(required),
+                                    run::doClick);
+                            return;
+                        }
                         LOG.error("Preflight mapping failed", cause);
                         setStatus(statusArea, "Failed to prepare run: " + cause.getMessage() + "\n");
                         resultSummaryArea.setText("Run setup failed.\n");
@@ -699,7 +777,11 @@ final class BdqWorkbenchGui {
             appendStatus(statusArea, "\nStarting execution...\n");
             showTextSummary.run();
             toggleWorkflowView.setEnabled(false);
+            stopRun.setText("Stop Run");
+            stopRun.setEnabled(true);
+            activeRunPhase[0] = null;
             final PreparedRun[] executedRun = new PreparedRun[1];
+            final ExecutionProgressTracker[] trackers = new ExecutionProgressTracker[1];
             final int[] exportStageTotalSteps = {FINALIZATION_STAGE_STEP_COUNT};
             final int[] completedExporters = {0};
 
@@ -711,10 +793,12 @@ final class BdqWorkbenchGui {
                     PreparedRun editedRun = applyParameterEdits(state[0].preparedRun(), reviewModel);
                     executedRun[0] = editedRun;
                     ExecutionProgressTracker tracker = new ExecutionProgressTracker();
+                    trackers[0] = tracker;
                     return runWorkbench(
 	editedRun,
 	tracker,
 	snapshot -> SwingUtilities.invokeLater(() -> {
+                                activeRunPhase[0] = snapshot.phase();
                                 int max = Math.max(1, snapshot.total());
                                 progress.setMaximum(max);
                                 progress.setValue(snapshot.completed());
@@ -729,7 +813,7 @@ final class BdqWorkbenchGui {
 		snapshot.queued(),
 		snapshot.completed(),
 		snapshot.total()));
-                                resultSummaryArea.setText(renderStageOverview(editedRun, snapshot.phase(), false, false, false)
+                                resultSummaryArea.setText(renderStageOverview(editedRun, snapshot.phase(), false, false, false, false)
 		+ "\n"
 		+ renderProgressSnapshot(snapshot));
 	}),
@@ -751,6 +835,9 @@ final class BdqWorkbenchGui {
 
                 @Override
                 protected void done() {
+                    stopRun.setEnabled(false);
+                    stopRun.setText("Stop Run");
+                    activeRunWorker[0] = null;
                     try {
                         ExecutionSummary summary = get();
                         PreparedRun completedRun = executedRun[0] == null ? state[0].preparedRun() : executedRun[0];
@@ -818,9 +905,22 @@ final class BdqWorkbenchGui {
 		"Workflow stage %d/%d • Export reports complete",
 		totalWorkflowStageCount(),
 		totalWorkflowStageCount()));
-                        resultSummaryArea.setText(renderStageOverview(completedRun, null, false, true, false)
+                        resultSummaryArea.setText(renderStageOverview(completedRun, null, false, true, false, false)
 		+ "\n"
 		+ renderResultSummary(summary));
+                    } catch (CancellationException ex) {
+                        PreparedRun cancelledRun = executedRun[0] == null ? state[0].preparedRun() : executedRun[0];
+                        Phase cancelledPhase = trackers[0] == null ? activeRunPhase[0] : trackers[0].snapshot().phase();
+                        LOG.info("BDQ Workbench execution stopped by user");
+                        appendStatus(statusArea, "Stopped by user\n");
+                        monitorHeader.setText(monitorHeaderText("Run Stopped", cancelledRun));
+                        progress.setValue(0);
+                        progress.setString("Run stopped by user");
+                        resultSummaryArea.setText(renderStageOverview(cancelledRun, cancelledPhase, false, false, false, true)
+                                + "\nExecution stopped at user request.\n");
+                        toggleWorkflowView.setEnabled(false);
+                        showTextSummary.run();
+                        resetWorkflowVisualizationPanel(workflowVisualizationPanel);
                     } catch (Exception ex) {
                         Throwable cause = ex.getCause() == null ? ex : ex.getCause();
                         LOG.error("BDQ Workbench execution failed", cause);
@@ -831,7 +931,7 @@ final class BdqWorkbenchGui {
                                 "Execution failed",
                                 JOptionPane.ERROR_MESSAGE);
                         PreparedRun failedRun = executedRun[0] == null ? state[0].preparedRun() : executedRun[0];
-                        resultSummaryArea.setText(renderStageOverview(failedRun, null, false, false, true)
+                        resultSummaryArea.setText(renderStageOverview(failedRun, null, false, false, true, false)
                                 + "\nExecution failed: "
                                 + cause.getMessage()
                                 + "\n");
@@ -839,11 +939,13 @@ final class BdqWorkbenchGui {
                         showTextSummary.run();
                         resetWorkflowVisualizationPanel(workflowVisualizationPanel);
                     } finally {
+                        activeRunPhase[0] = null;
                         progress.setVisible(false);
                         backToSetup.setEnabled(true);
                     }
                 }
             };
+            activeRunWorker[0] = worker;
             worker.execute();
         });
 
@@ -956,7 +1058,7 @@ final class BdqWorkbenchGui {
 		detail,
 		Math.max(0, Math.min(completedSteps, totalSteps)),
 		Math.max(1, totalSteps)));
-        resultSummaryArea.setText(renderStageOverview(preparedRun, null, exportRunning, false, false)
+        resultSummaryArea.setText(renderStageOverview(preparedRun, null, exportRunning, false, false, false)
 		+ "\n"
 		+ "Export progress\n"
 		+ "Current stage: Export reports (stage "
@@ -1439,7 +1541,8 @@ final class BdqWorkbenchGui {
     /**
      * Builds a {@link WorkbenchFacade} wired with the standard set of services (ingest, RDF
      * policy resolution, classpath test discovery, default test binding, parallel-phase
-     * execution, and the summary/detailed/xls-compatibility/rdf report exporters) for
+     * execution, and the summary/detailed/structured-html/structured-markdown/xls-compatibility/rdf report
+     * exporters) for
      * {@code config}.
      *
      * @param config application configuration specifying RDF sources, dataset, discovery
@@ -1455,7 +1558,8 @@ final class BdqWorkbenchGui {
     /**
      * Builds a {@link WorkbenchFacade} wired with the standard set of services (ingest, RDF
      * policy resolution, classpath test discovery, default test binding, parallel-phase
-     * execution, and the summary/detailed/xls-compatibility/rdf report exporters) for
+     * execution, and the summary/detailed/structured-html/structured-markdown/xls-compatibility/rdf report
+     * exporters) for
      * {@code config}.
      *
      * @param config application configuration specifying RDF sources, dataset, discovery
@@ -1477,6 +1581,8 @@ final class BdqWorkbenchGui {
                 new ReportingService(List.of(
                         new SummaryReportExporter(),
                         new DetailedResponseStreamExporter(),
+                        new StructuredHtmlReportExporter(),
+                        new StructuredMarkdownReportExporter(),
                         new XlsxReportExporter(),
                         new UnresolvedResponsesExporter(),
                         new RdfResponseExporter(config.rdfDefinitions())), reportingProgressListener));
@@ -2000,6 +2106,9 @@ final class BdqWorkbenchGui {
 	 * @param testDefinitionsSource configured primary test-definition source
 	 * @param additionalTestDefinitions configured extra test-definition sources
 	 * @param ontologySource configured ontology source
+	 * @param requiredReason why a view is needed before the run can continue, shown as a banner;
+	 *     blank when the user opened the builder themselves
+	 * @param onViewReady called after the user saves or uses a view
 	 */
 	private static void loadDatasetViewDialog(
 			JFrame frame,
@@ -2011,7 +2120,9 @@ final class BdqWorkbenchGui {
 			String useCaseSource,
 			String testDefinitionsSource,
 			String additionalTestDefinitions,
-			String ontologySource) {
+			String ontologySource,
+			String requiredReason,
+			Runnable onViewReady) {
 		if (datasetPath == null || datasetPath.isBlank()) {
 			JOptionPane.showMessageDialog(
 					frame,
@@ -2057,13 +2168,12 @@ final class BdqWorkbenchGui {
 						additionalTestDefinitions,
 						ontologySource);
 				DatasetViewSuggester suggester = new DatasetViewSuggester();
-				String initialGrain = schema.tables().stream()
-						.map(org.filteredpush.bdq_workbench.model.TableSchema::name)
-						.anyMatch(name -> name.equalsIgnoreCase(datasetTable))
-								? datasetTable
-								: suggester.defaultGrainTable(schema);
+				String initialGrain = relational.coreTable().isBlank()
+						? suggester.defaultGrainTable(schema)
+						: relational.coreTable();
 				DatasetView suggested = suggester.suggest(schema, initialGrain, selectedTerms);
 				return new DatasetViewPreview(
+						path,
 						relational,
 						schema,
 						suggested,
@@ -2076,7 +2186,7 @@ final class BdqWorkbenchGui {
 			@Override
 			protected void done() {
 				try {
-					openDatasetViewDialog(frame, datasetViewField, get());
+					openDatasetViewDialog(frame, datasetViewField, get(), requiredReason, onViewReady);
 				} catch (Exception e) {
 					Throwable cause = e.getCause() == null ? e : e.getCause();
 					JOptionPane.showMessageDialog(
@@ -2093,17 +2203,34 @@ final class BdqWorkbenchGui {
 	/**
 	 * Opens the dataset-view builder dialog for one already-profiled relational dataset.
 	 *
+	 * <p>The dialog lists every table related to the chosen grain table together with the
+	 * multiplicity observed in the data and a per-join handling policy
+	 * ({@link DatasetViewCardinalityPolicy}), explained by a legend beneath the join grid. Changing
+	 * the grain table re-reads the relational graphs for that table in the background (cached per
+	 * table), since relationships and multiplicity are measured relative to the grain.
+	 *
 	 * @param frame owner frame
 	 * @param datasetViewField dataset-view path field to update when the user loads or saves a view
 	 * @param previewData prepared relational schema, use-case term scope, and starter suggestion
+	 * @param requiredReason why a view is needed before the run can continue, shown as a banner;
+	 *     blank when the user opened the builder themselves
+	 * @param onViewReady called after the user saves or uses a view
 	 */
-	private static void openDatasetViewDialog(JFrame frame, JTextField datasetViewField, DatasetViewPreview previewData) {
+	private static void openDatasetViewDialog(
+			JFrame frame,
+			JTextField datasetViewField,
+			DatasetViewPreview previewData,
+			String requiredReason,
+			Runnable onViewReady) {
 		DatasetViewIO io = new DatasetViewIO();
 		DatasetViewSuggester suggester = new DatasetViewSuggester();
-		RelationalIngestResult relational = previewData.relational();
+		Map<String, RelationalIngestResult> relationalByGrain = new LinkedHashMap<>();
+		relationalByGrain.put(previewData.relational().coreTable().toLowerCase(), previewData.relational());
+		RelationalIngestResult[] relational = {previewData.relational()};
 		DatasetSchema schema = previewData.schema();
 		JTextArea schemaDetails = readOnlyTextArea(renderDatasetViewSchemaText(schema));
 		DatasetView[] currentView = {previewData.suggested()};
+		boolean[] suppressGrainEvents = {false};
 		List<DatasetViewUseCaseScope> scopes = datasetViewScopes(previewData);
 		JComboBox<DatasetViewUseCaseScope> scopeChoice = new JComboBox<>(scopes.toArray(DatasetViewUseCaseScope[]::new));
 		JComboBox<String> grainChoice = new JComboBox<>(schema.tables().stream()
@@ -2112,22 +2239,20 @@ final class BdqWorkbenchGui {
 		grainChoice.setSelectedItem(previewData.suggested().grainTable());
 		JTextArea requestedTermsDetails = readOnlyTextArea("");
 		DefaultTableModel joinsModel = new DefaultTableModel(
-				new Object[] {"Include", "Source table", "Join path", "Multiplicity"}, 0) {
+				new Object[] {"Include", "Related table", "Join path", "Observed rows", "Multiplicity handling"}, 0) {
 			@Override
 			public Class<?> getColumnClass(int columnIndex) {
-				return columnIndex == 0
+				return columnIndex == JOIN_INCLUDE_COLUMN
 						? Boolean.class
-						: columnIndex == 3 ? DatasetViewCardinalityPolicy.class : String.class;
+						: columnIndex == JOIN_POLICY_COLUMN ? DatasetViewCardinalityPolicy.class : String.class;
 			}
 
 			@Override
 			public boolean isCellEditable(int row, int column) {
-				return column == 0 || column == 3;
+				return column == JOIN_INCLUDE_COLUMN || column == JOIN_POLICY_COLUMN;
 			}
 		};
-		JTable joinsTable = new JTable(joinsModel);
-		joinsTable.getColumnModel().getColumn(3).setCellEditor(new DefaultCellEditor(
-				new JComboBox<>(DatasetViewCardinalityPolicy.values())));
+		JTable joinsTable = createDatasetViewJoinsTable(joinsModel);
 		DefaultTableModel mappingsModel = new DefaultTableModel(
 				new Object[] {"Darwin Core term", "Source table", "Source column"}, 0) {
 			@Override
@@ -2150,7 +2275,9 @@ final class BdqWorkbenchGui {
 		JButton refreshPreview = new JButton("Refresh Preview");
 		JButton save = new JButton("Save View...");
 		JButton load = new JButton("Load View...");
-		JPanel controls = new JPanel(new FlowLayout(FlowLayout.LEFT));
+		JButton use = new JButton("Use View");
+		use.setToolTipText("Save this view as " + DATASET_VIEW_DEFAULT_FILE + " and use it for the run");
+		JPanel controls = new JPanel(new WrapLayout(FlowLayout.LEFT));
 		controls.add(new JLabel("Requested terms"));
 		controls.add(scopeChoice);
 		controls.add(new JLabel("Grain table"));
@@ -2162,56 +2289,88 @@ final class BdqWorkbenchGui {
 		JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT));
 		buttons.add(load);
 		buttons.add(save);
-		JPanel panel = new JPanel(new BorderLayout(8, 8));
-		JPanel mappingPanel = new JPanel(new BorderLayout(6, 6));
-		mappingPanel.add(new JScrollPane(requestedTermsDetails), BorderLayout.NORTH);
-		JSplitPane mappingSplit = new JSplitPane(
-				JSplitPane.VERTICAL_SPLIT,
-				new JScrollPane(joinsTable),
-				new JScrollPane(mappingsTable));
-		mappingSplit.setResizeWeight(0.35d);
-		mappingPanel.add(mappingSplit, BorderLayout.CENTER);
-		JSplitPane upper = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, new JScrollPane(schemaDetails), mappingPanel);
-		upper.setResizeWeight(0.35d);
-		JSplitPane previewSplit = new JSplitPane(
-				JSplitPane.VERTICAL_SPLIT,
-				new JScrollPane(previewTable),
-				new JScrollPane(previewDiagnostics));
-		previewSplit.setResizeWeight(0.75d);
-		JSplitPane layout = new JSplitPane(JSplitPane.VERTICAL_SPLIT, upper, previewSplit);
-		layout.setResizeWeight(0.58d);
-		panel.add(controls, BorderLayout.NORTH);
-		panel.add(layout, BorderLayout.CENTER);
-		panel.add(buttons, BorderLayout.SOUTH);
+		buttons.add(use);
 		JDialog dialog = new JDialog(frame, "Build Dataset View", true);
-		dialog.setContentPane(panel);
-		dialog.setSize(1200, 760);
+		JPanel content = layoutDatasetViewDialog(
+				controls, buttons, schemaDetails, requestedTermsDetails, joinsTable, mappingsTable, previewTable,
+				previewDiagnostics);
+		if (requiredReason != null && !requiredReason.isBlank()) {
+			JPanel north = new JPanel(new BorderLayout(4, 4));
+			north.add(datasetViewRequiredBanner(requiredReason), BorderLayout.NORTH);
+			north.add(controls, BorderLayout.CENTER);
+			content.add(north, BorderLayout.NORTH);
+		}
+		dialog.setContentPane(content);
+		dialog.setSize(DATASET_VIEW_DIALOG_WIDTH, DATASET_VIEW_DIALOG_HEIGHT);
 		dialog.setLocationRelativeTo(frame);
 
+		java.util.function.BiConsumer<String, java.util.function.Consumer<RelationalIngestResult>> withRelational =
+				(grain, action) -> {
+					RelationalIngestResult cached = relationalByGrain.get(grain.toLowerCase());
+					if (cached != null) {
+						action.accept(cached);
+						return;
+					}
+					dialog.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.WAIT_CURSOR));
+					previewDiagnostics.setText("Reading related tables for grain table " + grain + "...");
+					new SwingWorker<RelationalIngestResult, Void>() {
+						@Override
+						protected RelationalIngestResult doInBackground() {
+							return new RelationalDatasetIngestor().ingest(previewData.datasetPath(), grain);
+						}
+
+						@Override
+						protected void done() {
+							dialog.setCursor(java.awt.Cursor.getDefaultCursor());
+							try {
+								RelationalIngestResult result = get();
+								relationalByGrain.put(grain.toLowerCase(), result);
+								action.accept(result);
+							} catch (Exception e) {
+								Throwable cause = e.getCause() == null ? e : e.getCause();
+								previewDiagnostics.setText("Unable to read grain table " + grain + ": " + cause.getMessage());
+							}
+						}
+					}.execute();
+				};
+		java.util.function.Consumer<DatasetView> showView = view -> {
+			RelationalIngestResult result = relational[0];
+			populateDatasetViewJoinRows(joinsModel, suggester, result, view.grainTable(), view);
+			populateDatasetViewMappingRows(
+					mappingsModel,
+					view,
+					((DatasetViewUseCaseScope) scopeChoice.getSelectedItem()).requestedTerms());
+			currentView[0] = view;
+			updateDatasetViewPreview(result, previewTable, previewDiagnostics, view);
+		};
 		Runnable applySuggestedDraft = () -> {
 			DatasetViewUseCaseScope scope = (DatasetViewUseCaseScope) scopeChoice.getSelectedItem();
 			String grain = String.valueOf(grainChoice.getSelectedItem());
 			List<String> requestedTerms = scope == null ? List.of() : scope.requestedTerms();
-			DatasetView suggested = suggester.suggest(schema, grain, requestedTerms);
-			populateDatasetViewJoinRows(joinsModel, suggester, schema, grain, suggested);
-			populateDatasetViewMappingRows(mappingsModel, suggested, requestedTerms);
 			requestedTermsDetails.setText(renderDatasetViewRequestedTermsText(
 					scope == null ? "Selected use case" : scope.label(),
 					scope == null ? List.of() : scope.applicableUseCases(),
 					requestedTerms));
-			currentView[0] = suggested;
-			updateDatasetViewPreview(relational, previewTableModel, previewDiagnostics, currentView[0]);
+			withRelational.accept(grain, result -> {
+				relational[0] = result;
+				schemaDetails.setText(renderDatasetViewSchemaText(result.schema()));
+				showView.accept(suggester.suggest(result.schema(), grain, requestedTerms));
+			});
 		};
 		Runnable refreshFromCurrentDraft = () -> {
 			currentView[0] = buildDatasetViewFromTables(
-					schema,
+					relational[0].schema(),
 					String.valueOf(grainChoice.getSelectedItem()),
 					joinsModel,
 					mappingsModel);
-			updateDatasetViewPreview(relational, previewTableModel, previewDiagnostics, currentView[0]);
+			updateDatasetViewPreview(relational[0], previewTable, previewDiagnostics, currentView[0]);
 		};
 		scopeChoice.addActionListener(e -> applySuggestedDraft.run());
-		grainChoice.addActionListener(e -> applySuggestedDraft.run());
+		grainChoice.addActionListener(e -> {
+			if (!suppressGrainEvents[0]) {
+				applySuggestedDraft.run();
+			}
+		});
 		autoMap.addActionListener(e -> applySuggestedDraft.run());
 		addMapping.addActionListener(e -> mappingsModel.addRow(new Object[] {"", "", ""}));
 		removeMapping.addActionListener(e -> {
@@ -2222,6 +2381,22 @@ final class BdqWorkbenchGui {
 			}
 		});
 		refreshPreview.addActionListener(e -> refreshFromCurrentDraft.run());
+		joinsModel.addTableModelListener(e -> {
+			if (e.getColumn() == JOIN_POLICY_COLUMN && e.getFirstRow() >= 0 && e.getFirstRow() == e.getLastRow()) {
+				DatasetViewUseCaseScope scope = (DatasetViewUseCaseScope) scopeChoice.getSelectedItem();
+				applyJoinPolicyToMappings(
+						suggester,
+						relational[0].schema(),
+						String.valueOf(grainChoice.getSelectedItem()),
+						String.valueOf(joinsModel.getValueAt(e.getFirstRow(), JOIN_TABLE_COLUMN)),
+						(DatasetViewCardinalityPolicy) joinsModel.getValueAt(e.getFirstRow(), JOIN_POLICY_COLUMN),
+						scope == null ? List.of() : scope.requestedTerms(),
+						mappingsModel);
+			}
+			if (e.getColumn() == JOIN_INCLUDE_COLUMN || e.getColumn() == JOIN_POLICY_COLUMN) {
+				refreshFromCurrentDraft.run();
+			}
+		});
 
 		load.addActionListener(e -> {
 			String selected = chooseFile(frame, "Select dataset view JSON");
@@ -2230,21 +2405,22 @@ final class BdqWorkbenchGui {
 			}
 			try {
 				DatasetView view = io.load(Path.of(selected));
-				io.validateCompatibility(view, schema);
+				suppressGrainEvents[0] = true;
 				grainChoice.setSelectedItem(view.grainTable());
-				populateDatasetViewJoinRows(joinsModel, suggester, schema, view.grainTable(), view);
-				populateDatasetViewMappingRows(
-					mappingsModel,
-					view,
-					((DatasetViewUseCaseScope) scopeChoice.getSelectedItem()).requestedTerms());
-				currentView[0] = view;
-				updateDatasetViewPreview(relational, previewTableModel, previewDiagnostics, currentView[0]);
+				suppressGrainEvents[0] = false;
+				withRelational.accept(view.grainTable(), result -> {
+					try {
+						io.validateCompatibility(view, result.schema());
+						relational[0] = result;
+						schemaDetails.setText(renderDatasetViewSchemaText(result.schema()));
+						showView.accept(view);
+					} catch (AppException ex) {
+						showDatasetViewLoadError(frame, ex);
+					}
+				});
 			} catch (AppException ex) {
-				JOptionPane.showMessageDialog(
-						frame,
-						"Unable to load dataset view: " + ex.getMessage(),
-						"Dataset view load failed",
-						JOptionPane.ERROR_MESSAGE);
+				suppressGrainEvents[0] = false;
+				showDatasetViewLoadError(frame, ex);
 			}
 		});
 		save.addActionListener(e -> {
@@ -2256,9 +2432,261 @@ final class BdqWorkbenchGui {
 			io.save(Path.of(selected), currentView[0]);
 			datasetViewField.setText(selected);
 			dialog.dispose();
+			onViewReady.run();
+		});
+		use.addActionListener(e -> {
+			refreshFromCurrentDraft.run();
+			Path target = Path.of(System.getProperty("user.dir"), WorkbenchFacade.OUTPUT_DIRECTORY, DATASET_VIEW_DEFAULT_FILE);
+			try {
+				Files.createDirectories(target.getParent());
+			} catch (IOException ex) {
+				showDatasetViewLoadError(frame, new AppException("Unable to create " + target.getParent(), ex));
+				return;
+			}
+			io.save(target, currentView[0]);
+			datasetViewField.setText(target.toString());
+			dialog.dispose();
+			onViewReady.run();
 		});
 		applySuggestedDraft.run();
 		dialog.setVisible(true);
+	}
+
+	/**
+	 * Lays out the dataset-view builder: schema and requested terms in tabs on the left; the join
+	 * grid (always visible, with its multiplicity-handling legend) above the term mappings on the
+	 * right; and the preview with its diagnostics below.
+	 *
+	 * @param controls the top control row
+	 * @param buttons the bottom button row
+	 * @param schemaDetails the schema description
+	 * @param requestedTermsDetails the requested-terms description
+	 * @param joinsTable the join grid
+	 * @param mappingsTable the term-mapping grid
+	 * @param previewTable the preview grid
+	 * @param previewDiagnostics the preview diagnostics
+	 * @return the dialog's content pane
+	 */
+	private static JPanel layoutDatasetViewDialog(
+			JPanel controls,
+			JPanel buttons,
+			JTextArea schemaDetails,
+			JTextArea requestedTermsDetails,
+			JTable joinsTable,
+			JTable mappingsTable,
+			JTable previewTable,
+			JTextArea previewDiagnostics) {
+		javax.swing.JTabbedPane leftTabs = new javax.swing.JTabbedPane();
+		leftTabs.addTab("Schema", new JScrollPane(schemaDetails));
+		leftTabs.addTab("Requested terms", new JScrollPane(requestedTermsDetails));
+		leftTabs.setPreferredSize(new Dimension(DATASET_VIEW_SCHEMA_WIDTH, leftTabs.getPreferredSize().height));
+
+		JScrollPane joinsScroll = new JScrollPane(joinsTable);
+		joinsScroll.setPreferredSize(new Dimension(
+				DATASET_VIEW_JOINS_WIDTH,
+				joinsTable.getTableHeader().getPreferredSize().height
+						+ joinsTable.getRowHeight() * DATASET_VIEW_VISIBLE_JOIN_ROWS + DATASET_VIEW_SCROLL_PADDING));
+		JPanel joinsPanel = new JPanel(new BorderLayout(4, 4));
+		joinsPanel.setBorder(BorderFactory.createTitledBorder(
+				"Related tables: how multiple related rows per grain record are handled"));
+		joinsPanel.add(joinsScroll, BorderLayout.CENTER);
+		joinsPanel.add(datasetViewPolicyLegend(), BorderLayout.SOUTH);
+
+		JPanel mappingsPanel = new JPanel(new BorderLayout());
+		mappingsPanel.setBorder(BorderFactory.createTitledBorder("Term mappings"));
+		mappingsPanel.add(new JScrollPane(mappingsTable), BorderLayout.CENTER);
+
+		JPanel right = new JPanel(new BorderLayout(6, 6));
+		right.add(joinsPanel, BorderLayout.NORTH);
+		right.add(mappingsPanel, BorderLayout.CENTER);
+
+		JSplitPane upper = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, leftTabs, right);
+		upper.setResizeWeight(0.25d);
+		JPanel previewPanel = new JPanel(new BorderLayout());
+		previewPanel.setBorder(BorderFactory.createTitledBorder(
+				"Preview: grain records, with expanded related rows beneath them"));
+		JSplitPane previewSplit = new JSplitPane(
+				JSplitPane.VERTICAL_SPLIT,
+				new JScrollPane(previewTable),
+				new JScrollPane(previewDiagnostics));
+		previewSplit.setResizeWeight(0.55d);
+		previewPanel.add(previewSplit, BorderLayout.CENTER);
+		JSplitPane layout = new JSplitPane(JSplitPane.VERTICAL_SPLIT, upper, previewPanel);
+		layout.setResizeWeight(0.6d);
+
+		JPanel panel = new JPanel(new BorderLayout(8, 8));
+		panel.add(controls, BorderLayout.NORTH);
+		panel.add(layout, BorderLayout.CENTER);
+		panel.add(buttons, BorderLayout.SOUTH);
+		return panel;
+	}
+
+	/**
+	 * Creates the join grid, rendering each multiplicity-handling policy by its label (with its
+	 * description as a tooltip) and sizing the columns so the policy column is always readable.
+	 *
+	 * @param joinsModel the join grid's model
+	 * @return the configured join grid
+	 */
+	private static JTable createDatasetViewJoinsTable(DefaultTableModel joinsModel) {
+		JTable joinsTable = new JTable(joinsModel);
+		JComboBox<DatasetViewCardinalityPolicy> policyChoice = new JComboBox<>(DatasetViewCardinalityPolicy.values());
+		policyChoice.setRenderer(new javax.swing.DefaultListCellRenderer() {
+			@Override
+			public java.awt.Component getListCellRendererComponent(
+					javax.swing.JList<?> list, Object value, int index, boolean selected, boolean focused) {
+				super.getListCellRendererComponent(list, value, index, selected, focused);
+				if (value instanceof DatasetViewCardinalityPolicy policy) {
+					setText(policy.label());
+					setToolTipText(policy.description());
+				}
+				return this;
+			}
+		});
+		javax.swing.table.TableColumnModel columns = joinsTable.getColumnModel();
+		columns.getColumn(JOIN_POLICY_COLUMN).setCellEditor(new DefaultCellEditor(policyChoice));
+		javax.swing.table.DefaultTableCellRenderer decisionRenderer = new javax.swing.table.DefaultTableCellRenderer() {
+			@Override
+			public java.awt.Component getTableCellRendererComponent(
+					JTable table, Object value, boolean selected, boolean focused, int row, int column) {
+				super.getTableCellRendererComponent(table, value, selected, focused, row, column);
+				if (value instanceof DatasetViewCardinalityPolicy policy) {
+					setText(policy.label() + " ▾");
+					setToolTipText(policy.description());
+				}
+				boolean multiple = String.valueOf(table.getValueAt(row, JOIN_OBSERVED_COLUMN)).startsWith("up to");
+				if (!selected) {
+					setBackground(multiple ? DATASET_VIEW_DECISION_COLOR : table.getBackground());
+				}
+				return this;
+			}
+		};
+		columns.getColumn(JOIN_POLICY_COLUMN).setCellRenderer(decisionRenderer);
+		columns.getColumn(JOIN_OBSERVED_COLUMN).setCellRenderer(decisionRenderer);
+		int[] widths = {60, 140, 260, 190, 220};
+		for (int column = 0; column < widths.length; column++) {
+			columns.getColumn(column).setPreferredWidth(widths[column]);
+		}
+		joinsTable.setAutoResizeMode(JTable.AUTO_RESIZE_SUBSEQUENT_COLUMNS);
+		return joinsTable;
+	}
+
+	/**
+	 * Builds the always-visible legend explaining each multiplicity-handling policy.
+	 *
+	 * @return the legend component
+	 */
+	private static JTextArea datasetViewPolicyLegend() {
+		StringBuilder legend = new StringBuilder(
+				"Multiplicity handling applies when a grain record has more than one related row:\n");
+		for (DatasetViewCardinalityPolicy policy : DatasetViewCardinalityPolicy.values()) {
+			legend.append("• ").append(policy.name()).append(" — ").append(policy.description()).append('\n');
+		}
+		legend.append("A test whose inputs come from two EXPAND tables cannot run; expand only the tables whose rows "
+				+ "each need testing.");
+		JTextArea area = new JTextArea(legend.toString());
+		area.setEditable(false);
+		area.setLineWrap(true);
+		area.setWrapStyleWord(true);
+		area.setOpaque(false);
+		area.setBorder(BorderFactory.createEmptyBorder(2, 4, 2, 4));
+		return area;
+	}
+
+	/**
+	 * Explains, for the builder's banner, which related tables need a multiplicity decision.
+	 *
+	 * @param required the failure listing the undecided tables
+	 * @return the banner text
+	 */
+	private static String requiredViewReason(org.filteredpush.bdq_workbench.ingest.DatasetViewRequiredException required) {
+		StringBuilder reason = new StringBuilder("Before this run can continue, choose how to handle the related tables "
+				+ "that have more than one row per " + required.grainTable() + " record (highlighted below):");
+		required.undecided().forEach(relation -> reason.append("\n  • ").append(relation.sourceTable())
+				.append(": up to ").append(relation.maxRowsPerCoreRecord()).append(" rows per record, ")
+				.append(relation.coreRecordsWithMultipleRows()).append(" records with more than one"));
+		reason.append("\nChoose EXPAND to test every row, or a flattening policy; then press Use View.");
+		return reason.toString();
+	}
+
+	/**
+	 * Builds the banner shown when the builder was opened because a run needs a view.
+	 *
+	 * @param reason the banner text
+	 * @return the banner component
+	 */
+	private static JTextArea datasetViewRequiredBanner(String reason) {
+		JTextArea banner = new JTextArea(reason);
+		banner.setEditable(false);
+		banner.setLineWrap(true);
+		banner.setWrapStyleWord(true);
+		banner.setBackground(DATASET_VIEW_DECISION_COLOR);
+		banner.setBorder(BorderFactory.createEmptyBorder(6, 8, 6, 8));
+		return banner;
+	}
+
+	/**
+	 * Updates the term mappings when a join's policy changes: switching a table to EXPAND adds a
+	 * mapping from it for each requested or already-mapped term it carries (so each of its rows is
+	 * tested, alongside any grain value for the same term); switching it to a flattening policy
+	 * removes its mappings for terms also mapped from another table, which would otherwise be
+	 * duplicate flattened values.
+	 *
+	 * @param suggester schema-based dataset-view suggester
+	 * @param schema discovered schema
+	 * @param grainTable selected grain table
+	 * @param table the join's related table
+	 * @param policy the join's new policy
+	 * @param requestedTerms requested Darwin Core terms for the current scope
+	 * @param mappingsModel editable mapping-table model
+	 */
+	private static void applyJoinPolicyToMappings(
+			DatasetViewSuggester suggester,
+			DatasetSchema schema,
+			String grainTable,
+			String table,
+			DatasetViewCardinalityPolicy policy,
+			List<String> requestedTerms,
+			DefaultTableModel mappingsModel) {
+		List<DatasetViewMapping> current = new ArrayList<>();
+		for (int row = 0; row < mappingsModel.getRowCount(); row++) {
+			current.add(new DatasetViewMapping(
+					String.valueOf(mappingsModel.getValueAt(row, 0)).trim(),
+					String.valueOf(mappingsModel.getValueAt(row, 1)).trim(),
+					String.valueOf(mappingsModel.getValueAt(row, 2)).trim()));
+		}
+		if (policy == DatasetViewCardinalityPolicy.EXPAND) {
+			java.util.Set<String> terms = new java.util.LinkedHashSet<>(requestedTerms);
+			current.forEach(mapping -> terms.add(mapping.term()));
+			terms.remove("");
+			suggester.expandedMappings(schema, grainTable, table, List.copyOf(terms), current).forEach(mapping ->
+					mappingsModel.addRow(new Object[] {mapping.term(), mapping.sourceTable(), mapping.sourceColumn()}));
+			return;
+		}
+		for (int row = mappingsModel.getRowCount() - 1; row >= 0; row--) {
+			DatasetViewMapping mapping = current.get(row);
+			boolean fromTable = mapping.sourceTable().equalsIgnoreCase(table);
+			boolean mappedElsewhere = current.stream().anyMatch(other -> other != mapping
+					&& other.term().equals(mapping.term())
+					&& !other.sourceTable().equalsIgnoreCase(table));
+			if (fromTable && mappedElsewhere) {
+				mappingsModel.removeRow(row);
+			}
+		}
+	}
+
+	/**
+	 * Reports a dataset view that could not be loaded.
+	 *
+	 * @param frame owner frame
+	 * @param error the load failure
+	 */
+	private static void showDatasetViewLoadError(JFrame frame, AppException error) {
+		JOptionPane.showMessageDialog(
+				frame,
+				"Unable to load dataset view: " + error.getMessage(),
+				"Dataset view load failed",
+				JOptionPane.ERROR_MESSAGE);
 	}
 
 	/**
@@ -2383,36 +2811,41 @@ final class BdqWorkbenchGui {
 	}
 
 	/**
-	 * Populates the join table from the schema and the current draft view.
+	 * Populates the join table from the relational schema and the current draft view, showing the
+	 * related-row multiplicity observed for each relation. Relations the draft does not configure
+	 * default to {@link DatasetViewCardinalityPolicy#FIRST_ROW}.
 	 *
 	 * @param joinsModel editable join-table model
 	 * @param suggester schema-based dataset-view suggester
-	 * @param schema discovered schema
+	 * @param relational relational ingest result built for {@code grainTable}
 	 * @param grainTable currently selected grain table
 	 * @param view current draft view
 	 */
 	private static void populateDatasetViewJoinRows(
 			DefaultTableModel joinsModel,
 			DatasetViewSuggester suggester,
-			DatasetSchema schema,
+			RelationalIngestResult relational,
 			String grainTable,
 			DatasetView view) {
 		joinsModel.setRowCount(0);
 		Map<String, DatasetViewJoin> configured = new LinkedHashMap<>();
 		view.joins().forEach(join -> configured.put(join.sourceTable().toLowerCase(), join));
-		for (DatasetViewSuggester.JoinCandidate candidate : suggester.joinCandidates(schema, grainTable)) {
+		for (DatasetViewSuggester.JoinCandidate candidate : suggester.joinCandidates(relational.schema(), grainTable)) {
 			DatasetViewJoin configuredJoin = configured.get(candidate.sourceTable().toLowerCase());
 			joinsModel.addRow(new Object[] {
 					configuredJoin != null,
 					candidate.sourceTable(),
 					candidate.sourceTable() + "." + candidate.sourceColumn()
 							+ " -> " + candidate.targetTable() + "." + candidate.targetColumn(),
-					configuredJoin == null ? DatasetViewCardinalityPolicy.REJECT : configuredJoin.cardinalityPolicy()});
+					DatasetViewDraftPreview.observedMultiplicity(relational, candidate.relationName()),
+					configuredJoin == null ? DatasetViewCardinalityPolicy.FIRST_ROW : configuredJoin.cardinalityPolicy()});
 		}
 	}
 
 	/**
-	 * Populates the mapping table from the current draft view and the requested-term set.
+	 * Populates the mapping table from the current draft view and the requested-term set: one row
+	 * per view mapping (a term may appear twice, mapped from the grain and from an expanded table),
+	 * then a blank row for each requested term the view does not map.
 	 *
 	 * @param mappingsModel editable mapping-table model
 	 * @param view current draft view
@@ -2423,16 +2856,15 @@ final class BdqWorkbenchGui {
 			DatasetView view,
 			List<String> requestedTerms) {
 		mappingsModel.setRowCount(0);
-		Map<String, DatasetViewMapping> configured = new LinkedHashMap<>();
-		view.mappings().forEach(mapping -> configured.put(mapping.term(), mapping));
-		java.util.Set<String> terms = new java.util.LinkedHashSet<>(requestedTerms);
-		terms.addAll(configured.keySet());
-		for (String term : terms) {
-			DatasetViewMapping mapping = configured.get(term);
-			mappingsModel.addRow(new Object[] {
-					term,
-					mapping == null ? "" : mapping.sourceTable(),
-					mapping == null ? "" : mapping.sourceColumn()});
+		java.util.Set<String> mapped = new java.util.LinkedHashSet<>();
+		for (DatasetViewMapping mapping : view.mappings()) {
+			mappingsModel.addRow(new Object[] {mapping.term(), mapping.sourceTable(), mapping.sourceColumn()});
+			mapped.add(mapping.term());
+		}
+		for (String term : requestedTerms) {
+			if (!mapped.contains(term)) {
+				mappingsModel.addRow(new Object[] {term, "", ""});
+			}
 		}
 	}
 
@@ -2452,11 +2884,11 @@ final class BdqWorkbenchGui {
 			DefaultTableModel mappingsModel) {
 		List<DatasetViewJoin> joins = new ArrayList<>();
 		for (int row = 0; row < joinsModel.getRowCount(); row++) {
-			if (!Boolean.TRUE.equals(joinsModel.getValueAt(row, 0))) {
+			if (!Boolean.TRUE.equals(joinsModel.getValueAt(row, JOIN_INCLUDE_COLUMN))) {
 				continue;
 			}
-			String sourceTable = String.valueOf(joinsModel.getValueAt(row, 1)).trim();
-			Object policy = joinsModel.getValueAt(row, 3);
+			String sourceTable = String.valueOf(joinsModel.getValueAt(row, JOIN_TABLE_COLUMN)).trim();
+			Object policy = joinsModel.getValueAt(row, JOIN_POLICY_COLUMN);
 			if (sourceTable.isBlank() || !(policy instanceof DatasetViewCardinalityPolicy cardinalityPolicy)) {
 				continue;
 			}
@@ -2478,49 +2910,42 @@ final class BdqWorkbenchGui {
 	/**
 	 * Updates the preview table and diagnostics for the current dataset-view draft.
 	 *
-	 * @param relational relational ingest result used for previewing
-	 * @param previewTableModel preview table model to refresh
+	 * @param relational relational ingest result built for the draft's grain table
+	 * @param previewTable preview table to refresh; its model must be a {@link DefaultTableModel}
 	 * @param diagnosticsArea diagnostics area to refresh
 	 * @param view current dataset-view draft
 	 */
 	private static void updateDatasetViewPreview(
 			RelationalIngestResult relational,
-			DefaultTableModel previewTableModel,
+			JTable previewTable,
 			JTextArea diagnosticsArea,
 			DatasetView view) {
-		org.filteredpush.bdq_workbench.ingest.ViewFlattenResult preview =
-				new org.filteredpush.bdq_workbench.ingest.ViewFlattener().flatten(relational, view);
-		java.util.Set<String> columns = new java.util.LinkedHashSet<>();
-		columns.add("recordId");
-		preview.dataset().records().stream().limit(5).forEach(row -> columns.addAll(row.terms().keySet()));
-		previewTableModel.setColumnIdentifiers(columns.toArray());
+		DatasetViewDraftPreview preview = DatasetViewDraftPreview.build(relational, view);
+		DefaultTableModel previewTableModel = (DefaultTableModel) previewTable.getModel();
+		previewTableModel.setColumnIdentifiers(preview.columns().toArray());
 		previewTableModel.setRowCount(0);
-		preview.dataset().records().stream().limit(5).forEach(row -> {
-			List<Object> values = new ArrayList<>();
-			values.add(row.id());
-			columns.stream().skip(1).forEach(column -> values.add(row.terms().getOrDefault(column, "")));
-			previewTableModel.addRow(values.toArray());
-		});
-		diagnosticsArea.setText(renderDatasetViewPreviewDiagnosticsText(preview));
+		preview.rows().forEach(row -> previewTableModel.addRow(row.toArray()));
+		sizeColumnsToContent(previewTable);
+		diagnosticsArea.setText(preview.renderDiagnostics());
+		diagnosticsArea.setCaretPosition(0);
 	}
 
 	/**
-	 * Renders preview diagnostics beneath the preview table.
+	 * Widens each column of a table to fit its header and cells, within fixed bounds.
 	 *
-	 * @param preview current flattening preview
-	 * @return rendered diagnostics
+	 * @param table the table to size
 	 */
-	private static String renderDatasetViewPreviewDiagnosticsText(
-			org.filteredpush.bdq_workbench.ingest.ViewFlattenResult preview) {
-		StringBuilder builder = new StringBuilder();
-		builder.append("Preview rows shown: ").append(Math.min(5, preview.dataset().records().size())).append('\n');
-		if (!preview.diagnostics().isEmpty()) {
-			builder.append("Warnings and diagnostics:\n");
-			preview.diagnostics().forEach(message -> builder.append(" - ").append(message).append('\n'));
-		} else {
-			builder.append("No preview warnings.");
+	private static void sizeColumnsToContent(JTable table) {
+		java.awt.FontMetrics metrics = table.getFontMetrics(table.getFont());
+		for (int column = 0; column < table.getColumnCount(); column++) {
+			int width = metrics.stringWidth(table.getColumnName(column));
+			for (int row = 0; row < table.getRowCount(); row++) {
+				width = Math.max(width, metrics.stringWidth(String.valueOf(table.getValueAt(row, column))));
+			}
+			table.getColumnModel().getColumn(column).setPreferredWidth(Math.max(
+					DATASET_VIEW_PREVIEW_MIN_COLUMN_WIDTH,
+					Math.min(DATASET_VIEW_PREVIEW_MAX_COLUMN_WIDTH, width + DATASET_VIEW_PREVIEW_COLUMN_PADDING)));
 		}
-		return builder.toString();
 	}
 
 	/**
@@ -3255,7 +3680,7 @@ final class BdqWorkbenchGui {
      */
     private static String renderResultSummary(ExecutionSummary summary) {
         return SummaryReportExporter.renderSummaryText("Results summary", summary)
-                + "Saved files: reports/bdq-report-summary.txt, reports/bdq-report-responses.txt, reports/bdq-report-xls.xlsx, reports/bdq-report-xls-unresolved.xlsx, reports/bdq-report-rdf.ttl\n";
+                + "Saved files: reports/bdq-report-summary.txt, reports/bdq-report-responses.txt, reports/bdq-report-structured-html.html, reports/bdq-report-structured.md, reports/bdq-report-xls.xlsx, reports/bdq-report-xls-unresolved.xlsx, reports/bdq-report-rdf.ttl\n";
     }
 
     /**
@@ -3266,6 +3691,7 @@ final class BdqWorkbenchGui {
      * @param exportRunning whether stage 9 (report export/finalization) is in progress
      * @param runCompleted whether the run has finished successfully
      * @param runFailed whether the run has failed
+     * @param runCancelled whether the run was stopped at user request
      * @return a multi-line stage overview
      */
     private static String renderStageOverview(
@@ -3273,16 +3699,29 @@ final class BdqWorkbenchGui {
             Phase activePhase,
             boolean exportRunning,
             boolean runCompleted,
-            boolean runFailed) {
-        int completedStages = completedWorkflowStageCount(preparedRun, activePhase, exportRunning, runCompleted, runFailed);
-        List<WorkflowStageStatus> stages = workflowStageStatuses(preparedRun, activePhase, exportRunning, runCompleted, runFailed);
+            boolean runFailed,
+            boolean runCancelled) {
+        int completedStages = completedWorkflowStageCount(
+                preparedRun,
+                activePhase,
+                exportRunning,
+                runCompleted,
+                runFailed,
+                runCancelled);
+        List<WorkflowStageStatus> stages = workflowStageStatuses(
+                preparedRun,
+                activePhase,
+                exportRunning,
+                runCompleted,
+                runFailed,
+                runCancelled);
         StringBuilder builder = new StringBuilder("Process stages\n");
         builder.append("Workflow progress: ")
                 .append(completedStages)
                 .append("/")
                 .append(totalWorkflowStageCount())
                 .append(" stages completed\n");
-        if (preparedRun != null && (activePhase != null || exportRunning) && !runCompleted && !runFailed) {
+        if (preparedRun != null && (activePhase != null || exportRunning) && !runCompleted && !runFailed && !runCancelled) {
             builder.append("Current stage: ")
                     .append(exportRunning ? "Export reports" : activePhase)
                     .append(" (stage ")
@@ -3302,7 +3741,14 @@ final class BdqWorkbenchGui {
      * @param filterSummary the filter outcome to describe
      */
     private static void appendRecordFilterSummary(StringBuilder builder, RecordFilterSummary filterSummary) {
+        org.filteredpush.bdq_workbench.model.SyntheticDataMarkers markers =
+                filterSummary.filteredDataset().inputDescription().syntheticMarkers();
+        if (markers.found()) {
+            builder.append("WARNING: ").append(markers.summaryLine()).append(".\n")
+                    .append(markers.warning()).append("\n\n");
+        }
         builder.append("Input records loaded: ").append(filterSummary.originalRecordCount()).append('\n');
+        builder.append("Synthetic or modified example data: ").append(markers.summaryLine()).append('\n');
         builder.append("Records selected for execution: ").append(filterSummary.filteredRecordCount()).append('\n');
         builder.append("Records excluded by filters: ").append(filterSummary.excludedRecordCount()).append('\n');
         builder.append("Active record filters:\n");
@@ -3336,6 +3782,7 @@ final class BdqWorkbenchGui {
      * @param exportRunning whether stage 9 (report export/finalization) is in progress
      * @param runCompleted whether execution has completed
      * @param runFailed whether execution has failed
+     * @param runCancelled whether execution was stopped at user request
      * @return ordered stage statuses for the overall workflow
      */
     private static List<WorkflowStageStatus> workflowStageStatuses(
@@ -3343,7 +3790,8 @@ final class BdqWorkbenchGui {
             Phase activePhase,
             boolean exportRunning,
             boolean runCompleted,
-            boolean runFailed) {
+            boolean runFailed,
+            boolean runCancelled) {
         RecordFilterSummary filterSummary = preparedRun == null ? RecordFilterSummary.unfiltered(new RecordDataset(List.of()))
                 : preparedRun.filterSummary();
         ExecutionPlan plan = preparedRun == null
@@ -3379,13 +3827,15 @@ final class BdqWorkbenchGui {
                 preparedRun == null ? "pending" : "completed",
                 runnable + " runnable, " + unresolved + " unresolved",
                 preparedRun == null ? 0 : 100));
-        stages.add(workflowStageStatusForPhase(Phase.PRE_AMENDMENT, activePhase, exportRunning, runCompleted, runFailed));
-        stages.add(workflowStageStatusForPhase(Phase.AMENDMENT, activePhase, exportRunning, runCompleted, runFailed));
-        stages.add(workflowStageStatusForPhase(Phase.POST_AMENDMENT, activePhase, exportRunning, runCompleted, runFailed));
+        stages.add(workflowStageStatusForPhase(Phase.PRE_AMENDMENT, activePhase, exportRunning, runCompleted, runFailed, runCancelled));
+        stages.add(workflowStageStatusForPhase(Phase.AMENDMENT, activePhase, exportRunning, runCompleted, runFailed, runCancelled));
+        stages.add(workflowStageStatusForPhase(Phase.POST_AMENDMENT, activePhase, exportRunning, runCompleted, runFailed, runCancelled));
         stages.add(new WorkflowStageStatus(
                 "Export reports",
-                runCompleted ? "completed" : exportRunning ? "running" : runFailed ? "failed" : "pending",
-                runCompleted ? "reports written" : exportRunning ? "reports in progress" : "reports not written yet",
+                runCompleted ? "completed" : exportRunning ? "running" : runFailed ? "failed" : runCancelled ? "skipped" : "pending",
+                runCompleted ? "reports written" : exportRunning ? "reports in progress" : runFailed
+                        ? "reports not written"
+                        : runCancelled ? "run stopped before export" : "reports not written yet",
                 runCompleted ? 100 : exportRunning ? 50 : runFailed ? 25 : 0));
         return List.copyOf(stages);
     }
@@ -3398,6 +3848,7 @@ final class BdqWorkbenchGui {
      * @param exportRunning whether stage 9 (report export/finalization) is in progress
      * @param runCompleted whether execution has completed
      * @param runFailed whether execution has failed
+     * @param runCancelled whether execution was stopped at user request
      * @return the formatted phase state for the workflow UI
      */
     private static WorkflowStageStatus workflowStageStatusForPhase(
@@ -3405,7 +3856,8 @@ final class BdqWorkbenchGui {
             Phase activePhase,
             boolean exportRunning,
             boolean runCompleted,
-            boolean runFailed) {
+            boolean runFailed,
+            boolean runCancelled) {
         String state;
         String detail;
         int progressPercent;
@@ -3413,6 +3865,10 @@ final class BdqWorkbenchGui {
             state = "completed";
             detail = "phase complete";
             progressPercent = 100;
+        } else if (runCancelled && phase == activePhase) {
+            state = "stopped";
+            detail = "run stopped by user";
+            progressPercent = 25;
         } else if (runFailed && phase == activePhase) {
             state = "failed";
             detail = "phase incomplete";
@@ -3450,6 +3906,7 @@ final class BdqWorkbenchGui {
      * @param exportRunning whether stage 9 (report export/finalization) is in progress
      * @param runCompleted whether the full run has completed
      * @param runFailed whether the full run has failed after execution phases completed
+     * @param runCancelled whether the run was stopped at user request
      * @return the number of completed stages in the monitor view
      */
     private static int completedWorkflowStageCount(
@@ -3457,7 +3914,8 @@ final class BdqWorkbenchGui {
             Phase activePhase,
             boolean exportRunning,
             boolean runCompleted,
-            boolean runFailed) {
+            boolean runFailed,
+            boolean runCancelled) {
         if (preparedRun == null) {
             return 0;
         }
@@ -3471,6 +3929,8 @@ final class BdqWorkbenchGui {
             completed = totalWorkflowStageCount() - 1;
         } else if (runFailed) {
             completed = totalWorkflowStageCount() - 1;
+        } else if (runCancelled) {
+            completed = activePhase == null ? 5 : 5 + activePhase.ordinal();
         }
         return completed;
     }
@@ -3489,7 +3949,7 @@ final class BdqWorkbenchGui {
             Phase activePhase,
             boolean exportRunning,
             boolean runCompleted) {
-        int completed = completedWorkflowStageCount(preparedRun, activePhase, exportRunning, runCompleted, false);
+        int completed = completedWorkflowStageCount(preparedRun, activePhase, exportRunning, runCompleted, false, false);
         if (runCompleted || preparedRun == null) {
             return completed;
         }
@@ -3552,7 +4012,7 @@ final class BdqWorkbenchGui {
         JLabel stagesLabel = new JLabel("Process stages");
         stagesLabel.setBorder(BorderFactory.createEmptyBorder(8, 0, 4, 0));
         panel.add(stagesLabel);
-        workflowStageStatuses(preparedRun, null, false, true, false).forEach(stage ->
+        workflowStageStatuses(preparedRun, null, false, true, false, false).forEach(stage ->
                 panel.add(createVisualizationProgressRow(
                         stage.name(),
                         stage.progressPercent(),
@@ -3917,7 +4377,7 @@ final class BdqWorkbenchGui {
         setStatus(statusArea, renderPreflightMessage(state[0]));
         bindingGrid.setModel(new BindingReviewTableModel(state[0].preparedRun().bindingResult().reviews()));
         configureBindingGrid(bindingGrid);
-        resultSummaryArea.setText(renderStageOverview(preparedRun, null, false, false, false)
+        resultSummaryArea.setText(renderStageOverview(preparedRun, null, false, false, false, false)
                 + "\nParameter review ready. Edit parameter values, right-click a single test row to inspect it or run it in isolation, or save/load settings before starting the run.\n");
         boolean complete = state[0].isFullyResolved();
         if (!complete && !runWithAvailableOnly.isSelected()) {
@@ -4234,6 +4694,7 @@ final class BdqWorkbenchGui {
 
 	/** Prepared relational schema and suggestion payload for the dataset-view builder dialog. */
 	private record DatasetViewPreview(
+			Path datasetPath,
 			RelationalIngestResult relational,
 			DatasetSchema schema,
 			DatasetView suggested,
