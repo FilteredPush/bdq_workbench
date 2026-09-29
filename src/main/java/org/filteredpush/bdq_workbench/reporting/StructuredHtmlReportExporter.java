@@ -22,6 +22,7 @@ package org.filteredpush.bdq_workbench.reporting;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -39,9 +40,10 @@ import org.filteredpush.bdq_workbench.model.SubjectRef;
 /**
  * Exports a human-readable HTML report for flat and structured results.
  *
- * <p>The rendered report keeps one top-level section per core record. For flat runs, each test
- * group renders as a simplified single-level summary. For structured runs, each test group renders
- * a core-record-level summary followed by nested detail assertions, including source-row selectors
+ * <p>The rendered report begins with run metadata and a ranked "high-impact action items" summary,
+ * then keeps one top-level section per core record. For flat runs, each test group renders as a
+ * simplified single-level summary. For structured runs, each test group renders a
+ * core-record-level summary followed by nested detail assertions, including source-row selectors
  * derived from each contributing {@link SubjectRef}. The exporter complements the existing summary,
  * tab-delimited, RDF, XLSX, and Markdown outputs rather than replacing them.
  */
@@ -85,6 +87,7 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 	 * @return the rendered HTML report
 	 */
 	public static String renderHtml(ExecutionSummary summary) {
+		StructuredReportInsights insights = StructuredReportInsights.from(summary);
 		Map<String, CanonicalRecord> recordsById = summary.dataset().records().stream()
 				.collect(Collectors.toMap(CanonicalRecord::id, record -> record, (left, right) -> left, LinkedHashMap::new));
 		Map<String, List<Response>> responsesByRecord = new LinkedHashMap<>();
@@ -115,16 +118,133 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 				.append("  </style>\n")
 				.append("</head>\n")
 				.append("<body>\n")
-				.append("<h1>BDQ Workbench Structured Report</h1>\n")
-				.append("<p>Use case: ")
-				.append(escapeHtml(describeUseCase(summary)))
-				.append("</p>\n");
+				.append("<h1>BDQ Workbench Structured Report</h1>\n");
+		appendRunMetadata(builder, summary, insights);
+		appendHighImpactActionItems(builder, insights);
 		for (Map.Entry<String, List<Response>> entry : responsesByRecord.entrySet()) {
 			appendRecordSection(builder, entry.getKey(), entry.getValue(), recordsById.get(entry.getKey()));
 		}
 		appendAggregateSection(builder, aggregateResponses);
 		builder.append("</body>\n</html>\n");
 		return builder.toString();
+	}
+
+	/**
+	 * Appends run metadata to the report preamble.
+	 *
+	 * @param builder the report being built; appended to in place
+	 * @param summary the execution summary carrying run metadata
+	 * @param insights derived timing and impact metadata for the run
+	 */
+	private static void appendRunMetadata(
+			StringBuilder builder,
+			ExecutionSummary summary,
+			StructuredReportInsights insights) {
+		builder.append("<section>\n")
+				.append("  <h2>Run metadata</h2>\n")
+				.append("  <ul>\n")
+				.append("    <li><strong>Use case:</strong> ")
+				.append(escapeHtml(describeUseCase(summary)))
+				.append("</li>\n")
+				.append("    <li><strong>Input file:</strong> ")
+				.append(escapeHtml(summary.metadata().inputFile().isBlank() ? "<unknown>" : summary.metadata().inputFile()))
+				.append("</li>\n")
+				.append("    <li><strong>Run started:</strong> ")
+				.append(escapeHtml(formatInstant(insights.runStartedAt())))
+				.append("</li>\n")
+				.append("    <li><strong>Run finished:</strong> ")
+				.append(escapeHtml(formatInstant(insights.runFinishedAt())))
+				.append("</li>\n")
+				.append("    <li><strong>Records selected for execution:</strong> ")
+				.append(summary.metadata().filteredSingleRecordCount())
+				.append(" of ")
+				.append(summary.metadata().inputSingleRecordCount())
+				.append("</li>\n")
+				.append("    <li><strong>Darwin Core terms selected for execution:</strong> ")
+				.append(summary.metadata().filteredDarwinCoreTermCount())
+				.append(" of ")
+				.append(summary.metadata().inputDarwinCoreTermCount())
+				.append("</li>\n")
+				.append("    <li><strong>Record filters:</strong> ");
+		if (summary.metadata().recordFilters().isEmpty()) {
+			builder.append("none</li>\n");
+		} else {
+			builder.append("<ul>\n");
+			summary.metadata().recordFilters().forEach((field, values) -> builder.append("      <li>")
+					.append(escapeHtml(field))
+					.append(" = ")
+					.append(escapeHtml(String.join(" | ", values)))
+					.append("</li>\n"));
+			builder.append("    </ul></li>\n");
+		}
+		builder.append("  </ul>\n")
+				.append("</section>\n");
+	}
+
+	/**
+	 * Appends the high-impact improvement summary before record-by-record details.
+	 *
+	 * @param builder the report being built; appended to in place
+	 * @param insights the ranked improvement cues to render
+	 */
+	private static void appendHighImpactActionItems(
+			StringBuilder builder,
+			StructuredReportInsights insights) {
+		builder.append("<section>\n")
+				.append("  <h2>High-impact action items</h2>\n")
+				.append("  <ul>\n")
+				.append("    <li><strong>Review issue findings:</strong> ")
+				.append(insights.confirmedIssueCount())
+				.append(" confirmed issue response(s), ")
+				.append(insights.potentialIssueCount())
+				.append(" potential issue response(s)</li>\n")
+				.append("    <li><strong>Validation non-compliance:</strong> ")
+				.append(insights.validationNonComplianceCount())
+				.append(" summary finding(s) across ")
+				.append(insights.recordsWithValidationNonCompliance())
+				.append(" record(s)</li>\n");
+		appendRankedInsightSection(
+				builder,
+				"Most frequent causes of validation non-compliance",
+				insights.topValidationNonComplianceCauses());
+		appendRankedInsightSection(
+				builder,
+				"Most effective amendment proposals seen on non-compliant records",
+				insights.topAmendmentProposals());
+		builder.append("  </ul>\n")
+				.append("</section>\n");
+	}
+
+	/**
+	 * Appends one ranked-insight subsection.
+	 *
+	 * @param builder the report being built; appended to in place
+	 * @param title the subsection title
+	 * @param insights the ranked insights to render
+	 */
+	private static void appendRankedInsightSection(
+			StringBuilder builder,
+			String title,
+			List<StructuredReportInsights.RankedInsight> insights) {
+		builder.append("    <li><strong>")
+				.append(escapeHtml(title))
+				.append(":</strong>");
+		if (insights.isEmpty()) {
+			builder.append(" none</li>\n");
+			return;
+		}
+		builder.append("\n      <ul>\n");
+		for (StructuredReportInsights.RankedInsight insight : insights) {
+			builder.append("        <li>")
+					.append(escapeHtml(insight.label()))
+					.append(" — ")
+					.append(insight.responseCount())
+					.append(" response(s) across ")
+					.append(insight.recordCount())
+					.append(" record(s)</li>\n");
+		}
+		builder.append("      </ul>\n")
+				.append("    </li>\n");
 	}
 
 	/**
@@ -413,6 +533,16 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 			return summary.metadata().useCaseLabel();
 		}
 		return "<unknown>";
+	}
+
+	/**
+	 * Formats a run timestamp for display.
+	 *
+	 * @param instant the timestamp to render
+	 * @return the ISO-8601 timestamp, or {@code "<unknown>"} when unavailable
+	 */
+	private static String formatInstant(Instant instant) {
+		return instant == null ? "<unknown>" : instant.toString();
 	}
 
 	/**

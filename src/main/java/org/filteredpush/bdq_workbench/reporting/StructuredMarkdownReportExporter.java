@@ -22,6 +22,7 @@ package org.filteredpush.bdq_workbench.reporting;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -39,11 +40,12 @@ import org.filteredpush.bdq_workbench.model.SubjectRef;
 /**
  * Exports a human-readable Markdown report for flat and structured results.
  *
- * <p>The rendered report keeps one top-level section per core record. For flat runs, each test
- * group renders as a single-level summary. For structured runs, each test group renders a
- * core-record-level summary followed by nested detail assertions, including source-row selectors
- * derived from each contributing {@link SubjectRef}. The exporter is additive: it complements the
- * existing summary, tab-delimited, RDF, and XLSX outputs rather than replacing them.
+ * <p>The rendered report begins with run metadata and a ranked "high-impact action items" summary,
+ * then keeps one top-level section per core record. For flat runs, each test group renders as a
+ * single-level summary. For structured runs, each test group renders a core-record-level summary
+ * followed by nested detail assertions, including source-row selectors derived from each
+ * contributing {@link SubjectRef}. The exporter is additive: it complements the existing summary,
+ * tab-delimited, RDF, and XLSX outputs rather than replacing them.
  */
 public class StructuredMarkdownReportExporter implements ReportExporter {
 
@@ -85,6 +87,7 @@ public class StructuredMarkdownReportExporter implements ReportExporter {
 	 * @return the rendered Markdown report
 	 */
 	public static String renderMarkdown(ExecutionSummary summary) {
+		StructuredReportInsights insights = StructuredReportInsights.from(summary);
 		Map<String, CanonicalRecord> recordsById = summary.dataset().records().stream()
 				.collect(Collectors.toMap(CanonicalRecord::id, record -> record, (left, right) -> left, LinkedHashMap::new));
 		Map<String, List<Response>> responsesByRecord = new LinkedHashMap<>();
@@ -101,14 +104,123 @@ public class StructuredMarkdownReportExporter implements ReportExporter {
 		}
 
 		StringBuilder builder = new StringBuilder("# BDQ Workbench Structured Report\n\n");
-		builder.append("Use case: ")
-				.append(describeUseCase(summary))
-				.append("\n\n");
+		appendRunMetadata(builder, summary, insights);
+		appendHighImpactActionItems(builder, insights);
 		for (Map.Entry<String, List<Response>> entry : responsesByRecord.entrySet()) {
 			appendRecordSection(builder, entry.getKey(), entry.getValue(), recordsById.get(entry.getKey()));
 		}
 		appendAggregateSection(builder, aggregateResponses);
 		return builder.toString();
+	}
+
+	/**
+	 * Appends run metadata to the report preamble.
+	 *
+	 * @param builder the report being built; appended to in place
+	 * @param summary the execution summary carrying run metadata
+	 * @param insights derived timing and impact metadata for the run
+	 */
+	private static void appendRunMetadata(
+			StringBuilder builder,
+			ExecutionSummary summary,
+			StructuredReportInsights insights) {
+		builder.append("## Run metadata\n\n")
+				.append("- Use case: ")
+				.append(escape(describeUseCase(summary)))
+				.append('\n')
+				.append("- Input file: ")
+				.append(escape(summary.metadata().inputFile().isBlank() ? "<unknown>" : summary.metadata().inputFile()))
+				.append('\n')
+				.append("- Run started: ")
+				.append(escape(formatInstant(insights.runStartedAt())))
+				.append('\n')
+				.append("- Run finished: ")
+				.append(escape(formatInstant(insights.runFinishedAt())))
+				.append('\n')
+				.append("- Records selected for execution: ")
+				.append(summary.metadata().filteredSingleRecordCount())
+				.append(" of ")
+				.append(summary.metadata().inputSingleRecordCount())
+				.append('\n')
+				.append("- Darwin Core terms selected for execution: ")
+				.append(summary.metadata().filteredDarwinCoreTermCount())
+				.append(" of ")
+				.append(summary.metadata().inputDarwinCoreTermCount())
+				.append('\n');
+		builder.append("- Record filters: ");
+		if (summary.metadata().recordFilters().isEmpty()) {
+			builder.append("none\n\n");
+			return;
+		}
+		builder.append('\n');
+		summary.metadata().recordFilters().forEach((field, values) -> builder.append("  - ")
+				.append(escape(field))
+				.append(" = ")
+				.append(escape(String.join(" | ", values)))
+				.append('\n'));
+		builder.append('\n');
+	}
+
+	/**
+	 * Appends the high-impact improvement summary before record-by-record details.
+	 *
+	 * @param builder the report being built; appended to in place
+	 * @param insights the ranked improvement cues to render
+	 */
+	private static void appendHighImpactActionItems(
+			StringBuilder builder,
+			StructuredReportInsights insights) {
+		builder.append("## High-impact action items\n\n")
+				.append("- Review issue findings: ")
+				.append(insights.confirmedIssueCount())
+				.append(" confirmed issue response(s), ")
+				.append(insights.potentialIssueCount())
+				.append(" potential issue response(s)\n")
+				.append("- Validation non-compliance: ")
+				.append(insights.validationNonComplianceCount())
+				.append(" summary finding(s) across ")
+				.append(insights.recordsWithValidationNonCompliance())
+				.append(" record(s)\n");
+		appendRankedInsightSection(
+				builder,
+				"Most frequent causes of validation non-compliance",
+				insights.topValidationNonComplianceCauses(),
+				"  - ");
+		appendRankedInsightSection(
+				builder,
+				"Most effective amendment proposals seen on non-compliant records",
+				insights.topAmendmentProposals(),
+				"  - ");
+		builder.append('\n');
+	}
+
+	/**
+	 * Appends one ranked-insight subsection.
+	 *
+	 * @param builder the report being built; appended to in place
+	 * @param title the subsection title
+	 * @param insights the ranked insights to render
+	 * @param bulletPrefix the bullet prefix to use for each ranked entry
+	 */
+	private static void appendRankedInsightSection(
+			StringBuilder builder,
+			String title,
+			List<StructuredReportInsights.RankedInsight> insights,
+			String bulletPrefix) {
+		builder.append("- ").append(title).append(":\n");
+		if (insights.isEmpty()) {
+			builder.append(bulletPrefix).append("none\n");
+			return;
+		}
+		for (StructuredReportInsights.RankedInsight insight : insights) {
+			builder.append(bulletPrefix)
+					.append(escape(insight.label()))
+					.append(" — ")
+					.append(insight.responseCount())
+					.append(" response(s) across ")
+					.append(insight.recordCount())
+					.append(" record(s)\n");
+		}
 	}
 
 	/**
@@ -388,6 +500,16 @@ public class StructuredMarkdownReportExporter implements ReportExporter {
 			return summary.metadata().useCaseLabel();
 		}
 		return "<unknown>";
+	}
+
+	/**
+	 * Formats a run timestamp for display.
+	 *
+	 * @param instant the timestamp to render
+	 * @return the ISO-8601 timestamp, or {@code "<unknown>"} when unavailable
+	 */
+	private static String formatInstant(Instant instant) {
+		return instant == null ? "<unknown>" : instant.toString();
 	}
 
 	/**

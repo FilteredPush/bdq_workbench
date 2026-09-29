@@ -23,8 +23,10 @@ class StructuredHtmlReportExporterTest {
 	@Test
 	void rendersStructuredRecordSectionsWithNestedDetailSelectors() throws Exception {
 		StructuredHtmlReportExporter exporter = new StructuredHtmlReportExporter();
+		Instant startedAt = Instant.parse("2026-09-29T01:00:00Z");
+		Instant finishedAt = Instant.parse("2026-09-29T01:05:00Z");
 		Response detailOne = structuredDetail("identification", "identification.txt", "row-2", "COMPLIANT", "first detail");
-		Response detailTwo = structuredDetail("measurement", "flattened-view.csv", "row-7", "NOT_COMPLIANT", "second detail");
+		Response detailTwo = structuredDetail("measurement", "flattened-view.csv", "row-7", "NOT_COMPLIANT", "Missing coordinates");
 		Response rollup = new Response(
 				"record-1",
 				"urn:test:structured",
@@ -39,15 +41,61 @@ class StructuredHtmlReportExporterTest {
 				"rollup",
 				"rollup",
 				Map.of(),
-				Instant.now(),
-				Instant.now(),
+				startedAt,
+				finishedAt,
 				null,
 				true,
 				List.of(detailOne.subjectRef(), detailTwo.subjectRef()));
+		Response issue = new Response(
+				"record-1",
+				"urn:test:issue",
+				TestType.ISSUE,
+				"org.example.IssueDetector",
+				"detect",
+				Phase.POST_AMENDMENT,
+				Map.of(),
+				OutcomeStatus.FAILED,
+				"RUN_HAS_RESULT",
+				"IS_ISSUE",
+				"Coordinate issue",
+				"Coordinate issue",
+				Map.of(),
+				startedAt,
+				finishedAt);
+		Response amendment = new Response(
+				"record-1",
+				"urn:test:amendment",
+				TestType.AMENDMENT,
+				"org.example.Amender",
+				"amend",
+				Phase.AMENDMENT,
+				Map.of(),
+				OutcomeStatus.AMENDED,
+				"AMENDED",
+				"",
+				"Filled in coordinates",
+				"Filled in coordinates",
+				Map.of("dwc:decimalLatitude", "42.0"),
+				startedAt,
+				finishedAt);
 
 		ExecutionSummary summary = new ExecutionSummary(
-				List.of(detailOne, detailTwo, rollup),
-				new ExecutionSummaryMetadata("urn:usecase:1", "Use Case One", "/tmp/input.csv", 3, 1, Map.of(), Map.of()),
+				List.of(detailOne, detailTwo, rollup, issue, amendment),
+				new ExecutionSummaryMetadata(
+						"urn:usecase:1",
+						"Use Case One",
+						"/tmp/input.csv",
+						3,
+						1,
+						3,
+						1,
+						Map.of(),
+						Map.of(
+								"urn:test:structured", "Coordinates valid",
+								"urn:test:issue", "Coordinate issue",
+								"urn:test:amendment", "Fill missing coordinates"),
+						Map.of(),
+						Map.of()),
 				new RecordDataset(List.of(new CanonicalRecord(
 						"record-1",
 						Map.of("dwc:occurrenceID", "record-1", "dwc:countryCode", "GL")))));
@@ -60,6 +108,13 @@ class StructuredHtmlReportExporterTest {
 		assertThat(exporter.fileExtension()).isEqualTo("html");
 		assertThat(report).contains("<!DOCTYPE html>");
 		assertThat(report).contains("<h1>BDQ Workbench Structured Report</h1>");
+		assertThat(report).contains("<h2>Run metadata</h2>");
+		assertThat(report).contains("<strong>Input file:</strong> /tmp/input.csv");
+		assertThat(report).contains("<strong>Run started:</strong> 2026-09-29T01:00:00Z");
+		assertThat(report).contains("<h2>High-impact action items</h2>");
+		assertThat(report).contains("<strong>Review issue findings:</strong> 1 confirmed issue response(s), 0 potential issue response(s)");
+		assertThat(report).contains("Coordinates valid — Missing coordinates — 1 response(s) across 1 record(s)");
+		assertThat(report).contains("Fill missing coordinates: dwc:decimalLatitude → 42.0 — 1 response(s) across 1 record(s)");
 		assertThat(report).contains("<h2>Record <code>record-1</code></h2>");
 		assertThat(report).contains("<h3>POST_AMENDMENT · VALIDATION · <code>urn:test:structured</code></h3>");
 		assertThat(report).contains("<strong>Summary:</strong> RUN_HAS_RESULT / NOT_COMPLIANT — rollup");
@@ -72,6 +127,7 @@ class StructuredHtmlReportExporterTest {
 	@Test
 	void flatRunRendersSimplifiedSingleLevelHtmlSummary() throws Exception {
 		StructuredHtmlReportExporter exporter = new StructuredHtmlReportExporter();
+		Instant startedAt = Instant.parse("2026-09-29T02:00:00Z");
 		Response flatResponse = new Response(
 				"record-1",
 				"urn:test:flat",
@@ -86,18 +142,34 @@ class StructuredHtmlReportExporterTest {
 				"flat ok",
 				"flat ok",
 				Map.of(),
-				Instant.now(),
-				Instant.now());
+				startedAt,
+				startedAt);
 
 		ExecutionSummary summary = new ExecutionSummary(
 				List.of(flatResponse),
-				new ExecutionSummaryMetadata("urn:usecase:1", "Use Case One", "/tmp/input.csv", 3, 1, Map.of(), Map.of()),
+				new ExecutionSummaryMetadata(
+						"urn:usecase:1",
+						"Use Case One",
+						"/tmp/input.csv",
+						3,
+						1,
+						3,
+						1,
+						Map.of("dwc:country", List.of("Canada")),
+						Map.of("urn:test:flat", "Flat validation"),
+						Map.of(),
+						Map.of()),
 				new RecordDataset(List.of(new CanonicalRecord("record-1", Map.of("dwc:occurrenceID", "record-1")))));
 
 		ByteArrayOutputStream output = new ByteArrayOutputStream();
 		exporter.export(summary, output);
 		String report = output.toString(StandardCharsets.UTF_8);
 
+		assertThat(report).contains("<h2>Run metadata</h2>");
+		assertThat(report).contains("<strong>Record filters:</strong>");
+		assertThat(report).contains("dwc:country = Canada");
+		assertThat(report).contains("<h2>High-impact action items</h2>");
+		assertThat(report).contains("<strong>Review issue findings:</strong> 0 confirmed issue response(s), 0 potential issue response(s)");
 		assertThat(report).contains("<h2>Record <code>record-1</code></h2>");
 		assertThat(report).contains("<h3>PRE_AMENDMENT · VALIDATION · <code>urn:test:flat</code></h3>");
 		assertThat(report).contains("<strong>Summary:</strong> RUN_HAS_RESULT / COMPLIANT — flat ok");
