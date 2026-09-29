@@ -23,7 +23,10 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.filteredpush.bdq_workbench.model.CanonicalRecord;
+import org.filteredpush.bdq_workbench.model.DatasetInputDescription.ViewRelation;
 import org.filteredpush.bdq_workbench.model.DatasetSchema;
+import org.filteredpush.bdq_workbench.model.DatasetViewCardinalityPolicy;
 import org.filteredpush.bdq_workbench.model.RecordGraph;
 
 /**
@@ -64,5 +67,38 @@ public record RelationalIngestResult(
 		coreTable = coreTable == null ? "" : coreTable;
 		tableRecordCounts = Collections.unmodifiableMap(new LinkedHashMap<>(
 				tableRecordCounts == null ? Map.of() : tableRecordCounts));
+	}
+
+	/**
+	 * Measures how many related rows one relation attached to each core record.
+	 *
+	 * @param relationName the relation key to measure
+	 * @param sourceTable the related table the relation reads from
+	 * @param policy the view's cardinality policy for the relation, or {@code null} when none
+	 * @param mappedTerms the terms a view maps from the relation
+	 * @return the measured relation
+	 */
+	public ViewRelation measureRelation(
+			String relationName,
+			String sourceTable,
+			DatasetViewCardinalityPolicy policy,
+			List<String> mappedTerms) {
+		int withRows = 0;
+		int withMultipleRows = 0;
+		int maxRows = 0;
+		int totalRows = 0;
+		for (RecordGraph graph : graphs) {
+			List<CanonicalRecord> related = graph.relatedByRelation().getOrDefault(relationName, List.of());
+			if (!related.isEmpty()) {
+				withRows++;
+			}
+			if (related.size() > 1) {
+				withMultipleRows++;
+			}
+			maxRows = Math.max(maxRows, related.size());
+			totalRows += related.size();
+		}
+		return new ViewRelation(relationName, sourceTable, policy, withRows, withMultipleRows, maxRows, totalRows,
+				mappedTerms);
 	}
 }

@@ -68,6 +68,22 @@ final class InputViewFixtures {
 	}
 
 	/**
+	 * @return a summary over a view that flattens nothing but expands occurrence rows
+	 */
+	static ExecutionSummary expandedViewSummary() {
+		return summary(new DatasetInputDescription(
+				ViewMode.STRUCTURED,
+				"dataset view file view.json",
+				"event",
+				2,
+				tables(),
+				relationships(),
+				List.of(new ViewRelation("occurrence", "occurrence", DatasetViewCardinalityPolicy.EXPAND,
+						2, 1, 3, 4, List.of("scientificName"))),
+				List.of("eventID", "eventDate")));
+	}
+
+	/**
 	 * Builds a summary around one input description, with bindings reading eventDate and
 	 * scientificName.
 	 *

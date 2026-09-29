@@ -78,9 +78,10 @@ public class RelationalDatasetIngestor {
 			CoreTableCandidate<DwcArchiveCoreMeta> selected = CoreTableSelector.select(tables, requestedTable).selected();
 			Map<String, List<CanonicalRecord>> rowsByTable = new LinkedHashMap<>();
 			for (CoreTableCandidate<DwcArchiveCoreMeta> table : tables) {
-				List<CanonicalRecord> rows = dwcArchiveIngestor.ingest(inputPath, table.label()).records().stream()
-						.map(row -> withTableProvenance(row, table.label()))
-						.toList();
+				List<CanonicalRecord> rows = tableRows(
+						dwcArchiveIngestor.ingest(inputPath, table.label()).records(),
+						table.label(),
+						table == selected);
 				rowsByTable.put(table.label(), rows);
 			}
 			List<RelationshipSchema> relationships = tables.stream()
@@ -139,9 +140,10 @@ public class RelationalDatasetIngestor {
 		CoreTableCandidate<DataPackageResourceMeta> selected = CoreTableSelector.select(tables, requestedTable).selected();
 		Map<String, List<CanonicalRecord>> rowsByTable = new LinkedHashMap<>();
 		for (CoreTableCandidate<DataPackageResourceMeta> table : tables) {
-			List<CanonicalRecord> rows = dataPackageIngestor.ingest(sourcePath, table.label()).records().stream()
-					.map(row -> withTableProvenance(row, table.label()))
-					.toList();
+			List<CanonicalRecord> rows = tableRows(
+					dataPackageIngestor.ingest(sourcePath, table.label()).records(),
+					table.label(),
+					table == selected);
 			rowsByTable.put(table.label(), rows);
 		}
 		List<RelationshipSchema> relationships = new ArrayList<>();
@@ -362,6 +364,32 @@ public class RelationalDatasetIngestor {
 	 */
 	private static String normalizedName(String value) {
 		return DarwinCoreTermResolver.normalizeTerm(DarwinCoreTermResolver.localName(value));
+	}
+
+	/**
+	 * Attaches table provenance to one table's rows, making related-table row references unique.
+	 *
+	 * <p>A related table without a declared key (an identification table, say) is given row IDs by
+	 * the flat ingestor's fallbacks, which can pick a shared column such as {@code occurrenceID};
+	 * several rows then share one ID. Row references drive both report selectors and amendment
+	 * write-back to a specific related row, so when a related table's IDs are not unique its rows
+	 * are referenced by position ({@code row-<n>}, 1-based) instead. The core table's record IDs
+	 * are left unchanged, since they identify records throughout the reports.
+	 *
+	 * @param rows the table's rows, as read by the flat ingestor
+	 * @param tableName the table name
+	 * @param coreTable whether the table is the selected core table
+	 * @return the rows with provenance, and positional IDs where needed
+	 */
+	private List<CanonicalRecord> tableRows(List<CanonicalRecord> rows, String tableName, boolean coreTable) {
+		boolean uniqueIds = rows.stream().map(CanonicalRecord::id).distinct().count() == rows.size();
+		List<CanonicalRecord> result = new ArrayList<>(rows.size());
+		for (int index = 0; index < rows.size(); index++) {
+			CanonicalRecord row = rows.get(index);
+			String rowRef = coreTable || uniqueIds ? row.id() : "row-" + (index + 1);
+			result.add(withTableProvenance(new CanonicalRecord(rowRef, row.terms(), row.provenanceByTerm()), tableName));
+		}
+		return result;
 	}
 
 	private CanonicalRecord withTableProvenance(CanonicalRecord row, String tableName) {

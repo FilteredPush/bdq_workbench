@@ -39,8 +39,8 @@ import java.util.List;
  * @param tables every table the input offered, in declaration order
  * @param relationships every relationship discovered between input tables
  * @param viewRelations the related tables the view included, relative to the grain table
- * @param grainMappedTerms for a flattened view, the terms mapped directly from the grain table;
- *     empty otherwise
+ * @param grainMappedTerms for a view-built dataset, the terms mapped directly from the grain
+ *     table; empty otherwise
  */
 public record DatasetInputDescription(
 		ViewMode viewMode,
@@ -85,6 +85,18 @@ public record DatasetInputDescription(
 	 */
 	public boolean isKnown() {
 		return viewMode != ViewMode.UNKNOWN && !tables.isEmpty();
+	}
+
+	/**
+	 * Reports whether the execution records were built through a dataset view's term mappings
+	 * (rather than directly from table columns).
+	 *
+	 * @return {@code true} for a flattened view, or a view with any join carrying a cardinality
+	 *     policy
+	 */
+	public boolean isViewMapped() {
+		return viewMode == ViewMode.FLATTENED
+				|| viewRelations.stream().anyMatch(relation -> relation.cardinalityPolicy() != null);
 	}
 
 	/**
@@ -138,13 +150,14 @@ public record DatasetInputDescription(
 	 *
 	 * @param relationName the relation key used on {@link RecordGraph#relatedByRelation()}
 	 * @param sourceTable the related table
-	 * @param cardinalityPolicy for a flattened view, how multiple related rows were collapsed;
-	 *     {@code null} for a structured view, where related rows are retained
+	 * @param cardinalityPolicy for a view-built relation, the join's policy (a flattening policy, or
+	 *     {@link DatasetViewCardinalityPolicy#EXPAND} when its rows were retained); {@code null}
+	 *     for automatic relational ingest, where related rows are retained
 	 * @param coreRecordsWithRows how many grain records had at least one related row
 	 * @param coreRecordsWithMultipleRows how many grain records had more than one related row
 	 * @param maxRowsPerCoreRecord the largest number of related rows seen for one grain record
 	 * @param relatedRowCount the total number of related rows linked to grain records
-	 * @param mappedTerms for a flattened view, the terms mapped from this table; empty otherwise
+	 * @param mappedTerms for a view-built relation, the terms mapped from this table; empty otherwise
 	 */
 	public record ViewRelation(
 			String relationName,

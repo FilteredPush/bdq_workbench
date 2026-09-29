@@ -72,8 +72,12 @@ class SubjectExpanderTest {
 				List.of(new RecordGraph(
 						core,
 						Map.of(
-								"identification", List.of(related("id-1", "identification", Map.of("scientificName", "Aus bus"))),
-								"measurement", List.of(related("m-1", "measurement", Map.of("measurementValue", "x"))))))));
+								"identification", List.of(
+										related("id-1", "identification", Map.of("scientificName", "Aus bus")),
+										related("id-2", "identification", Map.of("scientificName", "Cus dus"))),
+								"measurement", List.of(
+										related("m-1", "measurement", Map.of("measurementValue", "x")),
+										related("m-2", "measurement", Map.of("measurementValue", "y"))))))));
 
 		SubjectExpander.SubjectExpansionResult expansion = expander.expand(List.of("scientificName", "measurementValue"));
 
@@ -82,6 +86,88 @@ class SubjectExpanderTest {
 				.extracting(SubjectExpander.ExpansionProblem::detail)
 				.asString()
 				.contains("incomparable sibling relations");
+	}
+
+	@Test
+	void multiValuedRelationGovernsWhileSingleValuedParentIsOverlaid() {
+		CanonicalRecord core = core("occ-1", Map.of("occurrenceID", "occ-1"));
+		CanonicalRecord event = related("ev-1", "event", Map.of("eventDate", "2020-06-01",
+				"decimalLatitude", "10.5", "decimalLongitude", "-60.1"));
+		SubjectExpander expander = new SubjectExpander(new RecordDataset(
+				List.of(core),
+				List.of(new RecordGraph(
+						core,
+						Map.of(
+								"event", List.of(event),
+								"identification", List.of(
+										related("id-1", "identification", Map.of("dateIdentified", "2021-01-01",
+												"scientificName", "Aus bus")),
+										related("id-2", "identification", Map.of("dateIdentified", "1999-01-01",
+												"scientificName", "Cus dus"))))))));
+
+		/* Shapes of VALIDATION_DATEIDENTIFIED_INRANGE and VALIDATION_COORDINATESTERRESTRIALMARINE_CONSISTENT. */
+		SubjectExpander.SubjectExpansionResult dates = expander.expand(List.of("dateIdentified", "eventDate"));
+		SubjectExpander.SubjectExpansionResult marine = expander.expand(
+				List.of("decimalLatitude", "decimalLongitude", "scientificName"));
+
+		assertThat(dates.problems()).isEmpty();
+		assertThat(dates.subjects()).extracting(subject -> subject.effectiveRecord().terms().get("dateIdentified")
+				+ "/" + subject.effectiveRecord().terms().get("eventDate"))
+				.containsExactly("2021-01-01/2020-06-01", "1999-01-01/2020-06-01");
+		assertThat(dates.subjects()).allMatch(subject -> subject.subjectRef().relationName().equals("identification"));
+		assertThat(marine.problems()).isEmpty();
+		assertThat(marine.subjects()).extracting(subject -> subject.effectiveRecord().terms().get("scientificName")
+				+ "@" + subject.effectiveRecord().terms().get("decimalLatitude"))
+				.containsExactly("Aus bus@10.5", "Cus dus@10.5");
+		assertThat(marine.subjects().get(0).effectiveRecord().provenanceByTerm().get("decimalLatitude"))
+				.extracting(SourceCell::table)
+				.containsExactly("event");
+	}
+
+	@Test
+	void singleValuedSiblingsAreOverlaidAtCoreGrain() {
+		CanonicalRecord core = core("occ-1", Map.of("occurrenceID", "occ-1"));
+		SubjectExpander expander = new SubjectExpander(new RecordDataset(
+				List.of(core),
+				List.of(new RecordGraph(
+						core,
+						Map.of(
+								"event", List.of(related("ev-1", "event", Map.of("eventDate", "2020-06-01"))),
+								"identification", List.of(related("id-1", "identification",
+										Map.of("dateIdentified", "2021-01-01"))))))));
+
+		SubjectExpander.SubjectExpansionResult expansion = expander.expand(List.of("dateIdentified", "eventDate"));
+
+		assertThat(expansion.problems()).isEmpty();
+		assertThat(expansion.subjects()).singleElement().satisfies(subject -> {
+			assertThat(subject.hasStructuredReference()).isFalse();
+			assertThat(subject.effectiveRecord().terms())
+					.containsEntry("dateIdentified", "2021-01-01")
+					.containsEntry("eventDate", "2020-06-01");
+		});
+	}
+
+	@Test
+	void coreRecordWithoutGoverningRowsIsEvaluatedOnceWithBlankFields() {
+		CanonicalRecord withRows = core("occ-1", Map.of("occurrenceID", "occ-1"));
+		CanonicalRecord withoutRows = core("occ-2", Map.of("occurrenceID", "occ-2"));
+		SubjectExpander expander = new SubjectExpander(new RecordDataset(
+				List.of(withRows, withoutRows),
+				List.of(
+						new RecordGraph(withRows, Map.of("identification", List.of(
+								related("id-1", "identification", Map.of("scientificName", "Aus bus")),
+								related("id-2", "identification", Map.of("scientificName", "Cus dus"))))),
+						new RecordGraph(withoutRows, Map.of("identification", List.of())))));
+
+		SubjectExpander.SubjectExpansionResult expansion = expander.expand(List.of("scientificName"));
+
+		assertThat(expansion.problems()).isEmpty();
+		assertThat(expansion.subjects()).hasSize(3);
+		assertThat(expansion.subjects().get(2)).satisfies(subject -> {
+			assertThat(subject.coreRecordId()).isEqualTo("occ-2");
+			assertThat(subject.hasStructuredReference()).isFalse();
+			assertThat(subject.effectiveRecord().terms()).containsEntry("scientificName", "");
+		});
 	}
 
 	private static CanonicalRecord core(String id, Map<String, String> terms) {

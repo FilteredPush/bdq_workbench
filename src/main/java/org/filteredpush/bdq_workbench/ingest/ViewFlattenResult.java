@@ -25,7 +25,7 @@ import org.filteredpush.bdq_workbench.model.RecordDataset;
 /**
  * Flattened dataset and diagnostics.
  *
- * @param dataset flattened dataset
+ * @param dataset the view's dataset; carries record graphs when the view expands any join
  * @param diagnostics non-fatal flattening diagnostics
  */
 public record ViewFlattenResult(RecordDataset dataset, List<String> diagnostics) {

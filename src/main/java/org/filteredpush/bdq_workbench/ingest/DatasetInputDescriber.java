@@ -23,7 +23,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
-import org.filteredpush.bdq_workbench.model.CanonicalRecord;
 import org.filteredpush.bdq_workbench.model.DatasetInputDescription;
 import org.filteredpush.bdq_workbench.model.DatasetInputDescription.InputTable;
 import org.filteredpush.bdq_workbench.model.DatasetInputDescription.ViewMode;
@@ -33,14 +32,14 @@ import org.filteredpush.bdq_workbench.model.DatasetViewCardinalityPolicy;
 import org.filteredpush.bdq_workbench.model.DatasetViewJoin;
 import org.filteredpush.bdq_workbench.model.DatasetViewMapping;
 import org.filteredpush.bdq_workbench.model.RecordDataset;
-import org.filteredpush.bdq_workbench.model.RecordGraph;
 import org.filteredpush.bdq_workbench.model.TableSchema;
 
 /**
  * Builds {@link DatasetInputDescription}s for each of {@link DefaultIngestService}'s ingest paths.
  *
- * <p>Per-relation multiplicity is measured from the relational graphs before any flattening,
- * since a flattened dataset no longer carries the related rows it collapsed.
+ * <p>Per-relation multiplicity is measured from the relational graphs before any flattening
+ * ({@link RelationalIngestResult#measureRelation}), since a flattened dataset no longer carries
+ * the related rows it collapsed.
  */
 final class DatasetInputDescriber {
 
@@ -83,7 +82,7 @@ final class DatasetInputDescriber {
 	static DatasetInputDescription structured(RelationalIngestResult relational, String viewSource) {
 		List<ViewRelation> relations = new ArrayList<>();
 		for (String relationName : relationNames(relational)) {
-			relations.add(measureRelation(relational.graphs(), relationName, relationName, null, List.of()));
+			relations.add(relational.measureRelation(relationName, relationName, null, List.of()));
 		}
 		return new DatasetInputDescription(
 				relations.isEmpty() ? ViewMode.SINGLE_TABLE : ViewMode.STRUCTURED,
@@ -97,13 +96,14 @@ final class DatasetInputDescriber {
 	}
 
 	/**
-	 * Describes relational graphs flattened through a dataset view.
+	 * Describes relational graphs passed through a dataset view.
 	 *
 	 * @param relational the relational ingest result the view was applied to
 	 * @param view the applied dataset view
 	 * @param viewSource human-readable origin of the view
 	 * @param viewRecordCount the number of flattened records the view produced
-	 * @return a {@link ViewMode#FLATTENED} description
+	 * @return a {@link ViewMode#FLATTENED} description, or {@link ViewMode#STRUCTURED} when any
+	 *     join uses {@link DatasetViewCardinalityPolicy#EXPAND} and so retains related rows
 	 */
 	static DatasetInputDescription flattened(
 			RelationalIngestResult relational,
@@ -113,15 +113,16 @@ final class DatasetInputDescriber {
 		String grainTable = view.grainTable().isBlank() ? relational.coreTable() : view.grainTable();
 		List<ViewRelation> relations = new ArrayList<>();
 		for (DatasetViewJoin join : view.joins()) {
-			relations.add(measureRelation(
-					relational.graphs(),
+			relations.add(relational.measureRelation(
 					join.relationName(),
 					join.sourceTable(),
 					join.cardinalityPolicy(),
 					mappedTerms(view, join.sourceTable())));
 		}
+		boolean expands = view.joins().stream()
+				.anyMatch(join -> join.cardinalityPolicy() == DatasetViewCardinalityPolicy.EXPAND);
 		return new DatasetInputDescription(
-				ViewMode.FLATTENED,
+				expands ? ViewMode.STRUCTURED : ViewMode.FLATTENED,
 				viewSource,
 				grainTable,
 				viewRecordCount,
@@ -163,41 +164,6 @@ final class DatasetInputDescriber {
 				.forEach(ordered::add);
 		present.stream().sorted().forEach(ordered::add);
 		return ordered;
-	}
-
-	/**
-	 * Measures how many related rows one relation attached to each core record.
-	 *
-	 * @param graphs the relational graphs
-	 * @param relationName the relation key to measure
-	 * @param sourceTable the related table the relation reads from
-	 * @param policy the flattening cardinality policy, or {@code null} for a structured view
-	 * @param mappedTerms the terms a flattened view mapped from this relation
-	 * @return the measured relation
-	 */
-	private static ViewRelation measureRelation(
-			List<RecordGraph> graphs,
-			String relationName,
-			String sourceTable,
-			DatasetViewCardinalityPolicy policy,
-			List<String> mappedTerms) {
-		int withRows = 0;
-		int withMultipleRows = 0;
-		int maxRows = 0;
-		int totalRows = 0;
-		for (RecordGraph graph : graphs) {
-			List<CanonicalRecord> related = graph.relatedByRelation().getOrDefault(relationName, List.of());
-			if (!related.isEmpty()) {
-				withRows++;
-			}
-			if (related.size() > 1) {
-				withMultipleRows++;
-			}
-			maxRows = Math.max(maxRows, related.size());
-			totalRows += related.size();
-		}
-		return new ViewRelation(relationName, sourceTable, policy, withRows, withMultipleRows, maxRows, totalRows,
-				mappedTerms);
 	}
 
 	/**

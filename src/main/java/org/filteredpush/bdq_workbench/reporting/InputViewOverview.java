@@ -143,9 +143,15 @@ public record InputViewOverview(
 			case FLATTENED -> "Each row of " + grain + " became one flat record. Values from joined tables were "
 					+ "collapsed into that record by each join's cardinality policy, so related-row "
 					+ "multiplicity was not carried into test execution.";
-			case STRUCTURED -> "Each row of " + grain + " became one core record with its related rows "
-					+ "retained. Tests whose inputs come from a related table were evaluated once per related "
-					+ "row, and VALIDATION/ISSUE results were rolled up to the core record.";
+			case STRUCTURED -> description.isViewMapped()
+					? "Each row of " + grain + " became one core record. Tables joined with a flattening policy "
+							+ "(FIRST_ROW, AGGREGATE, REJECT) were collapsed into that record; the rows of tables "
+							+ "joined with EXPAND were retained, so tests whose inputs come from an expanded table "
+							+ "were evaluated once per related row, and VALIDATION/ISSUE results were rolled up "
+							+ "to the core record."
+					: "Each row of " + grain + " became one core record with its related rows "
+							+ "retained. Tests whose inputs come from a related table were evaluated once per related "
+							+ "row, and VALIDATION/ISSUE results were rolled up to the core record.";
 			case UNKNOWN -> "The ingest path did not record how the execution records were built.";
 		};
 	}
@@ -174,7 +180,7 @@ public record InputViewOverview(
 						.append(" had more than one (max ")
 						.append(relation.maxRowsPerCoreRecord())
 						.append(")");
-				if (relation.cardinalityPolicy() != null) {
+				if (relation.cardinalityPolicy() != null && relation.cardinalityPolicy().flattens()) {
 					note.append(", collapsed by ").append(relation.cardinalityPolicy().name());
 				} else {
 					note.append(", each evaluated separately");
@@ -286,7 +292,7 @@ public record InputViewOverview(
 			InputTable table,
 			boolean grain,
 			ViewRelation relation) {
-		if (description.viewMode() == ViewMode.FLATTENED) {
+		if (description.isViewMapped()) {
 			if (grain) {
 				return description.grainMappedTerms();
 			}

@@ -91,6 +91,10 @@ public class DatasetViewSuggester {
 	/**
 	 * Suggests an editable dataset view for the chosen grain table and requested terms.
 	 *
+	 * <p>Every directly related table is joined with {@link DatasetViewCardinalityPolicy#FIRST_ROW},
+	 * the flattening default; switching a join to {@link DatasetViewCardinalityPolicy#EXPAND} is a
+	 * deliberate choice, made where each related row needs testing.
+	 *
 	 * @param schema discovered schema
 	 * @param grainTable selected grain table
 	 * @param requestedTerms requested Darwin Core terms
@@ -102,7 +106,7 @@ public class DatasetViewSuggester {
 				.map(candidate -> new DatasetViewJoin(
 						candidate.relationName(),
 						candidate.sourceTable(),
-						DatasetViewCardinalityPolicy.REJECT))
+						DatasetViewCardinalityPolicy.FIRST_ROW))
 				.toList();
 		Set<String> allowedSourceTables = new LinkedHashSet<>();
 		allowedSourceTables.add(grainTable);

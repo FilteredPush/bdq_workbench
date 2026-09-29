@@ -264,10 +264,13 @@ final class InputViewDiagram {
 			return "1 record per row";
 		}
 		ViewRelation relation = table.relation();
-		if (description.viewMode() == ViewMode.FLATTENED && relation != null && relation.cardinalityPolicy() != null) {
-			return relation.cardinalityPolicy().name().toLowerCase(Locale.ROOT).replace('_', ' ');
+		if (relation == null || relation.cardinalityPolicy() == null) {
+			return "rows retained";
 		}
-		return "rows retained";
+		if (!relation.cardinalityPolicy().flattens()) {
+			return "expand: 1 subject per row";
+		}
+		return relation.cardinalityPolicy().name().toLowerCase(Locale.ROOT).replace('_', ' ');
 	}
 
 	/**

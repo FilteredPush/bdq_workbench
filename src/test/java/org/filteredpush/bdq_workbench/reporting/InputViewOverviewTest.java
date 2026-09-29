@@ -60,6 +60,20 @@ class InputViewOverviewTest {
 	}
 
 	@Test
+	void expandedViewUsesMappedTermsAndReportsPerRowEvaluation() {
+		InputViewOverview overview = InputViewOverview.from(InputViewFixtures.expandedViewSummary());
+
+		assertThat(overview.modeLabel()).isEqualTo("Structured view with multiplicity present");
+		assertThat(overview.modeExplanation()).contains("joined with EXPAND were retained");
+		assertThat(overview.tables().get(0).suppliedTerms()).containsExactly("eventDate");
+		assertThat(overview.tables().get(1).role()).isEqualTo(TableRole.CONTRIBUTING);
+		assertThat(overview.multiplicityNotes()).singleElement().asString()
+				.endsWith("1 had more than one (max 3), each evaluated separately");
+		assertThat(StructuredHtmlReportExporter.renderHtml(InputViewFixtures.expandedViewSummary()))
+				.contains(">expand: 1 subject per row</text>");
+	}
+
+	@Test
 	void unrecordedDescriptionIsReportedAsUnknown() {
 		InputViewOverview overview = InputViewOverview.from(new ExecutionSummary(List.of()));
 
