@@ -128,4 +128,64 @@ class ViewFlattenerTest {
 				.extracting(SourceCell::rowRef)
 				.isEqualTo("id-1");
 	}
+
+	@Test
+	void expandPolicyKeepsEveryRelatedRowProjectedOntoMappedTerms() {
+		CanonicalRecord core = new CanonicalRecord("occ-1", Map.of("occurrenceID", "occ-1", "countryCode", "CA"));
+		CanonicalRecord event = new CanonicalRecord("ev-1", Map.of("eventDate", "2020-06-01"));
+		CanonicalRecord idA = new CanonicalRecord("id-1", Map.of("scientificName", "Abies", "countryCode", "US"));
+		CanonicalRecord idB = new CanonicalRecord("id-2", Map.of("scientificName", "Picea", "countryCode", "US"));
+		RecordGraph graph = new RecordGraph(core, Map.of("event", List.of(event), "identification", List.of(idA, idB)));
+		RelationalIngestResult relational = new RelationalIngestResult(
+				List.of(graph),
+				new DatasetSchema(List.of(), List.of(), "fp"),
+				List.of());
+		DatasetView view = new DatasetView(
+				"occurrence",
+				"fp",
+				List.of(
+						new DatasetViewJoin("event", "event", DatasetViewCardinalityPolicy.FIRST_ROW),
+						new DatasetViewJoin("identification", "identification", DatasetViewCardinalityPolicy.EXPAND)),
+				List.of(
+						new DatasetViewMapping("countryCode", "occurrence", "countryCode"),
+						new DatasetViewMapping("eventDate", "event", "eventDate"),
+						new DatasetViewMapping("scientificName", "identification", "scientificName")));
+
+		ViewFlattenResult flattened = new ViewFlattener().flatten(relational, view);
+
+		CanonicalRecord record = flattened.dataset().records().get(0);
+		assertThat(record.terms())
+				.containsEntry("countryCode", "CA")
+				.containsEntry("eventDate", "2020-06-01")
+				.doesNotContainKey("scientificName");
+		assertThat(flattened.dataset().recordGraphs()).singleElement().satisfies(expanded -> {
+			assertThat(expanded.core()).isSameAs(record);
+			assertThat(expanded.relatedByRelation()).containsOnlyKeys("identification");
+			assertThat(expanded.relatedByRelation().get("identification"))
+					.extracting(CanonicalRecord::terms)
+					.containsExactly(Map.of("scientificName", "Abies"), Map.of("scientificName", "Picea"));
+			assertThat(expanded.relatedByRelation().get("identification").get(1).provenanceByTerm().get("scientificName"))
+					.extracting(SourceCell::rowRef)
+					.containsExactly("id-2");
+		});
+		assertThat(flattened.diagnostics()).isEmpty();
+	}
+
+	@Test
+	void viewWithoutExpandedJoinsStaysFlat() {
+		CanonicalRecord core = new CanonicalRecord("occ-1", Map.of("occurrenceID", "occ-1"));
+		RecordGraph graph = new RecordGraph(core, Map.of("identification", List.of(
+				new CanonicalRecord("id-1", Map.of("scientificName", "Abies")))));
+		RelationalIngestResult relational = new RelationalIngestResult(
+				List.of(graph),
+				new DatasetSchema(List.of(), List.of(), "fp"),
+				List.of());
+		DatasetView view = new DatasetView(
+				"occurrence",
+				"fp",
+				List.of(new DatasetViewJoin("identification", "identification", DatasetViewCardinalityPolicy.FIRST_ROW)),
+				List.of(new DatasetViewMapping("scientificName", "identification", "scientificName")));
+
+		assertThat(new ViewFlattener().flatten(relational, view).dataset().hasStructuredGraphs()).isFalse();
+	}
 }

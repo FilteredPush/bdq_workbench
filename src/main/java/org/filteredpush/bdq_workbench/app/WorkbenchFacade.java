@@ -33,6 +33,7 @@ import org.filteredpush.bdq_workbench.filtering.RecordFilterService;
 import org.filteredpush.bdq_workbench.execution.TestExecutionService;
 import org.filteredpush.bdq_workbench.model.BindingReview;
 import org.filteredpush.bdq_workbench.model.BindingStatus;
+import org.filteredpush.bdq_workbench.model.DarwinCoreTermResolver;
 import org.filteredpush.bdq_workbench.ingest.IngestService;
 import org.filteredpush.bdq_workbench.model.ExecutionPlan;
 import org.filteredpush.bdq_workbench.model.ExecutionSummary;
@@ -159,7 +160,8 @@ public class WorkbenchFacade {
      * @return the prepared run, ready for execution
      */
     public PreparedRun prepare(AppConfig config) {
-        var ingestedDataset = ingestService.ingest(config.datasetPath(), config.datasetTable(), config.datasetView());
+        var ingestedDataset = withSyntheticDataScan(ingestService.ingest(
+                config.datasetPath(), config.datasetTable(), config.datasetView(), config.datasetJoinPolicies()));
         RecordFilterSummary filterSummary = recordFilterService.apply(ingestedDataset, config.recordFilter());
         var dataset = filterSummary.filteredDataset();
         ExecutionPlan plan = policyResolverService.resolve(config.useCaseId());
@@ -171,6 +173,23 @@ public class WorkbenchFacade {
                 collectAvailableTerms(dataset));
         writeBindingDiagnosticsFile(plan, bindingResult);
         return new PreparedRun(config, dataset, plan, List.copyOf(discovered), bindingResult, filterSummary);
+    }
+
+    /**
+     * Ensures the ingested dataset carries a scan for synthetic, modified, or example data markers,
+     * scanning it here when the ingest service did not (a custom {@link IngestService}). The scan
+     * runs before record filtering, so reports describe the whole input.
+     *
+     * @param dataset the ingested dataset
+     * @return the dataset with a synthetic-data scan on its input description
+     */
+    private static org.filteredpush.bdq_workbench.model.RecordDataset withSyntheticDataScan(
+            org.filteredpush.bdq_workbench.model.RecordDataset dataset) {
+        if (dataset.inputDescription().syntheticMarkers().scanned() || dataset.records().isEmpty()) {
+            return dataset;
+        }
+        return dataset.withInputDescription(dataset.inputDescription().withSyntheticMarkers(
+                org.filteredpush.bdq_workbench.ingest.SyntheticDataDetector.scan(dataset)));
     }
 
     /**
@@ -585,7 +604,8 @@ public class WorkbenchFacade {
                             java.util.Map.of());
                     response.amendments().forEach((term, amendedValue) -> counts.merge(
                             term + ": "
-                                    + describeValue(sourceTerms.get(term))
+                                    + describeValue(sourceTerms.get(DarwinCoreTermResolver.recordTermFor(
+                                            term, sourceTerms.keySet(), List.of())))
                                     + " -> "
                                     + describeValue(amendedValue),
                             1L,

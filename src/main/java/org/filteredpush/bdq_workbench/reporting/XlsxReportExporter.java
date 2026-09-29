@@ -143,8 +143,12 @@ public class XlsxReportExporter implements ReportExporter {
                 model, vocab, summary.dataset().records(), allExpectedFields);
 
         boolean wroteAnyResponse = false;
+        Set<String> rolledUp = rolledUpKeys(summary.responses());
         for (Response response : summary.responses()) {
             if (SENTINEL_RECORD_IDS.contains(response.recordId())) {
+                continue;
+            }
+            if (!response.derived() && rolledUp.contains(rollupKey(response))) {
                 continue;
             }
             DataResource dataResource = dataResourcesByRecordId.get(response.recordId());
@@ -437,5 +441,29 @@ public class XlsxReportExporter implements ReportExporter {
 
     private static String defaulted(String value) {
         return value == null || value.isBlank() ? "" : value;
+    }
+
+    /**
+     * Collects the test/phase/record combinations that carry a derived rollup. The spreadsheet has
+     * one place per record for each test, so where per-row evaluations of an expanded table were
+     * rolled up (VALIDATION and ISSUE), only the rollup is written; the per-row detail is in the
+     * structured HTML/Markdown and RDF reports. Tests without rollups (AMENDMENT, MEASURE) keep every
+     * response.
+     *
+     * @param responses the run's responses
+     * @return the rollup keys
+     */
+    private static Set<String> rolledUpKeys(List<Response> responses) {
+        Set<String> keys = new java.util.HashSet<>();
+        responses.stream().filter(Response::derived).forEach(response -> keys.add(rollupKey(response)));
+        return keys;
+    }
+
+    /**
+     * @param response a response
+     * @return the key identifying its test, phase, and record
+     */
+    private static String rollupKey(Response response) {
+        return response.testId() + "\u0000" + response.phase() + "\u0000" + response.recordId();
     }
 }

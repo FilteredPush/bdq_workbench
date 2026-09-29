@@ -199,7 +199,9 @@ public class DwcArchiveIngestor {
 			return DelimitedRecordReader.read(
 					() -> openEntryReader(zipFile, entry, encoding, linesToSkip),
 					csvFormat,
-					idColumn);
+					idColumn,
+					entry.getName(),
+					linesToSkip);
 		} catch (IOException e) {
 			throw new AppException("Failed to parse core data file '" + entry.getName() + "' in " + archivePath
 					+ ": " + e.getMessage(), e);

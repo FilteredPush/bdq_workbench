@@ -5,7 +5,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.filteredpush.bdq_workbench.model.BindingStatus;
 import org.filteredpush.bdq_workbench.model.BuiltInMeasureSpec;
 import org.filteredpush.bdq_workbench.model.BoundMethodParameter;
@@ -235,6 +239,60 @@ class ParallelPhaseExecutionServiceTest {
         service.execute(structuredDataset(), bindings, discovered);
 
         assertThat(impl.invocationCount.get()).isEqualTo(3);
+    }
+
+    @Test
+    void cancelsExecutionPromptlyWhenCallingThreadIsInterrupted() throws Exception {
+        CountDownLatch invocationStarted = new CountDownLatch(1);
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        ParallelPhaseExecutionService service = new ParallelPhaseExecutionService(
+                1,
+                (record, binding, implementation) -> {
+                    invocationStarted.countDown();
+                    try {
+                        Thread.sleep(10_000L);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    return new Response(
+                            record.id(),
+                            binding.testId(),
+                            binding.testType(),
+                            binding.implementationClass(),
+                            binding.implementationMethod(),
+                            binding.phase(),
+                            binding.parameters(),
+                            OutcomeStatus.ERROR,
+                            "ERROR",
+                            null,
+                            "cancelled",
+                            "cancelled",
+                            Map.of(),
+                            java.time.Instant.now(),
+                            java.time.Instant.now());
+                });
+        Method pre = Impl.class.getMethod("pre", String.class);
+        List<DiscoveredImplementation> discovered = List.of(
+                new DiscoveredImplementation("t1", null, TestType.VALIDATION, Phase.PRE_AMENDMENT, Impl.class.getName(), "pre", null,
+                        List.of(parameter(0, ParameterRole.ACTED_UPON, "dwc:eventDate", String.class)), new Impl(), pre));
+        List<ImplementationBinding> bindings = List.of(binding("t1", TestType.VALIDATION, "pre", Phase.PRE_AMENDMENT));
+        RecordDataset dataset = new RecordDataset(List.of(new CanonicalRecord("r1", Map.of("dwc:eventDate", "a"))));
+        Thread executionThread = new Thread(() -> {
+            try {
+                service.execute(dataset, bindings, discovered);
+            } catch (Throwable t) {
+                failure.set(t);
+            }
+        });
+
+        executionThread.start();
+        assertThat(invocationStarted.await(2, TimeUnit.SECONDS)).isTrue();
+        executionThread.interrupt();
+        executionThread.join(2_000L);
+
+        assertThat(executionThread.isAlive()).isFalse();
+        assertThat(failure.get()).isInstanceOf(CancellationException.class);
+        assertThat(failure.get()).hasMessageContaining("Execution cancelled");
     }
 
     @Test

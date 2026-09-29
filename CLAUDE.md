@@ -56,7 +56,8 @@ mistyped path fails fast and offline — keep that ordering, it is what keeps th
 touching the network.
 
 Configuration defaults live in `src/main/resources/application.properties`
-(`bdq.usecase.file`, `bdq.rdf.files`, `bdq.dataset`, `bdq.dataset.table`, `bdq.dataset.view`, `bdq.usecase.id`,
+(`bdq.usecase.file`, `bdq.rdf.files`, `bdq.dataset`, `bdq.dataset.table`, `bdq.dataset.view`,
+`bdq.dataset.join.policies`, `bdq.usecase.id`,
 `bdq.discovery.packages`, `bdq.threads`, `bdq.execution.dedup`) and are merged with CLI/GUI
 overrides by `ConfigLoader`. `bdq.usecase.file` and `bdq.rdf.files` ship blank, which means "use
 the `WorkbenchDefaults` published sources"; set either to a local path or an HTTP URL to pin a
@@ -64,11 +65,27 @@ run. `bdq.dataset.table` (CLI `--dataset-table`, GUI advanced options) names whi
 multi-table dataset to run against. Both entry points fetch and cache use-case/test-definition/
 ontology RDF from `bdq.tdwg.org` through `CachedResourceResolver`; RDF/XML, Turtle, and JSON-LD
 serializations are all supported. `bdq.dataset.view` (CLI `--dataset-view`, GUI "Build Dataset View...")
-names a standalone JSON DatasetView used to flatten relational inputs before execution. The GUI
-builder now shows the discovered schema/relationships on the left, the selected use case's
-information-element terms and suggested term→column mappings on the right, and a flattened preview
-plus cardinality warnings below; views are still saved/loaded as standalone JSON keyed by the
-schema fingerprint. Logging is DEBUG-by-default to the
+names a standalone JSON DatasetView applied to relational inputs before execution. Each join
+carries a `DatasetViewCardinalityPolicy`: `FIRST_ROW` (the default), `AGGREGATE` and `REJECT`
+flatten the relation onto the grain record, while `EXPAND` keeps every related row —
+`ViewFlattener` then emits `RecordGraph`s whose core is the flat record and whose related rows are
+projected onto the view's mapped terms (with `SourceCell` provenance), which is what lets
+`SubjectExpander` run a test once per expanded row. The GUI builder shows the schema and requested
+terms in tabs on the left, the join grid (observed rows per grain record, per-join policy, and an
+always-visible policy legend) above the term mappings on the right, and below them a preview with
+expanded rows beneath each grain record plus policy warnings (logic in `DatasetViewDraftPreview`).
+Changing the grain table re-reads the relational graphs for that table, since relationships and
+multiplicity are measured relative to the grain. Views are still saved/loaded as standalone JSON
+keyed by the schema fingerprint. A multi-table dataset *always* runs through a view: without
+`bdq.dataset.view`, `DefaultIngestService` builds one with `AutomaticDatasetViews` (the grain is the
+table `CoreTableSelector` picks, so occurrence when present; every column of the grain and its
+directly related tables is mapped; single-valued relations join `FIRST_ROW`). Each related table
+with more than one row per grain record needs the user's decision — `bdq.dataset.join.policies`
+(CLI `--join-policy table=POLICY`, repeatable), else the `JoinPolicyResolver`
+(`ConsoleJoinPolicyResolver` on an interactive console), else `DatasetViewRequiredException` stops
+the run listing those tables; the GUI catches it and opens the builder in a "decisions needed" mode
+whose `Use View` saves `reports/bdq-dataset-view.json` and restarts preflight. There are no built-in
+views any more (they mapped only five terms and could pick event as the grain). Logging is DEBUG-by-default to the
 console via `src/main/resources/logback.xml`.
 
 ## Architecture
@@ -117,6 +134,22 @@ understanding how the stages connect — read its class Javadoc first. The pipel
    carries a `taxonID`. Selecting an extension logs a warning: it is read standalone, **not**
    joined to its core rows — see item 3 under "Significant work yet to be done".
 
+   **Synthetic and modified data markers.** `SyntheticDataDetector` scans the raw input rows (grain
+   table plus related rows, before view mapping) for the record-level markers of the BDQ "Guide to
+   Marking and Identifying Synthetic and Modified Data" (`collectionCode` "Synthetic Example" /
+   "Modified Example", the guide's two `collectionID` UUIDs, `relationshipOfResource` "source for
+   modified example record", `example.org` institution code/ID), counting each record once under its
+   strongest marker. The result (`SyntheticDataMarkers`) rides on `DatasetInputDescription`
+   (`WorkbenchFacade.prepare` scans itself if a custom `IngestService` did not) and is reported
+   wherever the input is summarized: a warning atop the structured HTML/Markdown reports and the
+   text summary, a run-metadata line in each, counts plus `rdfs:comment` on the RDF report, the GUI
+   preflight summary, and the CLI completion output.
+
+   Every record also carries a `SourceRow` (data file within the archive/package and the 1-based
+   line it starts on, header lines included, counted from the parser's line numbers so multi-line
+   quoted values do not throw it off); relational ingest, view flattening, expanded rows, and
+   subject overlays all keep it, and reports use it to name records.
+
    Record IDs come from the descriptor's declared key (`<id index>`, `schema.primaryKey`), else
    the selected table's conventional identifier for its row type (`occurrenceID`/`taxonID`/
    `eventID`), else `id`/`occurrenceID`, else a synthesized `row-<n>`. A column that is present
@@ -159,7 +192,20 @@ understanding how the stages connect — read its class Javadoc first. The pipel
    with a surfaced diagnostic rather than silently choosing one. Distinct-value deduplication then
    partitions those evaluation subjects (via `RecordGroupPartitioner`) by the exact declared-input
    values they expose, so repeated related-row tuples can share one invocation even across several
-   core records. Bindings with a `LEGACY_RECORD`/`LEGACY_PARAMETERS` parameter (whole
+   core records. A relation with at most one row per core record everywhere (a parent such as the
+   event of an occurrence) does not change the grain: when a binding also reads a multi-row relation,
+   the single-valued row is overlaid onto the core record, so a test reading `eventDate` and
+   `dateIdentified` still runs once per identification. Only a binding that needs two *multi-row*
+   relations is rejected. A core record with no rows in the governing relation is evaluated once
+   with that relation's fields blank, not reported as an error. When the core record itself carries
+   every field the binding reads from the governing relation (a view mapped the term from the grain
+   and from an `EXPAND` table: current identification on the occurrence, history in a related table),
+   the core record is evaluated as one more subject, referencing the grain row, so both are tested
+   and rolled up together. Join-key columns (from the dataset's recorded relationships) never make a
+   relation supply a field, so an identification's `occurrenceID` does not turn a test reading
+   `occurrenceID` into a per-identification test. Relational ingest gives a related table's rows
+   positional references (`row-<n>`) when their fallback IDs are not unique, so selectors and
+   amendment write-back always identify one row. Bindings with a `LEGACY_RECORD`/`LEGACY_PARAMETERS` parameter (whole
    record/parameter map, not specific declared terms) are never dedup-eligible and always run once
    per subject, as does every binding when `bdq.execution.dedup` is `false` (default `true`).
    Because one binding's amendment can change values a later binding in the same phase groups or
@@ -169,7 +215,13 @@ understanding how the stages connect — read its class Javadoc first. The pipel
    before the next binding's groups are computed; PRE_AMENDMENT and POST_AMENDMENT never mutate
    records mid-phase, so their bindings' groups are all submitted together. Ambiguous write-backs
    (for example aggregated or multi-source provenance) are refused and surfaced as error responses
-   rather than silently writing to an arbitrary row. `ReflectionExecutionAdapter` is the actual
+   rather than silently writing to an arbitrary row. Implementations name the terms they amend as
+   they declare them (`dwc:geodeticDatum`), while ingested records are keyed by local names
+   (`geodeticDatum`), so write-back (and partition invalidation, and the run summary's before→after
+   pairing) maps each amendment key onto the record's own term via
+   `DarwinCoreTermResolver.recordTermFor`; `Response.amendments()` keeps the implementation's keys.
+   Built-in multi-record measures count *records*, not evaluations: a record's derived rollup stands
+   for its per-row evaluations, so an expanded test cannot exceed 100% of the records. `ReflectionExecutionAdapter` is the actual
    per-invocation adapter: it builds a reflective argument array from the effective subject's bound
    parameters, invokes the target method, and reads back an ffdq-style result purely reflectively
    (`getResultState()`, `getValue().getObject()`, `getComment()`) so this module has no
@@ -202,10 +254,38 @@ understanding how the stages connect — read its class Javadoc first. The pipel
    `Amendment`), so RDFBeans cannot deserialize an `IssueResponse` that carries one —
    `XlsxReportExporter` leaves it unset, so ISSUE-type responses round-trip correctly but without
    per-field coloring on the Issues sheet. Structured-response metadata (`subjectRef`, derived
-   rollups, contributing subjects) currently flows through the normalized response stream and the
-   tab-delimited detailed export; the flat XLSX exporter deliberately projects only core-grain
-   rows/derived rollups and ignores structured detail rows until a dedicated structured
-   human-readable exporter lands.
+   rollups, contributing subjects) now flows through the normalized response stream, the
+   tab-delimited detailed export, the RDF/Turtle exporter (which emits OA-style row selectors for
+   structured subject targets and explicit rollup→detail links), and the standalone structured
+   HTML/Markdown reports. The structured HTML and Markdown reports are quality-control summaries,
+   not per-record dumps: both render from `ReportDigest`, which names tests by label and records by
+   values from the original data (institution:collection:catalog, else dataset:catalog, plus the
+   `SourceRow` file and line; else the file and line), and condenses the run into high-impact action
+   items (issue and non-compliance counts, the most frequent causes, the amendment proposals that
+   left the most records with fewer problems, empty terms), the pre/post measure differences
+   (always present, saying so when no multi-record measures ran), records with
+   quality for the use case (every multi-record QA measure's target test COMPLETE, post-amendment),
+   per-test problem counts before → after amendment with internal/external prerequisites, terms the
+   tests read that are empty in 100% of records, amendments grouped by change and ranked by records
+   affected, a capped list of records needing attention (with "k of n rows" for expanded tests),
+   and tests that could not run. Headers of these reports and the text summary state external
+   prerequisites not met; the response list leads with `recordLabel`/`testLabel` columns. The
+   structured HTML report draws pre/post multi-record measures as a
+   dumbbell chart (shared 0–100% axis; pre a hollow ring, post a filled dot, joined by a bar;
+   changed measures first by improvement, unchanged ones muted; a collapsed table view keeps the
+   numbers). The flat XLSX exporter writes, per test/phase/record, only the derived
+   rollup where one exists (VALIDATION/ISSUE over expanded rows), since the spreadsheet has one place
+   per record for each test; AMENDMENT and MEASURE details, which have no rollups, are all written.
+
+   Both structured reports open with an "Input data view" overview: the view mode (single table,
+   flattened view, or structured view with related-row multiplicity retained), the grain table,
+   each input table's record count, per-relation multiplicity, and which tables were ignored for
+   lacking test bindings. Ingest records this as a `DatasetInputDescription` on `RecordDataset`
+   (built by `DatasetInputDescriber` in `DefaultIngestService`, and carried through record
+   filtering); `InputViewOverview` classifies each table against the run's `ACTED_UPON`/
+   `CONSULTED` bindings, and `InputViewDiagram` draws the HTML report's inline SVG of the tables,
+   their relationships, and the view construction. Keep it an overview — the reports summarize
+   column counts and bound terms, not every column.
 
 `WorkbenchFacade.prepare(AppConfig)` runs ingestion → policy resolution → discovery → binding and
 returns a `PreparedRun` without executing anything — this is what backs the GUI's preflight
@@ -272,13 +352,18 @@ run.
    `Issue` context class is missing the no-arg constructor its sibling context classes
    (`Measure`/`Validation`/`Amendment`) have, which breaks RDFBeans deserialization if it's ever
    attached to a saved `IssueResponse`.
-3. Non-flat data reporting and deeper relational modelling. The workbench now ingests direct
-   child relations into `RecordGraph`, can flatten them through reusable provenance-tracked dataset
-   views, and can execute bindings over structured `EvaluationSubject`s with subject-grain
-   diagnostics, deduplication, write-back, and VALIDATION/ISSUE rollups. Remaining work is in the
-   reporting/modeling boundary: RDF/Web Annotation selectors for subrecords, a dedicated
-   structured HTML/Markdown human-readable report, and any future ingest/model changes needed if
-   datasets require more than the current core + direct-child relation graph.
+3. Deeper relational modelling beyond the current reporting boundary. The workbench now ingests
+   direct child relations into `RecordGraph`, can flatten them through reusable
+   provenance-tracked dataset views, can execute bindings over structured `EvaluationSubject`s
+   with subject-grain diagnostics, deduplication, write-back, and VALIDATION/ISSUE rollups, and
+   can report those structured subjects through OA-style RDF row selectors plus dedicated
+   structured HTML/Markdown reports. Per-row execution is reachable by joining a table with
+   `EXPAND`, in a view file or through the join-policy decisions of an automatic view. DwC-A
+   extensions are related to the archive's declared core (so an occurrence extension of an
+   event-core archive gets its event as a parent), but joins still reach only tables directly
+   related to the grain. Remaining work is any future ingest/model changes needed if
+   datasets require more than the current core + direct-child relation graph, along with richer
+   future presentation formats if maintainers want something beyond the current Markdown export.
 
 ## Development
 

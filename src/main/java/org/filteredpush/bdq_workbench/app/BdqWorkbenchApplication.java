@@ -35,6 +35,8 @@ import org.filteredpush.bdq_workbench.rdf_policy.RdfPolicyResolverService;
 import org.filteredpush.bdq_workbench.reporting.DetailedResponseStreamExporter;
 import org.filteredpush.bdq_workbench.reporting.RdfResponseExporter;
 import org.filteredpush.bdq_workbench.reporting.ReportingService;
+import org.filteredpush.bdq_workbench.reporting.StructuredHtmlReportExporter;
+import org.filteredpush.bdq_workbench.reporting.StructuredMarkdownReportExporter;
 import org.filteredpush.bdq_workbench.reporting.SummaryReportExporter;
 import org.filteredpush.bdq_workbench.reporting.UnresolvedResponsesExporter;
 import org.filteredpush.bdq_workbench.reporting.XlsxReportExporter;
@@ -182,17 +184,7 @@ public final class BdqWorkbenchApplication {
                     + "; name one with --usecase-id or point --usecase-file at a source that has some");
         }
         LOG.info("No use case given; defaulting to {}", useCaseId);
-        return new AppConfig(
-                config.useCaseXml(),
-                config.rdfDefinitions(),
-                config.datasetPath(),
-                useCaseId,
-                config.implementationPackages(),
-                config.threadCount(),
-                config.dedupEnabled(),
-                config.recordFilter(),
-                config.datasetTable(),
-                config.datasetView());
+        return config.withUseCaseId(useCaseId);
     }
 
     /**
@@ -257,6 +249,7 @@ public final class BdqWorkbenchApplication {
                 case "--threads" -> "bdq.threads";
                 case "--dedup" -> "bdq.execution.dedup";
                 case "--record-filter" -> "bdq.record.filters";
+                case "--join-policy" -> "bdq.dataset.join.policies";
                 default -> null;
             };
             if (key == null) {
@@ -268,6 +261,8 @@ public final class BdqWorkbenchApplication {
             String value = args[++i];
             if ("bdq.record.filters".equals(key) && overrides.containsKey(key) && !overrides.get(key).isBlank()) {
                 overrides.put(key, overrides.get(key) + "; " + value);
+            } else if ("bdq.dataset.join.policies".equals(key) && overrides.containsKey(key)) {
+                overrides.put(key, overrides.get(key) + "," + value);
             } else {
                 overrides.put(key, value);
             }
@@ -293,6 +288,14 @@ public final class BdqWorkbenchApplication {
         out.println("                                 location, resource name or Darwin Core row type");
         out.println("                                 (default: the best-ranked table the dataset offers)");
         out.println("  --dataset-view <path>          Standalone dataset view JSON file");
+        out.println("  --join-policy <table=POLICY>   For a multi-table dataset run without --dataset-view:");
+        out.println("                                 how to handle a related table with more than one row");
+        out.println("                                 per record; repeatable. POLICY is EXPAND (test each");
+        out.println("                                 row), FIRST_ROW (use the first), AGGREGATE (join values");
+        out.println("                                 with \" | \") or REJECT (leave empty when several). Tables");
+        out.println("                                 with at most one row per record need none; for others");
+        out.println("                                 you are asked when running interactively, and the run");
+        out.println("                                 stops with a list otherwise");
         out.println("  --usecase-file <path>          Use case XML file");
         out.println("  --rdf-files <paths>            Comma-separated RDF/OWL files");
         out.println("  --usecase-id <id>              Optional use case identifier");
@@ -306,26 +309,33 @@ public final class BdqWorkbenchApplication {
     }
 
     /**
-     * Writes a one-line completion summary for a finished run.
+     * Writes a one-line completion summary for a finished run, preceded by a warning when the
+     * input contains records marked as synthetic, modified, or example data.
      *
      * @param summary the execution summary produced by the run
      * @param out stream to write the summary line to
      */
     static void render(ExecutionSummary summary, PrintStream out) {
+        org.filteredpush.bdq_workbench.model.SyntheticDataMarkers markers =
+                summary.dataset().inputDescription().syntheticMarkers();
+        if (markers.found()) {
+            out.println("WARNING: " + markers.summaryLine() + ". " + markers.warning());
+        }
         out.println("BDQ Workbench completed: " + summary.responses().size() + " outcomes");
     }
 
     /**
      * Wires the concrete pipeline services (ingest, RDF-backed policy resolution, classpath
-     * test discovery, test binding, parallel execution, and export to summary/detailed/XLS/RDF
-     * reports) into a {@link WorkbenchFacade} and runs it for the given configuration.
+     * test discovery, test binding, parallel execution, and export to summary/detailed/structured
+     * HTML/structured Markdown/XLS/RDF reports) into a {@link WorkbenchFacade} and runs it for the
+     * given configuration.
      *
      * @param config the configuration for this run
      * @return the summary of the executed run
      */
     static ExecutionSummary execute(AppConfig config) {
         WorkbenchFacade facade = new WorkbenchFacade(
-                new DefaultIngestService(),
+                new DefaultIngestService(ConsoleJoinPolicyResolver.forSystemConsole()),
                 new RdfPolicyResolverService(config.useCaseXml(), config.rdfDefinitions()),
                 new ClasspathAnnotationTestDiscoveryService(config.implementationPackages()),
                 new DefaultTestBindingService(),
@@ -333,6 +343,8 @@ public final class BdqWorkbenchApplication {
                 new ReportingService(List.of(
                         new SummaryReportExporter(),
                         new DetailedResponseStreamExporter(),
+                        new StructuredHtmlReportExporter(),
+                        new StructuredMarkdownReportExporter(),
                         new XlsxReportExporter(),
                         new UnresolvedResponsesExporter(),
                         new RdfResponseExporter(config.rdfDefinitions()))));

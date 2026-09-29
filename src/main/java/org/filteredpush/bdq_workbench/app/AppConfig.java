@@ -20,7 +20,11 @@
 package org.filteredpush.bdq_workbench.app;
 
 import java.nio.file.Path;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import org.filteredpush.bdq_workbench.model.DatasetViewCardinalityPolicy;
 import org.filteredpush.bdq_workbench.model.RecordFilterSpec;
 
 /**
@@ -49,6 +53,9 @@ import org.filteredpush.bdq_workbench.model.RecordFilterSpec;
  *     Archive's core or one of its extensions, or one of a Data Package's resources — named by
  *     its location, resource name or Darwin Core row type; empty to let the ingestor choose
  * @param datasetView optional path to a standalone dataset view JSON file
+ * @param datasetJoinPolicies multiplicity-handling policies keyed by related table name, used
+ *     when a multi-table dataset is run without {@code datasetView}; tables with more than one row
+ *     per grain record need one (see {@link DatasetViewCardinalityPolicy})
  */
 public record AppConfig(
 		Path useCaseXml,
@@ -60,7 +67,37 @@ public record AppConfig(
 		boolean dedupEnabled,
 		RecordFilterSpec recordFilter,
 		String datasetTable,
-		String datasetView) {
+		String datasetView,
+		Map<String, DatasetViewCardinalityPolicy> datasetJoinPolicies) {
+
+	/**
+	 * Creates a configuration with no join policies.
+	 *
+	 * @param useCaseXml path to the use case XML definition file
+	 * @param rdfDefinitions RDF/OWL files used to resolve policy/test metadata
+	 * @param datasetPath path to the dataset input
+	 * @param useCaseId optional use case identifier
+	 * @param implementationPackages Java packages to scan for test implementations
+	 * @param threadCount number of worker threads to use
+	 * @param dedupEnabled whether distinct-value execution is enabled
+	 * @param recordFilter pre-execution record filter criteria
+	 * @param datasetTable which dataset table to run against
+	 * @param datasetView optional dataset view JSON path
+	 */
+	public AppConfig(
+			Path useCaseXml,
+			List<Path> rdfDefinitions,
+			Path datasetPath,
+			String useCaseId,
+			List<String> implementationPackages,
+			int threadCount,
+			boolean dedupEnabled,
+			RecordFilterSpec recordFilter,
+			String datasetTable,
+			String datasetView) {
+		this(useCaseXml, rdfDefinitions, datasetPath, useCaseId, implementationPackages, threadCount, dedupEnabled,
+				recordFilter, datasetTable, datasetView, Map.of());
+	}
 
 	/**
 	 * Creates a configuration with no record filters.
@@ -135,5 +172,18 @@ public record AppConfig(
 		recordFilter = recordFilter == null ? RecordFilterSpec.empty() : recordFilter;
 		datasetTable = datasetTable == null ? "" : datasetTable.trim();
 		datasetView = datasetView == null ? "" : datasetView.trim();
+		datasetJoinPolicies = Collections.unmodifiableMap(new LinkedHashMap<>(
+				datasetJoinPolicies == null ? Map.of() : datasetJoinPolicies));
+	}
+
+	/**
+	 * Returns a copy of this configuration with a different use case.
+	 *
+	 * @param newUseCaseId the use case identifier
+	 * @return the copy
+	 */
+	public AppConfig withUseCaseId(String newUseCaseId) {
+		return new AppConfig(useCaseXml, rdfDefinitions, datasetPath, newUseCaseId, implementationPackages, threadCount,
+				dedupEnabled, recordFilter, datasetTable, datasetView, datasetJoinPolicies);
 	}
 }

@@ -51,13 +51,55 @@ Configuration defaults are in `src/main/resources/application.properties` and ca
 java -jar target/bdq_workbench-0.1.0-SNAPSHOT.jar --dataset path/to/dataset.zip
 ```
 
-Reusable relational flattening views can be supplied with `--dataset-view` (`bdq.dataset.view` in config):
+A dataset with more than one table (a Darwin Core Archive with extensions, a data package with
+several resources) always runs through a *dataset view*. You can supply one with `--dataset-view`
+(`bdq.dataset.view` in config), or build it interactively in the GUI with `Build Dataset View...`:
 
 ```bash
 java -jar target/bdq_workbench-0.1.0-SNAPSHOT.jar \
   --dataset path/to/datapackage.json \
   --dataset-view path/to/bdq-dataset-view.json
 ```
+
+A view picks a grain table (one execution record per row), joins directly related tables, and maps
+each Darwin Core term to one source table and column. Each join says what to do when a grain record
+has more than one related row (for example, several identifications of one occurrence):
+
+| Policy | Effect |
+|---|---|
+| `FIRST_ROW` (default) | Flatten: use the first related row and ignore the rest. |
+| `EXPAND` | Keep every related row. A test that reads any term mapped from this table runs once per related row, with the grain record's (and flattened tables') terms reused for each; VALIDATION and ISSUE results are also rolled up to the grain record. A grain record with no related rows is tested once with those terms blank. |
+| `AGGREGATE` | Flatten: join all related rows' values with `" \| "`. Combined values usually fail tests on that term. |
+| `REJECT` | Flatten: leave the mapped terms empty, with a warning, for grain records that have more than one related row. |
+
+For example, with occurrence as the grain, join event with `FIRST_ROW` and identification with
+`EXPAND`: a test such as VALIDATION_DATEIDENTIFIED_INRANGE then runs once per identification, each
+time with that identification's `dateIdentified` and the occurrence's event date. A test whose inputs
+come from two different `EXPAND` tables cannot run and reports an error, so expand only the tables
+whose rows each need testing. The builder shows the multiplicity observed in the data for each join,
+previews expanded rows beneath each grain record, and warns where a policy drops or garbles rows.
+
+When a term is mapped both from the grain and from an `EXPAND` table — for example, an occurrence
+core that carries its current identification and an identification-history extension — both are
+tested: the grain's value once, and each expanded row's value once, all rolled up to the record.
+
+Without `--dataset-view`, the workbench builds the view itself: the grain is the table it would read
+anyway (occurrence when there is one), every column of the grain and its directly related tables is
+mapped, and related tables with at most one row per grain record (such as the event of an
+occurrence) are joined `FIRST_ROW`. For each related table that has more than one row for some
+record, you decide how to handle it:
+
+```bash
+java -jar target/bdq_workbench-0.1.0-SNAPSHOT.jar \
+  --dataset path/to/dataset.zip \
+  --join-policy identification=EXPAND --join-policy multimedia.txt=FIRST_ROW
+```
+
+`--join-policy` is repeatable (`bdq.dataset.join.policies=identification=EXPAND,multimedia.txt=FIRST_ROW`
+in config). Any table still undecided is asked about on the console when running interactively; in
+a script or CI the run stops before testing and lists each such table with its observed rows per
+record. In the GUI, the dataset view builder opens with those tables highlighted, and `Use View`
+saves the view to `reports/bdq-dataset-view.json` and continues the run.
 
 Configuration precedence is:
 
@@ -187,6 +229,28 @@ Reports include:
 - `reports/bdq-report-rdf.ttl` RDF test responses serialized as Turtle.
 - `reports/bdq-report-xls.xlsx` Spreadsheet report produced via kurator-ffdq's `XLSXPostProcessor` (see below).
 - `reports/bdq-report-xls-unresolved.xlsx` Spreadsheet companion listing unresolved, unbound, and other sentinel-record responses excluded from the main per-record workbook.
+
+The structured HTML and Markdown reports are quality-control summaries sized for real datasets:
+high-impact action items (issues, non-compliance and its most frequent causes, the amendment
+proposals that most reduced problems, empty terms), pre/post measure differences, records with quality for the use case (all multi-record QA measures COMPLETE), a per-test table of
+problems before and after amendment, information elements empty in every record, proposed
+amendments ranked by how many records they affect, and a capped list of records needing
+attention. Tests are named by their labels, and records by values from the original data —
+`institutionCode:collectionCode:catalogNumber` (or dataset and catalog number) plus the data file
+and line within the archive or package. Report headers, and the text summary, state any results
+with external prerequisites not met. The full per-record results remain in the spreadsheet and
+the response list (`bdq-report-responses.txt`, which leads with record and test label columns).
+
+The input is checked for the record-level markers of the BDQ
+[Guide to Marking and Identifying Synthetic and Modified Data](https://rs.tdwg.org/bdq/doc/synthetic/):
+`collectionCode` "Synthetic Example" / "Modified Example", the guide's two `collectionID` UUIDs,
+`relationshipOfResource` "source for modified example record", and the `example.org`
+`institutionCode`/`institutionID`. The raw input rows are scanned (the grain table and its related
+rows, before any view mapping), so markers are found even when a view does not map those terms.
+When any record is marked, the structured HTML and Markdown reports open with a warning, the text
+summary starts with one, the RDF report carries the counts and an `rdfs:comment`, the GUI preflight
+summary and the CLI output show it too; every one of these also states the result ("none detected
+in N input record(s)") when nothing is marked.
 
 ## Distinct-value execution (test call reduction)
 
