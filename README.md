@@ -51,13 +51,32 @@ Configuration defaults are in `src/main/resources/application.properties` and ca
 java -jar target/bdq_workbench-0.1.0-SNAPSHOT.jar --dataset path/to/dataset.zip
 ```
 
-Reusable relational flattening views can be supplied with `--dataset-view` (`bdq.dataset.view` in config):
+Reusable relational dataset views can be supplied with `--dataset-view` (`bdq.dataset.view` in config),
+and built interactively in the GUI with `Build Dataset View...`:
 
 ```bash
 java -jar target/bdq_workbench-0.1.0-SNAPSHOT.jar \
   --dataset path/to/datapackage.json \
   --dataset-view path/to/bdq-dataset-view.json
 ```
+
+A view picks a grain table (one execution record per row), joins directly related tables, and maps
+each Darwin Core term to one source table and column. Each join says what to do when a grain record
+has more than one related row (for example, several identifications of one occurrence):
+
+| Policy | Effect |
+|---|---|
+| `FIRST_ROW` (default) | Flatten: use the first related row and ignore the rest. |
+| `EXPAND` | Keep every related row. A test that reads any term mapped from this table runs once per related row, with the grain record's (and flattened tables') terms reused for each; VALIDATION and ISSUE results are also rolled up to the grain record. A grain record with no related rows is tested once with those terms blank. |
+| `AGGREGATE` | Flatten: join all related rows' values with `" \| "`. Combined values usually fail tests on that term. |
+| `REJECT` | Flatten: leave the mapped terms empty, with a warning, for grain records that have more than one related row. |
+
+For example, with occurrence as the grain, join event with `FIRST_ROW` and identification with
+`EXPAND`: a test such as VALIDATION_DATEIDENTIFIED_INRANGE then runs once per identification, each
+time with that identification's `dateIdentified` and the occurrence's event date. A test whose inputs
+come from two different `EXPAND` tables cannot run and reports an error, so expand only the tables
+whose rows each need testing. The builder shows the multiplicity observed in the data for each join,
+previews expanded rows beneath each grain record, and warns where a policy drops or garbles rows.
 
 Configuration precedence is:
 

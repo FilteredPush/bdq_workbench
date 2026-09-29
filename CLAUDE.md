@@ -64,11 +64,18 @@ run. `bdq.dataset.table` (CLI `--dataset-table`, GUI advanced options) names whi
 multi-table dataset to run against. Both entry points fetch and cache use-case/test-definition/
 ontology RDF from `bdq.tdwg.org` through `CachedResourceResolver`; RDF/XML, Turtle, and JSON-LD
 serializations are all supported. `bdq.dataset.view` (CLI `--dataset-view`, GUI "Build Dataset View...")
-names a standalone JSON DatasetView used to flatten relational inputs before execution. The GUI
-builder now shows the discovered schema/relationships on the left, the selected use case's
-information-element terms and suggested term→column mappings on the right, and a flattened preview
-plus cardinality warnings below; views are still saved/loaded as standalone JSON keyed by the
-schema fingerprint. Logging is DEBUG-by-default to the
+names a standalone JSON DatasetView applied to relational inputs before execution. Each join
+carries a `DatasetViewCardinalityPolicy`: `FIRST_ROW` (the default), `AGGREGATE` and `REJECT`
+flatten the relation onto the grain record, while `EXPAND` keeps every related row —
+`ViewFlattener` then emits `RecordGraph`s whose core is the flat record and whose related rows are
+projected onto the view's mapped terms (with `SourceCell` provenance), which is what lets
+`SubjectExpander` run a test once per expanded row. The GUI builder shows the schema and requested
+terms in tabs on the left, the join grid (observed rows per grain record, per-join policy, and an
+always-visible policy legend) above the term mappings on the right, and below them a preview with
+expanded rows beneath each grain record plus policy warnings (logic in `DatasetViewDraftPreview`).
+Changing the grain table re-reads the relational graphs for that table, since relationships and
+multiplicity are measured relative to the grain. Views are still saved/loaded as standalone JSON
+keyed by the schema fingerprint. Logging is DEBUG-by-default to the
 console via `src/main/resources/logback.xml`.
 
 ## Architecture
@@ -159,7 +166,17 @@ understanding how the stages connect — read its class Javadoc first. The pipel
    with a surfaced diagnostic rather than silently choosing one. Distinct-value deduplication then
    partitions those evaluation subjects (via `RecordGroupPartitioner`) by the exact declared-input
    values they expose, so repeated related-row tuples can share one invocation even across several
-   core records. Bindings with a `LEGACY_RECORD`/`LEGACY_PARAMETERS` parameter (whole
+   core records. A relation with at most one row per core record everywhere (a parent such as the
+   event of an occurrence) does not change the grain: when a binding also reads a multi-row relation,
+   the single-valued row is overlaid onto the core record, so a test reading `eventDate` and
+   `dateIdentified` still runs once per identification. Only a binding that needs two *multi-row*
+   relations is rejected. A core record with no rows in the governing relation is evaluated once
+   with that relation's fields blank, not reported as an error. Note that for automatic structured
+   ingest (no view), relations own the raw column names on their rows, so a column shared with the
+   core (a foreign key, say) can make a relation govern; views avoid this, since expanded rows carry
+   only the terms the view maps from them. Relational ingest gives a related table's rows
+   positional references (`row-<n>`) when their fallback IDs are not unique, so selectors and
+   amendment write-back always identify one row. Bindings with a `LEGACY_RECORD`/`LEGACY_PARAMETERS` parameter (whole
    record/parameter map, not specific declared terms) are never dedup-eligible and always run once
    per subject, as does every binding when `bdq.execution.dedup` is `false` (default `true`).
    Because one binding's amendment can change values a later binding in the same phase groups or
@@ -288,7 +305,8 @@ run.
    provenance-tracked dataset views, can execute bindings over structured `EvaluationSubject`s
    with subject-grain diagnostics, deduplication, write-back, and VALIDATION/ISSUE rollups, and
    can report those structured subjects through OA-style RDF row selectors plus dedicated
-   structured HTML/Markdown reports. Remaining work is any future ingest/model changes needed if
+   structured HTML/Markdown reports. Per-row execution is reachable from a dataset view by joining
+   a table with `EXPAND` (built-in views still flatten with `FIRST_ROW`). Remaining work is any future ingest/model changes needed if
    datasets require more than the current core + direct-child relation graph, along with richer
    future presentation formats if maintainers want something beyond the current Markdown export.
 
