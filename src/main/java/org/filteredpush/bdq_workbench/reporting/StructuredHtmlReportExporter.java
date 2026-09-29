@@ -60,6 +60,12 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 	private static final int MEASURE_ROW_HEIGHT = 26;
 	/** Radius, in pixels, of a dumbbell-chart marker. */
 	private static final int MEASURE_MARKER_RADIUS = 6;
+	/**
+	 * Horizontal padding, in pixels, around each dumbbell plot, so a marker at 0% or 100% (radius
+	 * plus stroke) stays inside the plot column instead of overlapping the neighbouring label or
+	 * values.
+	 */
+	private static final int MEASURE_PLOT_INSET = 10;
 	/** Axis tick positions, in percent, on the dumbbell chart. */
 	private static final int[] MEASURE_AXIS_TICKS = {0, 25, 50, 75, 100};
 	/**
@@ -75,10 +81,11 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 			+ "    .mc-legend { display: flex; gap: 1.25rem; font-size: 0.85rem; color: var(--mc-muted); margin-bottom: 0.25rem; }\n"
 			+ "    .mc-legend svg { vertical-align: -0.2rem; margin-right: 0.3rem; }\n"
 			+ "    .mc-row { display: grid; grid-template-columns: minmax(10rem, 2fr) minmax(12rem, 5fr) minmax(10rem, 1.6fr);"
-			+ " gap: 0.75rem; align-items: center; padding: 0.2rem 0; }\n"
+			+ " column-gap: 1.25rem; row-gap: 0.2rem; align-items: center; padding: 0.2rem 0; }\n"
 			+ "    .mc-row + .mc-row { border-top: 1px solid var(--mc-grid); }\n"
+			+ "    .mc-plot-wrap { padding: 0 " + MEASURE_PLOT_INSET + "px; min-width: 0; }\n"
 			+ "    .mc-row svg.mc-plot { width: 100%; overflow: visible; display: block; }\n"
-			+ "    .mc-label { font-size: 0.9rem; color: var(--mc-ink); }\n"
+			+ "    .mc-label { font-size: 0.9rem; color: var(--mc-ink); min-width: 0; overflow-wrap: anywhere; }\n"
 			+ "    .mc-values { font-size: 0.85rem; color: var(--mc-muted); font-variant-numeric: tabular-nums; }\n"
 			+ "    .mc-delta { font-weight: 600; margin-left: 0.4rem; white-space: nowrap; }\n"
 			+ "    .mc-delta.up { color: var(--mc-up); }\n"
@@ -466,13 +473,13 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 	 */
 	private static void appendMeasureAxisRow(StringBuilder builder) {
 		builder.append("    <div class=\"mc-row mc-axis-row\" aria-hidden=\"true\"><span></span>")
-				.append("<svg class=\"mc-plot\" height=\"14\">");
+				.append("<div class=\"mc-plot-wrap\"><svg class=\"mc-plot\" height=\"14\">");
 		for (int tick : MEASURE_AXIS_TICKS) {
 			String anchor = tick == 0 ? "start" : tick == 100 ? "end" : "middle";
 			builder.append("<text class=\"mc-axis\" x=\"").append(tick).append("%\" y=\"11\" text-anchor=\"")
 					.append(anchor).append("\">").append(tick).append("%</text>");
 		}
-		builder.append("</svg><span></span></div>\n");
+		builder.append("</svg></div><span></span></div>\n");
 	}
 
 	/**
@@ -513,13 +520,25 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 			StructuredMeasureComparisons.MeasureComparison comparison,
 			boolean muted) {
 		builder.append("    <div class=\"mc-row").append(muted ? " unchanged" : "").append("\">")
-				.append("<span class=\"mc-label\">").append(escapeHtml(comparison.label())).append("</span>")
-				.append(renderMeasurePlot(comparison))
+				.append("<span class=\"mc-label\">").append(breakableLabel(comparison.label())).append("</span>")
+				.append("<div class=\"mc-plot-wrap\">").append(renderMeasurePlot(comparison)).append("</div>")
 				.append("<span class=\"mc-values\">")
 				.append(escapeHtml(compactValues(comparison)))
 				.append(" <span class=\"mc-delta ").append(deltaCssClass(comparison)).append("\">")
 				.append(escapeHtml(deltaLabel(comparison)))
 				.append("</span></span></div>\n");
+	}
+
+	/**
+	 * Escapes a measure label, allowing line breaks after underscores so long test identifiers
+	 * (e.g. {@code VALIDATION_COORDINATESTERRESTRIALMARINE_CONSISTENT}) wrap within the label column
+	 * rather than running under the plot.
+	 *
+	 * @param label the raw label
+	 * @return the escaped label with break opportunities
+	 */
+	private static String breakableLabel(String label) {
+		return escapeHtml(label).replace("_", "_<wbr>");
 	}
 
 	/**
