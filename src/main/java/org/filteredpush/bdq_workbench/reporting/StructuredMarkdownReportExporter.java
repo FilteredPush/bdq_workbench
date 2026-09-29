@@ -101,11 +101,12 @@ public class StructuredMarkdownReportExporter implements ReportExporter {
 		}
 		appendRunMetadata(builder, summary, digest);
 		appendInputView(builder, summary, InputViewOverview.from(summary));
+		appendHighImpactActionItems(builder, digest);
+		appendMeasureDifferences(builder, summary);
 		appendQualitySection(builder, digest);
 		appendTestFindings(builder, digest);
 		appendEmptyTerms(builder, digest);
 		appendAmendments(builder, digest);
-		appendMeasureDifferences(builder, summary);
 		appendRecordsNeedingAttention(builder, digest);
 		appendTestsUnableToRun(builder, digest);
 		return builder.toString();
@@ -242,6 +243,50 @@ public class StructuredMarkdownReportExporter implements ReportExporter {
 	 */
 	private static String escapeCell(String raw) {
 		return escape(raw).replace("|", "\\|");
+	}
+
+	/**
+	 * Appends the findings most worth acting on first: issues, validation non-compliance and its
+	 * most frequent causes, the amendment proposals that improved the most records, and the
+	 * information elements empty in every record.
+	 *
+	 * @param builder the report being built; appended to in place
+	 * @param digest the run's condensed findings
+	 */
+	private static void appendHighImpactActionItems(StringBuilder builder, ReportDigest digest) {
+		ReportDigest.HighImpact items = digest.highImpact();
+		builder.append("## High-impact action items\n\n")
+				.append("- Review issue findings: ").append(items.confirmedIssueRecords())
+				.append(" record(s) with confirmed issues, ").append(items.potentialIssueRecords())
+				.append(" with potential issues\n")
+				.append("- Validation non-compliance after amendment: ").append(items.nonComplianceFindings())
+				.append(" finding(s) across ").append(items.recordsWithNonCompliance()).append(" record(s)\n")
+				.append("- Most frequent causes of validation non-compliance:");
+		if (items.topCauses().isEmpty()) {
+			builder.append(" none\n");
+		} else {
+			builder.append('\n');
+			items.topCauses().forEach(cause -> builder.append("  1. ").append(escape(cause.testLabel())).append(" — ")
+					.append(cause.latest().problems()).append(" record(s)\n"));
+		}
+		builder.append("- Most effective amendment proposals:");
+		if (items.topAmendments().isEmpty()) {
+			builder.append(" none\n");
+		} else {
+			builder.append('\n');
+			items.topAmendments().forEach(group -> builder.append("  1. `").append(escape(group.term())).append("`: ")
+					.append(escape(ReportDigest.displayValue(group.originalValue()))).append(" → **")
+					.append(escape(ReportDigest.displayValue(group.proposedValue()))).append("** (")
+					.append(escape(group.testLabel())).append(") — ").append(group.recordCount()).append(" record(s), ")
+					.append(group.improvedRecords()).append(" with fewer problems after amendment\n"));
+		}
+		builder.append("- Information elements empty in every record: ")
+				.append(items.emptyTerms().isEmpty()
+						? "none"
+						: escape(StructuredHtmlReportExporter.limitedList(
+								items.emptyTerms().stream().map(ReportDigest.EmptyTerm::term).toList(),
+								ReportDigest.MAX_TESTS_PER_TERM)))
+				.append("\n\n");
 	}
 
 	/**
@@ -404,25 +449,42 @@ public class StructuredMarkdownReportExporter implements ReportExporter {
 	 * @param summary the execution summary supplying multi-record measure responses
 	 */
 	private static void appendMeasureDifferences(StringBuilder builder, ExecutionSummary summary) {
-		List<StructuredMeasureComparisons.MeasureComparison> changed = StructuredMeasureComparisons.summarize(summary).stream()
-				.filter(StructuredMeasureComparisons.MeasureComparison::changed)
-				.toList();
-		if (changed.isEmpty()) {
+		List<StructuredMeasureComparisons.MeasureComparison> comparisons = StructuredMeasureComparisons.summarize(summary);
+		builder.append("## Measure differences between pre-amendment and post-amendment phases\n\n");
+		if (comparisons.isEmpty()) {
+			builder.append("No multi-record measures were produced in this run, so there is nothing to compare.\n\n");
 			return;
 		}
-		builder.append("## Measures with pre/post differences\n\n");
-		for (StructuredMeasureComparisons.MeasureComparison comparison : changed) {
-			builder.append("- ")
-					.append(escape(comparison.label()))
-					.append(": ")
-					.append(escape(comparison.preText()))
-					.append(" -> ")
-					.append(escape(comparison.postText()))
-					.append(" (")
-					.append(escape(comparison.changeText()))
-					.append(")\n");
+		List<StructuredMeasureComparisons.MeasureComparison> changed = comparisons.stream()
+				.filter(StructuredMeasureComparisons.MeasureComparison::changed)
+				.sorted(java.util.Comparator.comparingInt(
+						(StructuredMeasureComparisons.MeasureComparison comparison) -> comparison.deltaPercent() == null
+								? Integer.MIN_VALUE
+								: comparison.deltaPercent())
+						.reversed())
+				.toList();
+		List<StructuredMeasureComparisons.MeasureComparison> unchanged = comparisons.stream()
+				.filter(comparison -> !comparison.changed())
+				.toList();
+		builder.append(changed.size()).append(" of ").append(comparisons.size())
+				.append(" measure(s) changed after amendment.\n\n");
+		if (!changed.isEmpty()) {
+			builder.append("### Measures with pre/post differences\n\n");
+			for (StructuredMeasureComparisons.MeasureComparison comparison : changed) {
+				builder.append("- ").append(escape(comparison.label())).append(": ")
+						.append(escape(comparison.preText())).append(" -> ").append(escape(comparison.postText()))
+						.append(" (").append(escape(comparison.changeText())).append(")\n");
+			}
+			builder.append('\n');
 		}
-		builder.append('\n');
+		if (!unchanged.isEmpty()) {
+			builder.append("### Measures with no differences\n\n");
+			for (StructuredMeasureComparisons.MeasureComparison comparison : unchanged) {
+				builder.append("- ").append(escape(comparison.label())).append(": ").append(escape(comparison.postText()))
+						.append('\n');
+			}
+			builder.append('\n');
+		}
 	}
 
 	/**

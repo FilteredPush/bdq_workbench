@@ -231,7 +231,8 @@ Reports include:
 - `reports/bdq-report-xls-unresolved.xlsx` Spreadsheet companion listing unresolved, unbound, and other sentinel-record responses excluded from the main per-record workbook.
 
 The structured HTML and Markdown reports are quality-control summaries sized for real datasets:
-records with quality for the use case (all multi-record QA measures COMPLETE), a per-test table of
+high-impact action items (issues, non-compliance and its most frequent causes, the amendment
+proposals that most reduced problems, empty terms), pre/post measure differences, records with quality for the use case (all multi-record QA measures COMPLETE), a per-test table of
 problems before and after amendment, information elements empty in every record, proposed
 amendments ranked by how many records they affect, and a capped list of records needing
 attention. Tests are named by their labels, and records by values from the original data —

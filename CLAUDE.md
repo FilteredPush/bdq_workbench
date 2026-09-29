@@ -260,7 +260,10 @@ understanding how the stages connect — read its class Javadoc first. The pipel
    HTML/Markdown reports. The structured HTML and Markdown reports are quality-control summaries,
    not per-record dumps: both render from `ReportDigest`, which names tests by label and records by
    values from the original data (institution:collection:catalog, else dataset:catalog, plus the
-   `SourceRow` file and line; else the file and line), and condenses the run into records with
+   `SourceRow` file and line; else the file and line), and condenses the run into high-impact action
+   items (issue and non-compliance counts, the most frequent causes, the amendment proposals that
+   left the most records with fewer problems, empty terms), the pre/post measure differences
+   (always present, saying so when no multi-record measures ran), records with
    quality for the use case (every multi-record QA measure's target test COMPLETE, post-amendment),
    per-test problem counts before → after amendment with internal/external prerequisites, terms the
    tests read that are empty in 100% of records, amendments grouped by change and ranked by records

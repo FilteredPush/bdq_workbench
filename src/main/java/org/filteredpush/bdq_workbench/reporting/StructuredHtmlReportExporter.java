@@ -158,11 +158,12 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 		appendExternalPrerequisitesNotice(builder, digest);
 		appendRunMetadata(builder, summary, digest);
 		appendInputView(builder, summary, InputViewOverview.from(summary));
+		appendHighImpactActionItems(builder, digest);
+		appendMeasureDifferenceVisualization(builder, summary);
 		appendQualitySection(builder, digest);
 		appendTestFindings(builder, digest);
 		appendEmptyTerms(builder, digest);
 		appendAmendments(builder, digest);
-		appendMeasureDifferenceVisualization(builder, summary);
 		appendRecordsNeedingAttention(builder, digest);
 		appendTestsUnableToRun(builder, digest);
 		builder.append("</body>\n</html>\n");
@@ -345,6 +346,55 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 		}
 		builder.append("    </tbody>\n")
 				.append("  </table>\n");
+	}
+
+	/**
+	 * Appends the findings most worth acting on first: issues, validation non-compliance and its
+	 * most frequent causes, the amendment proposals that improved the most records, and the
+	 * information elements empty in every record.
+	 *
+	 * @param builder the report being built; appended to in place
+	 * @param digest the run's condensed findings
+	 */
+	private static void appendHighImpactActionItems(StringBuilder builder, ReportDigest digest) {
+		ReportDigest.HighImpact items = digest.highImpact();
+		builder.append("<section>\n  <h2>High-impact action items</h2>\n  <ul>\n")
+				.append("    <li><strong>Review issue findings:</strong> ")
+				.append(items.confirmedIssueRecords()).append(" record(s) with confirmed issues, ")
+				.append(items.potentialIssueRecords()).append(" with potential issues</li>\n")
+				.append("    <li><strong>Validation non-compliance after amendment:</strong> ")
+				.append(items.nonComplianceFindings()).append(" finding(s) across ")
+				.append(items.recordsWithNonCompliance()).append(" record(s)</li>\n")
+				.append("    <li><strong>Most frequent causes of validation non-compliance:</strong>");
+		if (items.topCauses().isEmpty()) {
+			builder.append(" none</li>\n");
+		} else {
+			builder.append("\n      <ol>\n");
+			items.topCauses().forEach(cause -> builder.append("        <li>")
+					.append(escapeHtml(cause.testLabel())).append(" — ")
+					.append(cause.latest().problems()).append(" record(s)</li>\n"));
+			builder.append("      </ol>\n    </li>\n");
+		}
+		builder.append("    <li><strong>Most effective amendment proposals:</strong>");
+		if (items.topAmendments().isEmpty()) {
+			builder.append(" none</li>\n");
+		} else {
+			builder.append("\n      <ol>\n");
+			items.topAmendments().forEach(group -> builder.append("        <li><code>")
+					.append(escapeHtml(group.term())).append("</code>: ")
+					.append(escapeHtml(ReportDigest.displayValue(group.originalValue()))).append(" → <strong>")
+					.append(escapeHtml(ReportDigest.displayValue(group.proposedValue()))).append("</strong> (")
+					.append(escapeHtml(group.testLabel())).append(") — ")
+					.append(group.recordCount()).append(" record(s), ")
+					.append(group.improvedRecords()).append(" with fewer problems after amendment</li>\n"));
+			builder.append("      </ol>\n    </li>\n");
+		}
+		builder.append("    <li><strong>Information elements empty in every record:</strong> ")
+				.append(items.emptyTerms().isEmpty()
+						? "none"
+						: escapeHtml(limitedList(items.emptyTerms().stream().map(ReportDigest.EmptyTerm::term).toList(),
+								ReportDigest.MAX_TESTS_PER_TERM)))
+				.append("</li>\n  </ul>\n</section>\n");
 	}
 
 	/**
@@ -600,6 +650,11 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 	private static void appendMeasureDifferenceVisualization(StringBuilder builder, ExecutionSummary summary) {
 		List<StructuredMeasureComparisons.MeasureComparison> comparisons = StructuredMeasureComparisons.summarize(summary);
 		if (comparisons.isEmpty()) {
+			builder.append("<section>\n")
+					.append("  <h2>Measure differences between pre-amendment and post-amendment phases</h2>\n")
+					.append("  <p class=\"muted\">No multi-record measures were produced in this run, so there is "
+							+ "nothing to compare.</p>\n")
+					.append("</section>\n");
 			return;
 		}
 		List<StructuredMeasureComparisons.MeasureComparison> changed = comparisons.stream()

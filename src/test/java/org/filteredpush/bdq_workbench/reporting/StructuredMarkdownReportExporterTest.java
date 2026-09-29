@@ -61,6 +61,15 @@ class StructuredMarkdownReportExporterTest {
 		assertThat(markdown).contains("| MCZ:Herp:A-1 (occurrence.txt line 2) | Scientific name found (1 of 2 rows) | "
 				+ "geodeticDatum: WGS 84 → EPSG:4326 |");
 		assertThat(markdown).contains("- Unresolved test — No implementation discovered\n");
+		assertThat(markdown).contains("## High-impact action items\n\n- Review issue findings: 0 record(s) with "
+				+ "confirmed issues, 0 with potential issues\n- Validation non-compliance after amendment: 1 finding(s) "
+				+ "across 1 record(s)\n");
+		assertThat(markdown).contains("  1. `geodeticDatum`: WGS 84 → **EPSG:4326** (Geodetic datum standardized) — "
+				+ "2 record(s), 1 with fewer problems after amendment\n");
+		assertThat(markdown).contains("## Measure differences between pre-amendment and post-amendment phases\n\nNo "
+				+ "multi-record measures were produced");
+		assertThat(markdown.indexOf("## High-impact action items")).isLessThan(markdown.indexOf("## Measure differences"));
+		assertThat(markdown.indexOf("## Measure differences")).isLessThan(markdown.indexOf("## Records with quality"));
 		assertThat(markdown).doesNotContain("urn:test:").doesNotContain("## Record `");
 	}
 
@@ -72,7 +81,9 @@ class StructuredMarkdownReportExporterTest {
 
 		String report = StructuredMarkdownReportExporter.renderMarkdown(summary);
 
-		assertThat(report).contains("## Measures with pre/post differences");
+		assertThat(report).contains("## Measure differences between pre-amendment and post-amendment phases\n\n1 of 1 "
+				+ "measure(s) changed after amendment.");
+		assertThat(report).contains("### Measures with pre/post differences");
 		assertThat(report).contains("- Count compliant coordinates: 1/4 (25.0%) -> 3/4 (75.0%) (+50 percentage point(s))");
 	}
 
@@ -94,7 +105,7 @@ class StructuredMarkdownReportExporterTest {
 		assertThat(markdown).contains("Ignored in view construction (no test binding reads any of their terms): "
 				+ "`measurement`, `audit`\n");
 		assertThat(markdown.indexOf("## Input data view"))
-				.isLessThan(markdown.indexOf("## Records with quality for this use case"));
+				.isLessThan(markdown.indexOf("## High-impact action items"));
 	}
 
 	@Test

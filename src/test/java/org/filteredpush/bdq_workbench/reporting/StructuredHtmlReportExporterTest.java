@@ -96,7 +96,17 @@ class StructuredHtmlReportExporterTest {
 				+ "rows)</td><td>geodeticDatum: WGS 84 → EPSG:4326</td></tr>");
 		assertThat(html).contains("<li>Unresolved test <span class=\"muted\">— No implementation discovered</span></li>");
 		assertThat(html).doesNotContain("urn:test:").doesNotContain("<h2>Record <code>");
+		assertThat(html).contains("<li><strong>Validation non-compliance after amendment:</strong> 1 finding(s) across "
+				+ "1 record(s)</li>");
+		assertThat(html).contains("<li>Scientific name found — 1 record(s)</li>");
+		assertThat(html).contains("<li><code>geodeticDatum</code>: WGS 84 → <strong>EPSG:4326</strong> (Geodetic datum "
+				+ "standardized) — 2 record(s), 1 with fewer problems after amendment</li>");
+		assertThat(html).contains("<li><strong>Information elements empty in every record:</strong> locality, "
+				+ "minimumDepthInMeters</li>");
+		assertThat(html).contains("No multi-record measures were produced in this run");
 		List<String> order = List.of("<h2>Run metadata</h2>", "<h2>Input data view</h2>",
+				"<h2>High-impact action items</h2>",
+				"<h2>Measure differences between pre-amendment and post-amendment phases</h2>",
 				"<h2>Records with quality for this use case</h2>", "<h2>Quality control by test</h2>",
 				"<h2>Information elements empty in every record</h2>", "<h2>Proposed amendments</h2>",
 				"<h2>Records needing attention</h2>", "<h2>Tests that could not run</h2>");
@@ -149,7 +159,7 @@ class StructuredHtmlReportExporterTest {
 		assertThat(html).contains("<strong>Ignored in view construction</strong> (no test binding reads any of their "
 				+ "terms): <code>measurement</code>, <code>audit</code>");
 		assertThat(html.indexOf("<h2>Input data view</h2>"))
-				.isLessThan(html.indexOf("<h2>Records with quality for this use case</h2>"));
+				.isLessThan(html.indexOf("<h2>High-impact action items</h2>"));
 	}
 
 	@Test

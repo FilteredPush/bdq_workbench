@@ -64,6 +64,8 @@ final class ReportDigest {
 	static final int MAX_QUALITY_RECORDS = 25;
 	/** Amendment proposals listed before the rest are counted. */
 	static final int MAX_AMENDMENT_GROUPS = 25;
+	/** Causes and amendment proposals listed among the high-impact action items. */
+	static final int MAX_HIGH_IMPACT_ITEMS = 5;
 	/** Test labels named per empty term before the rest are counted. */
 	static final int MAX_TESTS_PER_TERM = 5;
 
@@ -319,20 +321,94 @@ final class ReportDigest {
 				String localTerm = DarwinCoreTermResolver.localName(term);
 				String key = response.testId() + "\u0000" + localTerm + "\u0000" + original + "\u0000" + proposed;
 				groups.putIfAbsent(key, new AmendmentGroup(testLabel(response.testId()), localTerm,
-						original, proposed == null ? "" : proposed, 0, List.of()));
+						original, proposed == null ? "" : proposed, 0, 0, List.of()));
 				recordsByGroup.computeIfAbsent(key, ignored -> new LinkedHashSet<>()).add(response.recordId());
 			});
 		}
 		List<AmendmentGroup> ranked = new ArrayList<>();
+		Map<String, Integer> preProblems = problemCountsByRecord(Phase.PRE_AMENDMENT);
+		Map<String, Integer> postProblems = problemCountsByRecord(Phase.POST_AMENDMENT);
 		groups.forEach((key, group) -> {
 			Set<String> records = recordsByGroup.get(key);
+			int improved = (int) records.stream()
+					.filter(recordId -> preProblems.getOrDefault(recordId, 0) > postProblems.getOrDefault(recordId, 0))
+					.count();
 			ranked.add(new AmendmentGroup(group.testLabel(), group.term(), group.originalValue(), group.proposedValue(),
-					records.size(), records.stream().limit(MAX_EXAMPLE_RECORDS).map(this::recordLabel).toList()));
+					records.size(), improved, records.stream().limit(MAX_EXAMPLE_RECORDS).map(this::recordLabel).toList()));
 		});
 		ranked.sort(Comparator.comparingInt(AmendmentGroup::recordCount).reversed()
 				.thenComparing(AmendmentGroup::testLabel, String.CASE_INSENSITIVE_ORDER)
 				.thenComparing(AmendmentGroup::term));
 		return ranked;
+	}
+
+	/**
+	 * Selects the findings most worth acting on first.
+	 *
+	 * @return the high-impact action items
+	 */
+	HighImpact highImpact() {
+		int confirmed = 0;
+		int potential = 0;
+		int findings = 0;
+		Set<String> nonCompliantRecords = new LinkedHashSet<>();
+		Map<String, TestType> tests = new LinkedHashMap<>();
+		perRecordResponses().forEach(response -> tests.putIfAbsent(response.testId(), response.testType()));
+		Set<String> confirmedRecords = new LinkedHashSet<>();
+		Set<String> potentialRecords = new LinkedHashSet<>();
+		for (Map.Entry<String, TestType> test : tests.entrySet()) {
+			Phase phase = latestPhase(test.getKey());
+			for (String recordId : recordsById.keySet()) {
+				List<Response> responses = recordLevel(test.getKey(), phase, recordId);
+				if (test.getValue() == TestType.ISSUE) {
+					if (responses.stream().anyMatch(response -> "IS_ISSUE".equals(response.responseResult()))) {
+						confirmedRecords.add(recordId);
+					} else if (responses.stream().anyMatch(response -> "POTENTIAL_ISSUE".equals(response.responseResult()))) {
+						potentialRecords.add(recordId);
+					}
+				} else if (test.getValue() == TestType.VALIDATION
+						&& responses.stream().anyMatch(response -> isProblem(TestType.VALIDATION, response))) {
+					findings++;
+					nonCompliantRecords.add(recordId);
+				}
+			}
+		}
+		confirmed = confirmedRecords.size();
+		potential = potentialRecords.size();
+		List<TestFindings> causes = testFindings().stream()
+				.filter(row -> row.type() == TestType.VALIDATION && row.latest().problems() > 0)
+				.limit(MAX_HIGH_IMPACT_ITEMS)
+				.toList();
+		List<AmendmentGroup> amendments = amendmentGroups().stream()
+				.sorted(Comparator.comparingInt(AmendmentGroup::improvedRecords).reversed()
+						.thenComparing(Comparator.comparingInt(AmendmentGroup::recordCount).reversed()))
+				.limit(MAX_HIGH_IMPACT_ITEMS)
+				.toList();
+		return new HighImpact(confirmed, potential, findings, nonCompliantRecords.size(), causes, amendments,
+				consistentlyEmptyTerms());
+	}
+
+	/**
+	 * Counts, per record, the VALIDATION and ISSUE tests reporting a problem in one phase.
+	 *
+	 * @param phase the phase
+	 * @return problem counts keyed by record identifier
+	 */
+	private Map<String, Integer> problemCountsByRecord(Phase phase) {
+		Map<String, TestType> tests = new LinkedHashMap<>();
+		perRecordResponses().forEach(response -> tests.putIfAbsent(response.testId(), response.testType()));
+		Map<String, Integer> counts = new LinkedHashMap<>();
+		tests.forEach((testId, type) -> {
+			if (type != TestType.VALIDATION && type != TestType.ISSUE) {
+				return;
+			}
+			for (String recordId : recordsById.keySet()) {
+				if (recordLevel(testId, phase, recordId).stream().anyMatch(response -> isProblem(type, response))) {
+					counts.merge(recordId, 1, Integer::sum);
+				}
+			}
+		});
+		return counts;
 	}
 
 	/**
@@ -799,10 +875,27 @@ final class ReportDigest {
 	 * @param originalValue the value in the input, {@code ""} when empty
 	 * @param proposedValue the proposed value
 	 * @param recordCount the records the proposal applies to
+	 * @param improvedRecords of those, the records with fewer problems after amendment than before
 	 * @param exampleRecords a few of those records
 	 */
 	record AmendmentGroup(String testLabel, String term, String originalValue, String proposedValue, int recordCount,
-			List<String> exampleRecords) {
+			int improvedRecords, List<String> exampleRecords) {
+	}
+
+	/**
+	 * The handful of findings most worth acting on first.
+	 *
+	 * @param confirmedIssueRecords records with an IS_ISSUE result after amendment
+	 * @param potentialIssueRecords records with a POTENTIAL_ISSUE result after amendment
+	 * @param nonComplianceFindings NOT_COMPLIANT record-level validation results after amendment
+	 * @param recordsWithNonCompliance records with at least one of those
+	 * @param topCauses the validations with the most non-compliant records, most first
+	 * @param topAmendments the amendment proposals that improved the most records, most first
+	 * @param emptyTerms the information elements empty in every record
+	 */
+	record HighImpact(int confirmedIssueRecords, int potentialIssueRecords, int nonComplianceFindings,
+			int recordsWithNonCompliance, List<TestFindings> topCauses, List<AmendmentGroup> topAmendments,
+			List<EmptyTerm> emptyTerms) {
 	}
 
 	/**
