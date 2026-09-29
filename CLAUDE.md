@@ -134,6 +134,17 @@ understanding how the stages connect — read its class Javadoc first. The pipel
    carries a `taxonID`. Selecting an extension logs a warning: it is read standalone, **not**
    joined to its core rows — see item 3 under "Significant work yet to be done".
 
+   **Synthetic and modified data markers.** `SyntheticDataDetector` scans the raw input rows (grain
+   table plus related rows, before view mapping) for the record-level markers of the BDQ "Guide to
+   Marking and Identifying Synthetic and Modified Data" (`collectionCode` "Synthetic Example" /
+   "Modified Example", the guide's two `collectionID` UUIDs, `relationshipOfResource` "source for
+   modified example record", `example.org` institution code/ID), counting each record once under its
+   strongest marker. The result (`SyntheticDataMarkers`) rides on `DatasetInputDescription`
+   (`WorkbenchFacade.prepare` scans itself if a custom `IngestService` did not) and is reported
+   wherever the input is summarized: a warning atop the structured HTML/Markdown reports and the
+   text summary, a run-metadata line in each, counts plus `rdfs:comment` on the RDF report, the GUI
+   preflight summary, and the CLI completion output.
+
    Record IDs come from the descriptor's declared key (`<id index>`, `schema.primaryKey`), else
    the selected table's conventional identifier for its row type (`occurrenceID`/`taxonID`/
    `eventID`), else `id`/`occurrenceID`, else a synthesized `row-<n>`. A column that is present

@@ -309,12 +309,18 @@ public final class BdqWorkbenchApplication {
     }
 
     /**
-     * Writes a one-line completion summary for a finished run.
+     * Writes a one-line completion summary for a finished run, preceded by a warning when the
+     * input contains records marked as synthetic, modified, or example data.
      *
      * @param summary the execution summary produced by the run
      * @param out stream to write the summary line to
      */
     static void render(ExecutionSummary summary, PrintStream out) {
+        org.filteredpush.bdq_workbench.model.SyntheticDataMarkers markers =
+                summary.dataset().inputDescription().syntheticMarkers();
+        if (markers.found()) {
+            out.println("WARNING: " + markers.summaryLine() + ". " + markers.warning());
+        }
         out.println("BDQ Workbench completed: " + summary.responses().size() + " outcomes");
     }
 

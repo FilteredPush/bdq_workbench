@@ -3741,7 +3741,14 @@ final class BdqWorkbenchGui {
      * @param filterSummary the filter outcome to describe
      */
     private static void appendRecordFilterSummary(StringBuilder builder, RecordFilterSummary filterSummary) {
+        org.filteredpush.bdq_workbench.model.SyntheticDataMarkers markers =
+                filterSummary.filteredDataset().inputDescription().syntheticMarkers();
+        if (markers.found()) {
+            builder.append("WARNING: ").append(markers.summaryLine()).append(".\n")
+                    .append(markers.warning()).append("\n\n");
+        }
         builder.append("Input records loaded: ").append(filterSummary.originalRecordCount()).append('\n');
+        builder.append("Synthetic or modified example data: ").append(markers.summaryLine()).append('\n');
         builder.append("Records selected for execution: ").append(filterSummary.filteredRecordCount()).append('\n');
         builder.append("Records excluded by filters: ").append(filterSummary.excludedRecordCount()).append('\n');
         builder.append("Active record filters:\n");

@@ -188,4 +188,19 @@ class BdqWorkbenchApplicationTest {
     private static PrintStream printStream(ByteArrayOutputStream buffer) {
         return new PrintStream(buffer);
     }
+
+    @Test
+    void completionOutputWarnsAboutSyntheticInput() {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        org.filteredpush.bdq_workbench.model.ExecutionSummary summary = new org.filteredpush.bdq_workbench.model.ExecutionSummary(
+                java.util.List.of(), null, new org.filteredpush.bdq_workbench.model.RecordDataset(java.util.List.of(),
+                        java.util.List.of(), org.filteredpush.bdq_workbench.model.DatasetInputDescription.none()
+                                .withSyntheticMarkers(new org.filteredpush.bdq_workbench.model.SyntheticDataMarkers(
+                                        2, 2, 0, 0, java.util.List.of("s1", "s2")))));
+
+        BdqWorkbenchApplication.render(summary, printStream(out));
+
+        assertThat(out.toString()).startsWith("WARNING: 2 of 2 input record(s) are marked as synthetic or modified "
+                + "example data (2 wholly synthetic).").contains("BDQ Workbench completed: 0 outcomes");
+    }
 }

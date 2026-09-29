@@ -28,6 +28,7 @@ import org.filteredpush.bdq_workbench.model.DatasetView;
 import org.filteredpush.bdq_workbench.model.DatasetViewCardinalityPolicy;
 import org.filteredpush.bdq_workbench.model.RecordDataset;
 import org.filteredpush.bdq_workbench.model.RecordGraph;
+import org.filteredpush.bdq_workbench.model.SyntheticDataMarkers;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -182,7 +183,22 @@ public class DefaultIngestService implements IngestService {
         String tableName = requestedTable == null || requestedTable.isBlank()
                 ? inputPath.getFileName().toString()
                 : requestedTable;
-        return dataset.withInputDescription(DatasetInputDescriber.singleTable(tableName, dataset));
+        return withMarkers(dataset.withInputDescription(DatasetInputDescriber.singleTable(tableName, dataset)),
+                SyntheticDataDetector.scan(dataset));
+    }
+
+    /**
+     * Attaches a synthetic-data scan to a dataset's input description.
+     *
+     * @param dataset the ingested dataset
+     * @param markers the scan of its raw input rows
+     * @return the dataset carrying the scan
+     */
+    private static RecordDataset withMarkers(RecordDataset dataset, SyntheticDataMarkers markers) {
+        if (markers.found()) {
+            LOG.warn("Input data: {}", markers.summaryLine());
+        }
+        return dataset.withInputDescription(dataset.inputDescription().withSyntheticMarkers(markers));
     }
 
     /**
@@ -214,11 +230,11 @@ public class DefaultIngestService implements IngestService {
         datasetViewIO.validateCompatibility(view, relational.schema());
         ViewFlattenResult flattened = viewFlattener.flatten(relational, view);
         logDiagnostics(relational.diagnostics(), flattened.diagnostics());
-        return flattened.dataset().withInputDescription(DatasetInputDescriber.flattened(
+        return withMarkers(flattened.dataset().withInputDescription(DatasetInputDescriber.flattened(
                 relational,
                 view,
                 "dataset view file " + datasetViewPath,
-                flattened.dataset().records().size()));
+                flattened.dataset().records().size())), SyntheticDataDetector.scanGraphs(relational.graphs()));
     }
 
     /**
@@ -247,18 +263,19 @@ public class DefaultIngestService implements IngestService {
                         relational.coreTable());
             }
             List<CanonicalRecord> rows = relational.graphs().stream().map(RecordGraph::core).toList();
-            return new RecordDataset(rows, List.of(), DatasetInputDescriber.structured(relational, ""));
+            return withMarkers(new RecordDataset(rows, List.of(), DatasetInputDescriber.structured(relational, "")),
+                    SyntheticDataDetector.scanGraphs(relational.graphs()));
         }
         DatasetView view = AutomaticDatasetViews.build(relational, joinPolicies, joinPolicyResolver);
         LOG.info("Built dataset view over grain table {} with joins {}", view.grainTable(),
                 AutomaticDatasetViews.describePolicies(view));
         ViewFlattenResult flattened = viewFlattener.flatten(relational, view);
         logDiagnostics(relational.diagnostics(), flattened.diagnostics());
-        return flattened.dataset().withInputDescription(DatasetInputDescriber.flattened(
+        return withMarkers(flattened.dataset().withInputDescription(DatasetInputDescriber.flattened(
                 relational,
                 view,
                 "automatic dataset view (" + AutomaticDatasetViews.describePolicies(view) + ")",
-                flattened.dataset().records().size()));
+                flattened.dataset().records().size())), SyntheticDataDetector.scanGraphs(relational.graphs()));
     }
 
     private void logDiagnostics(List<String>... groups) {

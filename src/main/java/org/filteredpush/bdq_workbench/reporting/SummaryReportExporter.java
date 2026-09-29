@@ -88,7 +88,14 @@ public class SummaryReportExporter implements ReportExporter {
     public static String renderSummaryText(String title, ExecutionSummary executionSummary) {
         ExecutionResultSummary summary = ExecutionResultSummary.from(executionSummary);
         StringBuilder builder = new StringBuilder(title).append('\n');
+        org.filteredpush.bdq_workbench.model.SyntheticDataMarkers markers =
+                executionSummary.dataset().inputDescription().syntheticMarkers();
+        if (markers.found()) {
+            builder.append("WARNING: ").append(markers.summaryLine()).append(".\n")
+                    .append(markers.warning()).append("\n\n");
+        }
         appendExecutionContext(builder, executionSummary.metadata());
+        builder.append("Synthetic or modified example data: ").append(markers.summaryLine()).append('\n');
         appendCountExplanation(builder);
         appendPhaseCounts(builder, summary.phaseCounts());
         appendCountSection(builder, "By response status", summary.responseStatusCounts());

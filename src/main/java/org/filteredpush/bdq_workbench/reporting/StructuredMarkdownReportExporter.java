@@ -37,6 +37,7 @@ import org.filteredpush.bdq_workbench.model.DatasetInputDescription;
 import org.filteredpush.bdq_workbench.model.ExecutionSummary;
 import org.filteredpush.bdq_workbench.model.Response;
 import org.filteredpush.bdq_workbench.model.SubjectRef;
+import org.filteredpush.bdq_workbench.model.SyntheticDataMarkers;
 
 /**
  * Exports a human-readable Markdown report for flat and structured results.
@@ -110,6 +111,14 @@ public class StructuredMarkdownReportExporter implements ReportExporter {
 		}
 
 		StringBuilder builder = new StringBuilder("# BDQ Workbench Structured Report\n\n");
+		SyntheticDataMarkers markers = summary.dataset().inputDescription().syntheticMarkers();
+		if (markers.found()) {
+			builder.append("> **⚠ ")
+					.append(escape(markers.summaryLine()))
+					.append(".** ")
+					.append(escape(markers.warning()))
+					.append("\n\n");
+		}
 		appendRunMetadata(builder, summary, insights);
 		appendInputView(builder, summary, InputViewOverview.from(summary));
 		appendHighImpactActionItems(builder, insights);
@@ -138,6 +147,9 @@ public class StructuredMarkdownReportExporter implements ReportExporter {
 				.append('\n')
 				.append("- Input file: ")
 				.append(escape(summary.metadata().inputFile().isBlank() ? "<unknown>" : summary.metadata().inputFile()))
+				.append('\n')
+				.append("- Synthetic or modified example data: ")
+				.append(escape(summary.dataset().inputDescription().syntheticMarkers().summaryLine()))
 				.append('\n')
 				.append("- Run started: ")
 				.append(escape(formatInstant(insights.runStartedAt())))

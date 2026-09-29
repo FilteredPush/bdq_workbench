@@ -37,6 +37,7 @@ import org.filteredpush.bdq_workbench.model.DatasetInputDescription;
 import org.filteredpush.bdq_workbench.model.ExecutionSummary;
 import org.filteredpush.bdq_workbench.model.Response;
 import org.filteredpush.bdq_workbench.model.SubjectRef;
+import org.filteredpush.bdq_workbench.model.SyntheticDataMarkers;
 
 /**
  * Exports a human-readable HTML report for flat and structured results.
@@ -167,11 +168,14 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 				.append("    th, td { border: 1px solid #d0d7de; padding: 0.5rem; text-align: left; vertical-align: top; }\n")
 				.append("    th { background: #f6f8fa; }\n")
 				.append(MEASURE_CHART_CSS)
+				.append("    .data-warning { border: 2px solid #b42318; background: #fef3f2; color: #1f2328; padding: 0.75rem 1rem;"
+						+ " border-radius: 6px; margin: 1rem 0; }\n")
 				.append(InputViewDiagram.CSS)
 				.append("  </style>\n")
 				.append("</head>\n")
 				.append("<body>\n")
 				.append("<h1>BDQ Workbench Structured Report</h1>\n");
+		appendSyntheticDataWarning(builder, summary);
 		appendRunMetadata(builder, summary, insights);
 		appendInputView(builder, summary, InputViewOverview.from(summary));
 		appendHighImpactActionItems(builder, insights);
@@ -182,6 +186,25 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 		appendAggregateSection(builder, aggregateResponses);
 		builder.append("</body>\n</html>\n");
 		return builder.toString();
+	}
+
+	/**
+	 * Appends a prominent warning when the input contains records marked as synthetic, modified,
+	 * or example data.
+	 *
+	 * @param builder the report being built; appended to in place
+	 * @param summary the execution summary whose input description carries the scan
+	 */
+	private static void appendSyntheticDataWarning(StringBuilder builder, ExecutionSummary summary) {
+		SyntheticDataMarkers markers = summary.dataset().inputDescription().syntheticMarkers();
+		if (!markers.found()) {
+			return;
+		}
+		builder.append("<div class=\"data-warning\" role=\"alert\"><strong>⚠ ")
+				.append(escapeHtml(markers.summaryLine()))
+				.append(".</strong> ")
+				.append(escapeHtml(markers.warning()))
+				.append("</div>\n");
 	}
 
 	/**
@@ -203,6 +226,9 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 				.append("</li>\n")
 				.append("    <li><strong>Input file:</strong> ")
 				.append(escapeHtml(summary.metadata().inputFile().isBlank() ? "<unknown>" : summary.metadata().inputFile()))
+				.append("</li>\n")
+				.append("    <li><strong>Synthetic or modified example data:</strong> ")
+				.append(escapeHtml(summary.dataset().inputDescription().syntheticMarkers().summaryLine()))
 				.append("</li>\n")
 				.append("    <li><strong>Run started:</strong> ")
 				.append(escapeHtml(formatInstant(insights.runStartedAt())))

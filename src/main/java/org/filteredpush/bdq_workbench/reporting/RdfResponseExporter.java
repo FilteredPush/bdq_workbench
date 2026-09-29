@@ -168,6 +168,8 @@ public class RdfResponseExporter implements ReportExporter {
             reportInstance.addProperty(model.createProperty(rdfs("label")), useCaseLabel);
         }
 
+        addSyntheticDataMarkers(model, reportInstance, summary);
+
         Property containsResponse = model.createProperty(BDQFFDQ, "containsResponse");
         Map<ImplementationKey, Resource> implementations = new LinkedHashMap<>();
         Map<String, Resource> subjectTargets = new LinkedHashMap<>();
@@ -190,6 +192,34 @@ public class RdfResponseExporter implements ReportExporter {
         linkDerivedResponses(model, derivedResponses, detailResponses, recordsById, subjectTargets);
 
         RDFDataMgr.write(outputStream, model, Lang.TURTLE);
+    }
+
+    /**
+     * States on the report whether its input carried the BDQ markers for synthetic, modified, or
+     * example data, so a consumer of the RDF alone can tell the results do not describe actual
+     * biodiversity data.
+     *
+     * @param model the model to add statements to
+     * @param report the report resource
+     * @param summary the execution summary whose input description carries the scan
+     */
+    private static void addSyntheticDataMarkers(Model model, Resource report, ExecutionSummary summary) {
+        org.filteredpush.bdq_workbench.model.SyntheticDataMarkers markers =
+                summary.dataset().inputDescription().syntheticMarkers();
+        if (!markers.scanned()) {
+            return;
+        }
+        report.addLiteral(model.createProperty(BDQWB, "inputRecordsScannedForSyntheticMarkers"),
+                model.createTypedLiteral(markers.recordsScanned()));
+        report.addLiteral(model.createProperty(BDQWB, "inputSyntheticRecordCount"),
+                model.createTypedLiteral(markers.syntheticRecords()));
+        report.addLiteral(model.createProperty(BDQWB, "inputModifiedRecordCount"),
+                model.createTypedLiteral(markers.modifiedRecords()));
+        report.addLiteral(model.createProperty(BDQWB, "inputExampleInstitutionRecordCount"),
+                model.createTypedLiteral(markers.exampleInstitutionRecords()));
+        if (markers.found()) {
+            report.addProperty(model.createProperty(rdfs("comment")), markers.summaryLine() + ". " + markers.warning());
+        }
     }
 
     /**

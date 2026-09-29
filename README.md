@@ -230,6 +230,17 @@ Reports include:
 - `reports/bdq-report-xls.xlsx` Spreadsheet report produced via kurator-ffdq's `XLSXPostProcessor` (see below).
 - `reports/bdq-report-xls-unresolved.xlsx` Spreadsheet companion listing unresolved, unbound, and other sentinel-record responses excluded from the main per-record workbook.
 
+The input is checked for the record-level markers of the BDQ
+[Guide to Marking and Identifying Synthetic and Modified Data](https://rs.tdwg.org/bdq/doc/synthetic/):
+`collectionCode` "Synthetic Example" / "Modified Example", the guide's two `collectionID` UUIDs,
+`relationshipOfResource` "source for modified example record", and the `example.org`
+`institutionCode`/`institutionID`. The raw input rows are scanned (the grain table and its related
+rows, before any view mapping), so markers are found even when a view does not map those terms.
+When any record is marked, the structured HTML and Markdown reports open with a warning, the text
+summary starts with one, the RDF report carries the counts and an `rdfs:comment`, the GUI preflight
+summary and the CLI output show it too; every one of these also states the result ("none detected
+in N input record(s)") when nothing is marked.
+
 ## Distinct-value execution (test call reduction)
 
 A BDQ test is specified as a pure function of the Darwin Core terms it declares as input

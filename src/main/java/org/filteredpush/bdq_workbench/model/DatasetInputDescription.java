@@ -41,6 +41,8 @@ import java.util.List;
  * @param viewRelations the related tables the view included, relative to the grain table
  * @param grainMappedTerms for a view-built dataset, the terms mapped directly from the grain
  *     table; empty otherwise
+ * @param syntheticMarkers input records carrying the BDQ markers for synthetic, modified, or
+ *     example data, scanned from the raw input rows
  */
 public record DatasetInputDescription(
 		ViewMode viewMode,
@@ -50,10 +52,36 @@ public record DatasetInputDescription(
 		List<InputTable> tables,
 		List<RelationshipSchema> relationships,
 		List<ViewRelation> viewRelations,
-		List<String> grainMappedTerms) {
+		List<String> grainMappedTerms,
+		SyntheticDataMarkers syntheticMarkers) {
 
 	private static final DatasetInputDescription NONE = new DatasetInputDescription(
 			ViewMode.UNKNOWN, "", "", 0, List.of(), List.of(), List.of(), List.of());
+
+	/**
+	 * Creates a description with no synthetic-data scan.
+	 *
+	 * @param viewMode how the input tables were turned into execution records
+	 * @param viewSource human-readable origin of the view
+	 * @param grainTable the table whose rows define the execution records
+	 * @param viewRecordCount the number of records the view produced
+	 * @param tables every table the input offered
+	 * @param relationships every relationship discovered between input tables
+	 * @param viewRelations the related tables the view included
+	 * @param grainMappedTerms the terms mapped directly from the grain table
+	 */
+	public DatasetInputDescription(
+			ViewMode viewMode,
+			String viewSource,
+			String grainTable,
+			int viewRecordCount,
+			List<InputTable> tables,
+			List<RelationshipSchema> relationships,
+			List<ViewRelation> viewRelations,
+			List<String> grainMappedTerms) {
+		this(viewMode, viewSource, grainTable, viewRecordCount, tables, relationships, viewRelations, grainMappedTerms,
+				SyntheticDataMarkers.notScanned());
+	}
 
 	/**
 	 * Canonical constructor; copies list components defensively and substitutes defaults for
@@ -67,6 +95,18 @@ public record DatasetInputDescription(
 		relationships = List.copyOf(relationships == null ? List.of() : relationships);
 		viewRelations = List.copyOf(viewRelations == null ? List.of() : viewRelations);
 		grainMappedTerms = List.copyOf(grainMappedTerms == null ? List.of() : grainMappedTerms);
+		syntheticMarkers = syntheticMarkers == null ? SyntheticDataMarkers.notScanned() : syntheticMarkers;
+	}
+
+	/**
+	 * Returns a copy of this description carrying a synthetic-data scan result.
+	 *
+	 * @param markers the scan result
+	 * @return the copy
+	 */
+	public DatasetInputDescription withSyntheticMarkers(SyntheticDataMarkers markers) {
+		return new DatasetInputDescription(viewMode, viewSource, grainTable, viewRecordCount, tables, relationships,
+				viewRelations, grainMappedTerms, markers);
 	}
 
 	/**
