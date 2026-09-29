@@ -103,7 +103,7 @@ public class ViewFlattener {
 				provenance.put(mapping.term(), selected.cells());
 			}
 		}
-		return new CanonicalRecord(graph.core().id(), terms, provenance);
+		return new CanonicalRecord(graph.core().id(), terms, provenance, graph.core().sourceRow());
 	}
 
 	/**
@@ -146,7 +146,7 @@ public class ViewFlattener {
 			terms.put(mapping.term(), row.terms().getOrDefault(mapping.sourceColumn(), ""));
 			provenance.put(mapping.term(), sourceCells(row, sourceTable, mapping.sourceColumn(), mapping.term()));
 		}
-		return new CanonicalRecord(row.id(), terms, provenance);
+		return new CanonicalRecord(row.id(), terms, provenance, row.sourceRow());
 	}
 
 	/**

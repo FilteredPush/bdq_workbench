@@ -59,6 +59,8 @@ class DwcArchiveRelationalIngestTest {
 
 		assertThat(dataset.inputDescription().grainTable()).isEqualTo("occurrence.txt");
 		assertThat(dataset.records()).extracting(CanonicalRecord::id).containsExactly("occ-1", "occ-2", "occ-3");
+		assertThat(dataset.records()).extracting(record -> record.sourceRow().label())
+				.containsExactly("occurrence.txt line 2", "occurrence.txt line 3", "occurrence.txt line 4");
 		assertThat(dataset.records()).extracting(record -> record.terms().get("scientificName") + "@"
 				+ record.terms().get("eventDate") + "/" + record.terms().get("countryCode"))
 				.containsExactly("Abies balsamea@2020-06-01/CA", "Picea glauca@2020-06-01/CA",

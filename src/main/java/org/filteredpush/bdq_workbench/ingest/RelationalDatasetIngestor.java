@@ -398,7 +398,7 @@ public class RelationalDatasetIngestor {
 		for (int index = 0; index < rows.size(); index++) {
 			CanonicalRecord row = rows.get(index);
 			String rowRef = coreTable || uniqueIds ? row.id() : "row-" + (index + 1);
-			result.add(withTableProvenance(new CanonicalRecord(rowRef, row.terms(), row.provenanceByTerm()), tableName));
+			result.add(withTableProvenance(new CanonicalRecord(rowRef, row.terms(), row.provenanceByTerm(), row.sourceRow()), tableName));
 		}
 		return result;
 	}
@@ -407,7 +407,7 @@ public class RelationalDatasetIngestor {
 		Map<String, List<SourceCell>> provenance = new LinkedHashMap<>();
 		row.terms().forEach((term, value) -> provenance.put(term, List.of(
 				new SourceCell(tableName, tableName, row.id(), term, term))));
-		return new CanonicalRecord(row.id(), row.terms(), provenance);
+		return new CanonicalRecord(row.id(), row.terms(), provenance, row.sourceRow());
 	}
 
 	/**

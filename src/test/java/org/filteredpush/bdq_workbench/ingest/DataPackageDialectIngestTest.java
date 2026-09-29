@@ -631,6 +631,21 @@ class DataPackageDialectIngestTest {
 				""");
 	}
 
+	@Test
+	void recordsCarryTheirDataFileAndLineIncludingMultiLineValues(@TempDir Path tempDir) throws Exception {
+		writeFile(tempDir, "occurrence.csv", StandardCharsets.UTF_8,
+				"occurrenceID,locality\nocc-1,\"first line\nsecond line\"\nocc-2,plain\n");
+		Path manifest = writeManifest(tempDir, """
+				{ "resources": [ { "name": "occurrence", "path": "occurrence.csv",
+				  "schema": { "fields": [ { "name": "occurrenceID" }, { "name": "locality" } ] } } ] }
+				""");
+
+		RecordDataset dataset = new DataPackageIngestor().ingest(manifest);
+
+		assertThat(dataset.records()).extracting(record -> record.sourceRow().label())
+				.containsExactly("occurrence.csv line 2", "occurrence.csv line 4");
+	}
+
 	/**
 	 * Writes a {@code datapackage.json} manifest into a directory.
 	 *

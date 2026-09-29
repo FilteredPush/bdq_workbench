@@ -249,7 +249,7 @@ final class SubjectExpander {
 				}
 			}
 		}
-		return terms == null ? core : new CanonicalRecord(core.id(), terms, provenance);
+		return terms == null ? core : new CanonicalRecord(core.id(), terms, provenance, core.sourceRow());
 	}
 
 	/**
@@ -262,7 +262,7 @@ final class SubjectExpander {
 	private CanonicalRecord withBlankFields(CanonicalRecord base, List<String> fields) {
 		Map<String, String> terms = new LinkedHashMap<>(base.terms());
 		fields.forEach(field -> terms.putIfAbsent(field, ""));
-		return new CanonicalRecord(base.id(), terms, base.provenanceByTerm());
+		return new CanonicalRecord(base.id(), terms, base.provenanceByTerm(), base.sourceRow());
 	}
 
 	/**
@@ -277,7 +277,7 @@ final class SubjectExpander {
 		terms.putAll(governingRow.terms());
 		Map<String, List<SourceCell>> provenance = new LinkedHashMap<>(base.provenanceByTerm());
 		governingRow.provenanceByTerm().forEach(provenance::put);
-		return new CanonicalRecord(base.id(), terms, provenance);
+		return new CanonicalRecord(base.id(), terms, provenance, base.sourceRow());
 	}
 
 	/**
