@@ -1,7 +1,8 @@
 /** CachedResourceResolver.java
  *
  * Resolves local file paths or remote HTTP(S) URLs to a local path, downloading and caching
- * remote resources on disk so repeated GUI/CLI runs avoid re-downloading them.
+ * remote resources on disk so repeated GUI/CLI runs avoid re-downloading them, while still
+ * picking up a remote resource that has changed since it was cached.
  *
  * Copyright 2026 President and Fellows of Harvard College
  *
@@ -28,8 +29,16 @@ import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.FileTime;
 import java.time.Duration;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.Locale;
+import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -38,14 +47,37 @@ import org.slf4j.LoggerFactory;
  *
  * <p>Used by the GUI (e.g. for use case files loaded from a URL) to accept either a local file
  * path or an {@code http://}/{@code https://} URL: local paths are validated and returned
- * as-is, while remote URLs are downloaded once into a per-user cache directory
- * ({@code ~/.bdq-workbench/cache}) and served from that cache on subsequent calls.
+ * as-is, while remote URLs are downloaded into a per-user cache directory
+ * ({@code ~/.bdq-workbench/cache}).
+ *
+ * <p>A cached copy is not trusted forever: the first time a resolver is asked for a cached URL
+ * it revalidates the copy with a conditional GET ({@code If-Modified-Since}, from the cached
+ * file's modification time, which is set to the server's {@code Last-Modified} on download).
+ * {@code 304 Not Modified} keeps the copy; a successful response replaces it, so a republished
+ * use case or test definition file is picked up on the next run. If the server cannot be
+ * reached or answers with an error, the cached copy is used and a warning logged, so runs keep
+ * working offline. Later calls on the same resolver reuse the copy without asking again.
  */
 final class CachedResourceResolver {
     private static final Logger LOG = LoggerFactory.getLogger(CachedResourceResolver.class);
 
+    /** How long to wait for a remote resource with no cached copy to download before giving up. */
+    private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(60);
+
+    /**
+     * How long to wait when checking a cached copy for updates. Shorter than
+     * {@link #REQUEST_TIMEOUT}, since the cached copy is a usable fallback.
+     */
+    private static final Duration REVALIDATION_TIMEOUT = Duration.ofSeconds(15);
+
+    /** HTTP status a server returns when a conditional GET finds the resource unchanged. */
+    private static final int HTTP_NOT_MODIFIED = 304;
+
     private final Path cacheDir;
     private final HttpClient httpClient;
+
+    /** URLs whose cached copy this resolver has already revalidated or freshly downloaded. */
+    private final Set<String> checkedUrls = ConcurrentHashMap.newKeySet();
 
     /**
      * Creates a resolver using the default per-user cache directory and a default
@@ -97,36 +129,27 @@ final class CachedResourceResolver {
     }
 
     /**
-     * Downloads {@code url} into the cache directory (unless already cached) and returns the
-     * cached path. Downloads are written to a temporary file first and atomically moved into
-     * place to avoid serving a partially-written cache entry.
+     * Returns the cached copy of {@code url}, downloading it if there is no cached copy yet and
+     * revalidating an existing copy the first time this resolver is asked for it.
      *
      * @param url the remote resource URL
      * @param cacheFileName the file name to cache the download under
      * @return the local cached path
-     * @throws AppException if the download fails, returns a non-2xx status, or is interrupted
+     * @throws AppException if there is no cached copy and the download fails, returns a non-2xx
+     *     status, or is interrupted
      */
     private Path resolveRemote(String url, String cacheFileName) {
         try {
             Files.createDirectories(cacheDir);
             Path cached = cacheDir.resolve(cacheFileName);
-            if (Files.exists(cached) && Files.size(cached) > 0L) {
+            if (!Files.exists(cached) || Files.size(cached) == 0L) {
+                download(url, cached);
+            } else if (checkedUrls.contains(url)) {
                 LOG.debug("Using cached remote resource: {} -> {}", url, cached.toAbsolutePath());
-                return cached;
+            } else {
+                revalidate(url, cached);
             }
-            LOG.debug("Downloading remote resource: {}", url);
-            HttpRequest request = HttpRequest.newBuilder(URI.create(url))
-                    .GET()
-                    .timeout(Duration.ofSeconds(60))
-                    .build();
-            HttpResponse<byte[]> response = httpClient.send(request, HttpResponse.BodyHandlers.ofByteArray());
-            if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                throw new AppException("Failed to download " + url + " (HTTP " + response.statusCode() + ")");
-            }
-            Path temp = Files.createTempFile(cacheDir, "bdq-", ".tmp");
-            Files.write(temp, response.body());
-            Files.move(temp, cached, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-            LOG.debug("Cached remote resource: {} -> {}", url, cached.toAbsolutePath());
+            checkedUrls.add(url);
             return cached;
         } catch (IOException e) {
             throw new AppException("Failed to cache resource from " + url, e);
@@ -134,6 +157,109 @@ final class CachedResourceResolver {
             Thread.currentThread().interrupt();
             throw new AppException("Interrupted while downloading resource from " + url, e);
         }
+    }
+
+    /**
+     * Downloads {@code url} into {@code cached}, with no cached copy to fall back on.
+     *
+     * @param url the remote resource URL
+     * @param cached the cache file to write
+     * @throws IOException if the request or the cache write fails
+     * @throws InterruptedException if the request is interrupted
+     * @throws AppException if the server returns a non-2xx status
+     */
+    private void download(String url, Path cached) throws IOException, InterruptedException {
+        LOG.debug("Downloading remote resource: {}", url);
+        HttpResponse<byte[]> response = httpClient.send(
+                HttpRequest.newBuilder(URI.create(url)).GET().timeout(REQUEST_TIMEOUT).build(),
+                HttpResponse.BodyHandlers.ofByteArray());
+        if (!isSuccess(response.statusCode())) {
+            throw new AppException("Failed to download " + url + " (HTTP " + response.statusCode() + ")");
+        }
+        store(response, cached);
+        LOG.debug("Cached remote resource: {} -> {}", url, cached.toAbsolutePath());
+    }
+
+    /**
+     * Asks the server whether {@code url} changed since {@code cached} was written, replacing the
+     * cached copy if it did. Failures to reach the server, and error responses, leave the cached
+     * copy in place with a warning rather than failing the run.
+     *
+     * @param url the remote resource URL
+     * @param cached the existing, non-empty cache file
+     * @throws IOException if the cached file's modification time cannot be read or the updated
+     *     copy cannot be written
+     * @throws InterruptedException if the request is interrupted
+     */
+    private void revalidate(String url, Path cached) throws IOException, InterruptedException {
+        String ifModifiedSince = DateTimeFormatter.RFC_1123_DATE_TIME.format(
+                Files.getLastModifiedTime(cached).toInstant().atZone(ZoneOffset.UTC));
+        HttpRequest request = HttpRequest.newBuilder(URI.create(url))
+                .GET()
+                .timeout(REVALIDATION_TIMEOUT)
+                .header("If-Modified-Since", ifModifiedSince)
+                .build();
+        HttpResponse<byte[]> response;
+        try {
+            response = httpClient.send(request, HttpResponse.BodyHandlers.ofByteArray());
+        } catch (IOException e) {
+            LOG.warn("Could not check {} for updates ({}); using cached copy {}", url, e.toString(), cached);
+            return;
+        }
+        if (response.statusCode() == HTTP_NOT_MODIFIED) {
+            LOG.debug("Cached remote resource is current: {} -> {}", url, cached.toAbsolutePath());
+        } else if (isSuccess(response.statusCode())) {
+            store(response, cached);
+            LOG.info("Updated cached copy of changed remote resource: {} -> {}", url, cached.toAbsolutePath());
+        } else {
+            LOG.warn("Could not check {} for updates (HTTP {}); using cached copy {}",
+                    url, response.statusCode(), cached);
+        }
+    }
+
+    /**
+     * Writes a response body to the cache file via a temporary file moved atomically into place,
+     * so a partially-written cache entry is never served, then stamps the file with the server's
+     * {@code Last-Modified} time (when given) for the next revalidation.
+     *
+     * @param response the successful response to store
+     * @param cached the cache file to write
+     * @throws IOException if the cache write fails
+     */
+    private void store(HttpResponse<byte[]> response, Path cached) throws IOException {
+        Path temp = Files.createTempFile(cacheDir, "bdq-", ".tmp");
+        Files.write(temp, response.body());
+        Files.move(temp, cached, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        Optional<FileTime> lastModified = lastModified(response);
+        if (lastModified.isPresent()) {
+            Files.setLastModifiedTime(cached, lastModified.get());
+        }
+    }
+
+    /**
+     * Reads a response's {@code Last-Modified} header.
+     *
+     * @param response the response to inspect
+     * @return the header's time, or empty if it is absent or not a valid RFC 1123 date
+     */
+    private static Optional<FileTime> lastModified(HttpResponse<?> response) {
+        return response.headers().firstValue("Last-Modified").flatMap(value -> {
+            try {
+                return Optional.of(FileTime.from(
+                        ZonedDateTime.parse(value, DateTimeFormatter.RFC_1123_DATE_TIME).toInstant()));
+            } catch (DateTimeParseException e) {
+                LOG.debug("Ignoring unparseable Last-Modified header: {}", value);
+                return Optional.empty();
+            }
+        });
+    }
+
+    /**
+     * @param statusCode an HTTP status code
+     * @return {@code true} for a 2xx status
+     */
+    private static boolean isSuccess(int statusCode) {
+        return statusCode >= 200 && statusCode < 300;
     }
 
     /**
