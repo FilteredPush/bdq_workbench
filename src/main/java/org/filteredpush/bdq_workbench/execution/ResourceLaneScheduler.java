@@ -55,7 +55,8 @@ import org.slf4j.LoggerFactory;
  * the worker, and dispatches again. With the service's round-robin submission order (see
  * {@link FairDispatchOrder}) this keeps work spread across bindings as well as across lanes.
  *
- * <p><b>Adaptive limits.</b> When {@link ExecutionPolicy#adaptiveThrottlingEnabled()}, every
+ * <p><b>Adaptive limits.</b> When {@link ExecutionPolicy#adaptiveThrottlingEnabled()} (and lane
+ * scheduling is enabled, since otherwise every binding shares one lane), every
  * response is classified by {@link ResponseFailureClassifier}. A transient or ambiguous external
  * failure halves the lane's limit (minimum 1) and, for a lane not configured explicitly, lowers the
  * ceiling it may grow back to to the external default: an unclassified or hinted-local lane that
@@ -525,7 +526,8 @@ final class ResourceLaneScheduler implements AutoCloseable {
 			statistics.externalFailure(lane.key, task.binding.testId());
 			lane.lastDiagnostic = diagnostic(response);
 		}
-		if (!policy.adaptiveThrottlingEnabled()) {
+		if (!policy.adaptiveThrottlingEnabled() || !policy.laneSchedulingEnabled()) {
+			/* Without lanes every binding shares one lane: one failing service must not throttle all. */
 			return category;
 		}
 		if (category == FailureCategory.COMPLETED) {

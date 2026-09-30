@@ -104,6 +104,24 @@ class AdaptiveLaneSchedulerTest {
 	}
 
 	@Test
+	void withoutLanesTheSharedLaneIsNeverThrottledOrOpened() throws Exception {
+		ExecutionPolicy policy = ExecutionPolicy.builder().laneSchedulingEnabled(false).circuitFailureThreshold(1).build();
+		ResourceAssignment shared = new ResourceAssignment(ExecutionResourceKey.UNRESTRICTED, ResourceClass.UNCLASSIFIED,
+				"lane scheduling disabled", 4, true);
+		try (ResourceLaneScheduler scheduler = scheduler(policy, 4)) {
+			for (int i = 0; i < 5; i++) {
+				run(scheduler, shared, TRANSIENT);
+			}
+			assertThat(scheduler.currentLimit(ExecutionResourceKey.UNRESTRICTED)).isEqualTo(4);
+			assertThat(scheduler.circuitState(ExecutionResourceKey.UNRESTRICTED))
+					.isEqualTo(ResourceLaneScheduler.CircuitState.CLOSED);
+		}
+		assertThat(events).isEmpty();
+		assertThat(statistics.snapshot().resource(ExecutionResourceKey.UNRESTRICTED).orElseThrow().externalFailures())
+				.as("failures are still counted").isEqualTo(5);
+	}
+
+	@Test
 	void configurationFailuresNeitherThrottleNorOpenTheCircuit() throws Exception {
 		ExecutionPolicy policy = ExecutionPolicy.builder().circuitFailureThreshold(1).build();
 		try (ResourceLaneScheduler scheduler = scheduler(policy, 4)) {

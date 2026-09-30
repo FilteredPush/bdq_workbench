@@ -353,7 +353,7 @@ Settings (`application.properties`, overridable like any other setting):
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `bdq.threads` | `4` | Worker pool size (unchanged) |
-| `bdq.execution.lanes` | `true` | Per-resource lanes (`false`: one shared lane using the whole pool) |
+| `bdq.execution.lanes` | `true` | Per-resource lanes (`false`: one shared lane using the whole pool, with no adaptive throttling or circuit breaking) |
 | `bdq.execution.concurrency.external` | `2` | Limit of a likely external lane (CLI `--external-concurrency`) |
 | `bdq.execution.concurrency.unclassified` | `4` | Limit of an unclassified lane |
 | `bdq.execution.concurrency.local` | `0` | Limit of a local lane; `0` = the whole worker pool |
