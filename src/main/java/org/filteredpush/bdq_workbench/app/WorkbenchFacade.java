@@ -31,6 +31,7 @@ import java.util.Set;
 import org.filteredpush.bdq_workbench.filtering.DefaultRecordFilterService;
 import org.filteredpush.bdq_workbench.filtering.RecordFilterService;
 import org.filteredpush.bdq_workbench.execution.TestExecutionService;
+import org.filteredpush.bdq_workbench.model.BuiltInMeasureSpec;
 import org.filteredpush.bdq_workbench.model.BindingReview;
 import org.filteredpush.bdq_workbench.model.BindingStatus;
 import org.filteredpush.bdq_workbench.model.DarwinCoreTermResolver;
@@ -393,6 +394,10 @@ public class WorkbenchFacade {
     private static String bindingDeveloperExplanation(BindingReview review) {
         if (review.bindingStatus() == BindingStatus.TERM_MISSING || hasMissingInputTermDiagnostic(review)) {
             return "One or more Darwin Core information elements were absent from the filtered dataset. This binding will execute with empty-string values for those terms, so review the dataset table selection, record filters, ingest mapping, and whether the test expects fields carried only in another table.";
+        }
+        if (review.implementationStatus() == ImplementationStatus.MISSING
+                && BuiltInMeasureSpec.from(review.test()).isPresent()) {
+            return "This multi-record measure is computed by the workbench from the responses of its target validation test, and that test is not in the use case's ValidationPolicy. No implementation is missing: the use case's policies are inconsistent. Add the target validation to the use case's ValidationPolicy upstream.";
         }
         if (review.implementationStatus() == ImplementationStatus.MISSING) {
             return "No discovered implementation matched this policy test. Verify the dependency is on the classpath, the discovery package includes it, and its @Provides/@ProvidesVersion identifiers match the RDF test definition.";

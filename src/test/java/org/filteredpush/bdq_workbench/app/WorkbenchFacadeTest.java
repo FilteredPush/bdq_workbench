@@ -105,11 +105,13 @@ class WorkbenchFacadeTest {
                     new TestDefinition("urn:test:binding", "Binding problem", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of());
             TestDefinition downstreamMeasure =
                     new TestDefinition("urn:test:measure", "MULTIRECORD_MEASURE_QA_BINDING", TestType.MEASURE, Phase.PRE_AMENDMENT, Map.of());
+            TestDefinition measureWithoutTarget = new TestDefinition(
+                    "urn:test:qa-target", "MULTIRECORD_MEASURE_QA_LICENSE_NOTEMPTY", TestType.MEASURE, Phase.PRE_AMENDMENT, Map.of());
             TestDefinition missingTerm =
                     new TestDefinition("urn:test:term", "Missing term", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of());
             TestBindingResult bindingResult = new TestBindingResult(
                     List.of(),
-                    List.of(missingImplementation, bindingProblem, downstreamMeasure, missingTerm),
+                    List.of(missingImplementation, bindingProblem, downstreamMeasure, measureWithoutTarget, missingTerm),
                     List.of(
                             new BindingReview(
                                     missingImplementation,
@@ -138,6 +140,15 @@ class WorkbenchFacadeTest {
                                     Map.of(),
                                     true,
                                     List.of("Built-in multi-record measure target is not runnable")),
+                            new BindingReview(
+                                    measureWithoutTarget,
+                                    ImplementationStatus.MISSING,
+                                    BindingStatus.UNBOUND,
+                                    ParameterizationCapability.DEFAULT_ONLY,
+                                    "",
+                                    Map.of(),
+                                    true,
+                                    List.of("Target validation test VALIDATION_LICENSE_NOTEMPTY is not in the use case's ValidationPolicy")),
                             new BindingReview(
                                     missingTerm,
                                     ImplementationStatus.FOUND,
@@ -193,13 +204,16 @@ class WorkbenchFacadeTest {
             assertThat(diagnostics).contains("Problem summary");
             assertThat(diagnostics).contains("Single-record test errors: 1");
             assertThat(diagnostics).contains("Single-record test binding problems: 1");
-            assertThat(diagnostics).contains("Multi-record measure downstream errors/binding problems: 1");
+            assertThat(diagnostics).contains("Multi-record measure downstream errors/binding problems: 2");
             assertThat(diagnostics).contains("Missing input term problems: 1");
             assertThat(diagnostics).contains("Single-record test errors");
             assertThat(diagnostics).contains("Single-record test binding problems");
             assertThat(diagnostics).contains("Multi-record measure downstream errors/binding problems");
             assertThat(diagnostics).contains("Missing input term problems");
             assertThat(diagnostics).contains("No discovered implementation matched this policy test");
+            assertThat(diagnostics).contains("No implementation is missing: the use case's policies are inconsistent");
+            assertThat(diagnostics.indexOf("No implementation is missing"))
+                    .isGreaterThan(diagnostics.indexOf("urn:test:qa-target"));
             assertThat(diagnostics).contains("One or more Darwin Core information elements were absent from the filtered dataset");
             assertThat(diagnostics.indexOf("urn:test:missing")).isLessThan(diagnostics.indexOf("urn:test:binding"));
             assertThat(diagnostics.indexOf("urn:test:binding")).isLessThan(diagnostics.indexOf("urn:test:measure"));
