@@ -27,10 +27,12 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.PriorityQueue;
+import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
@@ -108,6 +110,8 @@ final class ResourceLaneScheduler implements AutoCloseable {
 	private final ExecutionStatisticsCollector statistics;
 	private final RetryPolicy retries;
 	private final Set<Task> retryPending = ConcurrentHashMap.newKeySet();
+	private final Queue<Runnable> pendingEvents = new ConcurrentLinkedQueue<>();
+	private final Object eventDeliveryLock = new Object();
 	private final Map<ExecutionResourceKey, Lane> lanes = new LinkedHashMap<>();
 	private long sequence;
 	private int inFlight;
@@ -384,6 +388,8 @@ final class ResourceLaneScheduler implements AutoCloseable {
 				drain(after);
 			}
 		}
+		/* Lane events and follow-on work first, so they are visible once the result completes. */
+		runAll(after);
 		if (!retrying) {
 			if (failure != null) {
 				task.result.completeExceptionally(failure);
@@ -391,7 +397,6 @@ final class ResourceLaneScheduler implements AutoCloseable {
 				task.result.complete(settled);
 			}
 		}
-		runAll(after);
 	}
 
 	/**
@@ -670,7 +675,26 @@ final class ResourceLaneScheduler implements AutoCloseable {
 			case CIRCUIT_OPENED, LANE_UNAVAILABLE, RETRY_EXHAUSTED -> LOG.warn("Resource lane {} phase={}", event, phase);
 			default -> LOG.info("Resource lane {} phase={}", event, phase);
 		}
-		after.add(() -> events.accept(phase, event));
+		pendingEvents.add(() -> events.accept(phase, event));
+		after.add(this::deliverEvents);
+	}
+
+	/**
+	 * Delivers queued lane events to the sink, one thread at a time and in the order they were
+	 * emitted under {@link #lock}, so listeners never see (for example) a circuit close before the
+	 * half-open probe that closed it. Must not be called while holding {@link #lock}.
+	 */
+	private void deliverEvents() {
+		synchronized (eventDeliveryLock) {
+			Runnable next;
+			while ((next = pendingEvents.poll()) != null) {
+				try {
+					next.run();
+				} catch (RuntimeException e) {
+					LOG.warn("Resource lane event listener failed: {}", e.getMessage(), e);
+				}
+			}
+		}
 	}
 
 	/**
