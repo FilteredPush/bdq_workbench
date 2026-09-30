@@ -450,11 +450,11 @@ class ParallelPhaseExecutionServiceTest {
                         org.assertj.core.groups.Tuple.tuple(
                                 OutcomeStatus.ERROR,
                                 "ERROR",
-                                "Built-in multi-record measure for VALIDATION_MINDEPTH_LESSTHAN_MAXDEPTH cannot be synthesized because 1 target response(s) failed or were unable to run: r1"),
+                                "Built-in multi-record measure for VALIDATION_MINDEPTH_LESSTHAN_MAXDEPTH cannot be synthesized because the result of 1 of 1 record(s) could not be determined (from 1 evaluation(s) of the target test): r1"),
                         org.assertj.core.groups.Tuple.tuple(
                                 OutcomeStatus.ERROR,
                                 "ERROR",
-                                "Built-in multi-record measure for VALIDATION_MINDEPTH_LESSTHAN_MAXDEPTH cannot be synthesized because 1 target response(s) failed or were unable to run: r1"));
+                                "Built-in multi-record measure for VALIDATION_MINDEPTH_LESSTHAN_MAXDEPTH cannot be synthesized because the result of 1 of 1 record(s) could not be determined (from 1 evaluation(s) of the target test): r1"));
     }
 
     @Test

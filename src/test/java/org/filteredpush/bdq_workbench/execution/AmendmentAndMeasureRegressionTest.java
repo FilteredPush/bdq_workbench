@@ -92,6 +92,62 @@ class AmendmentAndMeasureRegressionTest {
 				});
 	}
 
+	@Test
+	void recordResultIsNonCompliantWhenAnyIdentificationIsAndCompliantOnlyWhenAllAre() throws Exception {
+		CanonicalRecord first = core("occ-1");
+		CanonicalRecord second = core("occ-2");
+		CanonicalRecord third = core("occ-3");
+		RecordDataset dataset = new RecordDataset(
+				List.of(first, second, third),
+				List.of(
+						new RecordGraph(first, Map.of("identification", List.of(
+								identification("row-1", "bad"), identification("row-2", ""), identification("row-3", "good")))),
+						new RecordGraph(second, Map.of("identification", List.of(
+								identification("row-4", "good"), identification("row-5", "")))),
+						new RecordGraph(third, Map.of("identification", List.of(
+								identification("row-6", "good"), identification("row-7", "good"))))));
+		ParallelPhaseExecutionService service = new ParallelPhaseExecutionService(1, (subject, binding, implementation) -> {
+			String name = subject.terms().getOrDefault("scientificName", "");
+			if (name.isBlank()) {
+				return new Response(subject.id(), binding.testId(), binding.testType(), binding.implementationClass(),
+						binding.implementationMethod(), binding.phase(), binding.parameters(), OutcomeStatus.FAILED,
+						"INTERNAL_PREREQUISITES_NOT_MET", "", "", "", Map.of(), Instant.now(), Instant.now());
+			}
+			return response(subject.id(), binding, OutcomeStatus.PASSED, "RUN_HAS_RESULT",
+					"bad".equals(name) ? "NOT_COMPLIANT" : "COMPLIANT", Map.of());
+		}, false);
+		ImplementationBinding measure = new ImplementationBinding(
+				"m1", TestType.MEASURE, BuiltInMeasureSpec.IMPLEMENTATION_CLASS, BuiltInMeasureSpec.IMPLEMENTATION_METHOD,
+				Phase.PRE_AMENDMENT,
+				new BuiltInMeasureSpec(BuiltInMeasureSpec.MeasureKind.COUNT, "SCIENTIFICNAME_FOUND", "v1", "COMPLIANT",
+						List.of(), List.of()).asBindingParameters(),
+				BindingStatus.BOUND, ParameterizationCapability.DEFAULT_ONLY, "built-in", true, List.of(), List.of());
+
+		List<Response> responses = service.execute(dataset,
+				List.of(binding("v1", TestType.VALIDATION, "check", Phase.PRE_AMENDMENT, "dwc:scientificName",
+						"scientificName"), measure),
+				List.of(discovered("v1", TestType.VALIDATION, Phase.PRE_AMENDMENT, "check", "dwc:scientificName")));
+
+		List<Response> pre = responses.stream().filter(response -> response.phase() == Phase.PRE_AMENDMENT).toList();
+		assertThat(pre).filteredOn(response -> response.testId().equals("v1") && !response.derived()).hasSize(7);
+		assertThat(pre).filteredOn(response -> response.testId().equals("v1") && response.derived())
+				.extracting(Response::recordId, response -> response.responseResult() == null || response.responseResult()
+						.isBlank() ? response.responseStatus() : response.responseResult())
+				.containsExactlyInAnyOrder(
+						org.assertj.core.groups.Tuple.tuple("occ-1", "NOT_COMPLIANT"),
+						org.assertj.core.groups.Tuple.tuple("occ-2", "INTERNAL_PREREQUISITES_NOT_MET"),
+						org.assertj.core.groups.Tuple.tuple("occ-3", "COMPLIANT"));
+		assertThat(pre).filteredOn(response -> response.testId().equals("v1") && response.recordId().equals("occ-1")
+				&& response.derived())
+				.singleElement().extracting(Response::comment).asString()
+				.contains("3 evaluation(s) (3 identification row(s)): 1 NOT_COMPLIANT, 1 INTERNAL_PREREQUISITES_NOT_MET, "
+						+ "1 COMPLIANT");
+		assertThat(pre).filteredOn(response -> response.testId().equals("m1")).singleElement()
+				.satisfies(response -> assertThat(response.parameters())
+						.containsEntry(BuiltInMeasureSpec.MATCHING_COUNT_KEY, "1")
+						.containsEntry(BuiltInMeasureSpec.TOTAL_RECORDS_KEY, "3"));
+	}
+
 	private static CanonicalRecord core(String id) {
 		return new CanonicalRecord(id, Map.of("occurrenceID", id),
 				Map.of("occurrenceID", List.of(new SourceCell("occurrence", "occurrence", id, "occurrenceID", "occurrenceID"))));

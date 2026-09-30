@@ -881,73 +881,138 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
 		return rollups.stream().filter(java.util.Objects::nonNull).toList();
 	}
 
+	/**
+	 * Derives a record's VALIDATION result from its evaluations over expanded related rows.
+	 *
+	 * <p>The record is the SingleRecord: it is COMPLIANT only when every evaluation is. A
+	 * NOT_COMPLIANT evaluation decides the record regardless of the others (one non-compliant
+	 * identification makes the record non-compliant, even if another could not be assessed);
+	 * otherwise an evaluation that failed, then one that could not run, then external and then
+	 * internal prerequisites not met, determine it. The individual evaluations remain in the
+	 * response stream, one per related row, and the derived result names them as contributors.
+	 *
+	 * @param phase the phase
+	 * @param binding the validation's binding
+	 * @param coreId the record
+	 * @param contributors the record's evaluations
+	 * @return the record-level result
+	 */
 	private static Response deriveValidationRollup(
 			Phase phase,
 			ImplementationBinding binding,
 			String coreId,
 			List<Response> contributors) {
-		Response precedence = rollupPrecedence(binding, coreId, contributors);
-		if (precedence != null) {
-			return precedence;
-		}
+		String summary = contributorSummary(contributors);
 		if (contributors.stream().anyMatch(response -> "NOT_COMPLIANT".equals(response.responseResult()))) {
 			return derivedResponse(phase, binding, coreId, contributors, OutcomeStatus.FAILED, "RUN_HAS_RESULT",
-					"NOT_COMPLIANT", "Derived rollup: one or more contributing responses were NOT_COMPLIANT");
+					"NOT_COMPLIANT", "Record NOT_COMPLIANT: at least one of its " + summary);
+		}
+		Response undetermined = undeterminedRecordResult(phase, binding, coreId, contributors, summary);
+		if (undetermined != null) {
+			return undetermined;
 		}
 		if (contributors.stream().allMatch(response -> "COMPLIANT".equals(response.responseResult()))) {
 			return derivedResponse(phase, binding, coreId, contributors, OutcomeStatus.PASSED, "RUN_HAS_RESULT",
-					"COMPLIANT", "Derived rollup: all contributing responses were COMPLIANT");
+					"COMPLIANT", "Record COMPLIANT: all of its " + summary);
 		}
 		return derivedResponse(phase, binding, coreId, contributors, OutcomeStatus.UNABLE_TO_RUN, "UNABLE_TO_RUN",
-				"UNABLE_TO_RUN", "Derived validation rollup encountered mixed or unrecognized result values");
+				"UNABLE_TO_RUN", "Record result undetermined from its " + summary);
 	}
 
+	/**
+	 * Derives a record's ISSUE result from its evaluations over expanded related rows: IS_ISSUE,
+	 * then POTENTIAL_ISSUE, from any evaluation; otherwise as for validations (failures and
+	 * prerequisites), and NOT_ISSUE only when every evaluation is NOT_ISSUE.
+	 *
+	 * @param phase the phase
+	 * @param binding the issue's binding
+	 * @param coreId the record
+	 * @param contributors the record's evaluations
+	 * @return the record-level result
+	 */
 	private static Response deriveIssueRollup(
 			Phase phase,
 			ImplementationBinding binding,
 			String coreId,
 			List<Response> contributors) {
-		Response precedence = rollupPrecedence(binding, coreId, contributors);
-		if (precedence != null) {
-			return precedence;
+		String summary = contributorSummary(contributors);
+		for (String issue : List.of("IS_ISSUE", "POTENTIAL_ISSUE")) {
+			if (contributors.stream().anyMatch(response -> issue.equals(response.responseResult()))) {
+				return derivedResponse(phase, binding, coreId, contributors, OutcomeStatus.FAILED, "RUN_HAS_RESULT",
+						issue, "Record " + issue + ": at least one of its " + summary);
+			}
 		}
-		if (contributors.stream().anyMatch(response -> "POTENTIAL_ISSUE".equals(response.responseResult()))) {
-			return derivedResponse(phase, binding, coreId, contributors, OutcomeStatus.FAILED, "RUN_HAS_RESULT",
-					"POTENTIAL_ISSUE", "Derived rollup: one or more contributing responses reported POTENTIAL_ISSUE");
+		Response undetermined = undeterminedRecordResult(phase, binding, coreId, contributors, summary);
+		if (undetermined != null) {
+			return undetermined;
 		}
-		Set<String> remainingResults = contributors.stream()
-				.map(Response::responseResult)
-				.filter(result -> result != null && !result.isBlank())
-				.collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
-		if (remainingResults.size() == 1) {
-			String result = remainingResults.iterator().next();
-			OutcomeStatus status = "NOT_ISSUE".equals(result) ? OutcomeStatus.PASSED : OutcomeStatus.FAILED;
-			return derivedResponse(phase, binding, coreId, contributors, status, "RUN_HAS_RESULT", result,
-					"Derived issue rollup from contributing structured responses");
+		if (contributors.stream().allMatch(response -> "NOT_ISSUE".equals(response.responseResult()))) {
+			return derivedResponse(phase, binding, coreId, contributors, OutcomeStatus.PASSED, "RUN_HAS_RESULT",
+					"NOT_ISSUE", "Record NOT_ISSUE: all of its " + summary);
 		}
 		return derivedResponse(phase, binding, coreId, contributors, OutcomeStatus.UNABLE_TO_RUN, "UNABLE_TO_RUN",
-				"UNABLE_TO_RUN", "Derived issue rollup encountered mixed or unrecognized result values");
+				"UNABLE_TO_RUN", "Record result undetermined from its " + summary);
 	}
 
-	private static Response rollupPrecedence(
+	/**
+	 * Returns the record-level result when no evaluation decided it but some could not be assessed:
+	 * an error, then an evaluation unable to run, then external, then internal prerequisites not met.
+	 *
+	 * @param phase the phase
+	 * @param binding the test's binding
+	 * @param coreId the record
+	 * @param contributors the record's evaluations
+	 * @param summary the evaluations' summary for the comment
+	 * @return the record-level result, or {@code null} when every evaluation has a result
+	 */
+	private static Response undeterminedRecordResult(
+			Phase phase,
 			ImplementationBinding binding,
 			String coreId,
-			List<Response> contributors) {
+			List<Response> contributors,
+			String summary) {
 		if (contributors.stream().anyMatch(response -> response.status() == OutcomeStatus.ERROR)) {
-			return derivedResponse(binding.phase(), binding, coreId, contributors, OutcomeStatus.ERROR, "ERROR", null,
-					"Derived rollup failed because one or more contributing responses were ERROR");
+			return derivedResponse(phase, binding, coreId, contributors, OutcomeStatus.ERROR, "ERROR", null,
+					"Record result undetermined: evaluation failed for at least one of its " + summary);
 		}
 		if (contributors.stream().anyMatch(response -> response.status() == OutcomeStatus.UNABLE_TO_RUN)) {
-			return derivedResponse(binding.phase(), binding, coreId, contributors, OutcomeStatus.UNABLE_TO_RUN,
-					"UNABLE_TO_RUN", "UNABLE_TO_RUN",
-					"Derived rollup could not be computed because one or more contributing responses were UNABLE_TO_RUN");
+			return derivedResponse(phase, binding, coreId, contributors, OutcomeStatus.UNABLE_TO_RUN, "UNABLE_TO_RUN",
+					"UNABLE_TO_RUN", "Record result undetermined: at least one of its " + summary + " could not run");
 		}
-		if (contributors.stream().anyMatch(response -> !"RUN_HAS_RESULT".equals(response.responseStatus()))) {
-			return derivedResponse(binding.phase(), binding, coreId, contributors, OutcomeStatus.UNABLE_TO_RUN,
-					"UNABLE_TO_RUN", "UNABLE_TO_RUN",
-					"Derived rollup encountered contributing responses without RUN_HAS_RESULT status");
+		for (String prerequisites : List.of("EXTERNAL_PREREQUISITES_NOT_MET", "INTERNAL_PREREQUISITES_NOT_MET")) {
+			if (contributors.stream().anyMatch(response -> prerequisites.equals(response.responseStatus()))) {
+				return derivedResponse(phase, binding, coreId, contributors, OutcomeStatus.FAILED, prerequisites, null,
+						"Record " + prerequisites + ": at least one of its " + summary);
+			}
 		}
 		return null;
+	}
+
+	/**
+	 * Summarizes a record's evaluations for a derived result's comment.
+	 *
+	 * @param contributors the record's evaluations
+	 * @return e.g. {@code "5 evaluations (1 of the record itself, 4 identification rows): 2 NOT_COMPLIANT,
+	 *     3 COMPLIANT"}
+	 */
+	private static String contributorSummary(List<Response> contributors) {
+		Map<String, Long> byRelation = new LinkedHashMap<>();
+		Map<String, Long> byOutcome = new LinkedHashMap<>();
+		for (Response response : contributors) {
+			String relation = response.subjectRef() == null ? "record" : response.subjectRef().relationName();
+			byRelation.merge(relation, 1L, Long::sum);
+			String outcome = response.responseResult() != null && !response.responseResult().isBlank()
+					? response.responseResult()
+					: response.responseStatus();
+			byOutcome.merge(outcome == null ? "no result" : outcome, 1L, Long::sum);
+		}
+		String sources = byRelation.entrySet().stream()
+				.map(entry -> entry.getValue() + " " + entry.getKey() + " row(s)")
+				.collect(java.util.stream.Collectors.joining(", "));
+		String outcomes = byOutcome.entrySet().stream()
+				.map(entry -> entry.getValue() + " " + entry.getKey())
+				.collect(java.util.stream.Collectors.joining(", "));
+		return contributors.size() + " evaluation(s) (" + sources + "): " + outcomes;
 	}
 
 	private static Response derivedResponse(
@@ -1140,16 +1205,17 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
                     "No target responses were available for " + spec.targetTestLabel(),
                     finishedAt);
         }
-        if (hasFailedTargetResponses(targetResponses)) {
+        List<Response> recordResponses = recordLevelResponses(targetResponsesWithRollups(spec, phaseResponses));
+        if (hasFailedTargetResponses(recordResponses)) {
             return failedTargetMeasureResponse(
                     phase,
                     measureBinding,
                     spec,
-                    targetResponses,
+                    recordResponses,
+                    targetResponses.size(),
                     totalRecords,
                     finishedAt);
         }
-        List<Response> recordResponses = recordLevelResponses(targetResponsesWithRollups(spec, phaseResponses));
         long matchingCount = recordResponses.stream()
                 .filter(response -> spec.responseResult().equals(response.responseResult()))
                 .count();
@@ -1215,16 +1281,17 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
                     "No target responses were available for " + spec.targetTestLabel(),
                     finishedAt);
         }
-        if (hasFailedTargetResponses(targetResponses)) {
+        List<Response> recordResponses = recordLevelResponses(targetResponsesWithRollups(spec, phaseResponses));
+        if (hasFailedTargetResponses(recordResponses)) {
             return failedTargetMeasureResponse(
                     phase,
                     measureBinding,
                     spec,
-                    targetResponses,
+                    recordResponses,
+                    targetResponses.size(),
                     totalRecords,
                     finishedAt);
         }
-        List<Response> recordResponses = recordLevelResponses(targetResponsesWithRollups(spec, phaseResponses));
         long eligibleCount = recordResponses.size();
         long matchingCount = recordResponses.stream()
                 .filter(spec::matchesQaCondition)
@@ -1452,35 +1519,45 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
      * @param phase the phase being synthesized
      * @param binding the measure binding
      * @param spec the built-in measure specification
-     * @param targetResponses the target response stream containing failures
+     * @param recordResponses the target test's record-level results (the derived result for a
+     *     record evaluated once per expanded related row), some of which failed
+     * @param evaluationCount the number of evaluations of the target test behind those results
      * @param totalRecords the dataset record count
      * @param finishedAt the timestamp to record
-     * @return the synthesized error response
+     * @return the synthesized error response, whose matching count is still counted per record
      */
     private static Response failedTargetMeasureResponse(
             Phase phase,
             ImplementationBinding binding,
             BuiltInMeasureSpec spec,
-            List<Response> targetResponses,
+            List<Response> recordResponses,
+            int evaluationCount,
             int totalRecords,
             java.time.Instant finishedAt) {
-        long failedCount = targetResponses.stream()
+        List<Response> failed = recordResponses.stream()
                 .filter(response -> response.status() == OutcomeStatus.ERROR || response.status() == OutcomeStatus.UNABLE_TO_RUN)
-                .count();
-        String failedRecords = targetResponses.stream()
-                .filter(response -> response.status() == OutcomeStatus.ERROR || response.status() == OutcomeStatus.UNABLE_TO_RUN)
+                .toList();
+        long failedCount = failed.size();
+        String failedRecords = failed.stream()
                 .map(Response::recordId)
                 .distinct()
                 .sorted()
                 .collect(java.util.stream.Collectors.joining(", "));
+        long matchingCount = recordResponses.stream()
+                .filter(response -> spec.kind() == BuiltInMeasureSpec.MeasureKind.COUNT
+                        ? spec.responseResult().equals(response.responseResult())
+                        : spec.matchesQaCondition(response))
+                .count();
         Map<String, String> parameters = new LinkedHashMap<>(binding.parameters());
-        parameters.put(BuiltInMeasureSpec.MATCHING_COUNT_KEY, Long.toString(targetResponses.size() - failedCount));
+        parameters.put(BuiltInMeasureSpec.MATCHING_COUNT_KEY, Long.toString(matchingCount));
         parameters.put(BuiltInMeasureSpec.TOTAL_RECORDS_KEY, Integer.toString(totalRecords));
         String message = "Built-in multi-record measure for "
                 + spec.targetTestLabel()
-                + " cannot be synthesized because "
+                + " cannot be synthesized because the result of "
                 + failedCount
-                + " target response(s) failed or were unable to run: "
+                + " of " + totalRecords + " record(s) could not be determined (from "
+                + evaluationCount
+                + " evaluation(s) of the target test): "
                 + failedRecords;
         return new Response(
                 "MULTIRECORD",
