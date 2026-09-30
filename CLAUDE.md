@@ -300,15 +300,24 @@ understanding how the stages connect — read its class Javadoc first. The pipel
    structured subject targets and explicit rollup→detail links), and the standalone structured
    HTML/Markdown reports. The structured HTML and Markdown reports are quality-control summaries,
    not per-record dumps: both render from `ReportDigest`, which names tests by label and records by
-   values from the original data (institution:collection:catalog, else dataset:catalog, plus the
-   `SourceRow` file and line; else the file and line), and condenses the run into high-impact action
+   values from the original data (institution:collection:catalog, else dataset:catalog, else
+   institution:collection plus the identifier and the term carrying it — `occurrenceID …` — unless
+   the ID was synthesized from row position; plus the `SourceRow` file and line). Terms the record
+   lacks come from the `RecordIdentification` that `RecordIdentificationCollector` gathers at ingest
+   from the raw grain and directly related rows, independently of the view — a DwC-DP occurrence's
+   codes and catalog number live on its material rows, which no test reads; such a table gets the
+   `InputViewOverview` role `IDENTIFYING` ("used only to identify records") rather than being called
+   ignored. The digest condenses the run into high-impact action
    items (issue and non-compliance counts, the most frequent causes, the amendment proposals that
    left the most records with fewer problems, empty terms), the pre/post measure differences
    (always present, saying so when no multi-record measures ran), records with
    quality for the use case (every multi-record QA measure's target test COMPLETE, post-amendment),
    per-test problem counts before → after amendment with internal/external prerequisites, terms the
    tests read that are empty in 100% of records, amendments grouped by change and ranked by records
-   affected, a capped list of records needing attention (with "k of n rows" for expanded tests),
+   affected, a capped list of records needing attention (each failing or amended related row of an
+   expanded test is its own `RowAttention` beneath its record — file and line, the row's own values
+   of the failing tests' acted-upon terms, its problems and amendments — while a failure of the
+   record's own value of an expanded term stays on the record),
    and tests that could not run. Headers of these reports and the text summary state external
    prerequisites not met; the response list leads with `recordLabel`/`testLabel` columns. Both
    reports split the pre/post measure differences by kind (`StructuredMeasureComparisons`): a COUNT

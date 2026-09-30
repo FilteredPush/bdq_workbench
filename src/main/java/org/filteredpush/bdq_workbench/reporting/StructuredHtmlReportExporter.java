@@ -148,6 +148,9 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 				.append("    .data-notice { border: 2px solid #9a6700; background: #fff8c5; color: #1f2328; padding: 0.6rem 1rem;"
 						+ " border-radius: 6px; margin: 1rem 0; }\n")
 				.append("    .muted { color: #57606a; }\n")
+				.append("    tr.attention-record td { border-top: 2px solid #d0d7de; }\n")
+				.append("    tr.attention-row td { font-size: 0.92em; background: #f6f8fa; }\n")
+				.append("    tr.attention-row td:first-child { padding-left: 1.5rem; }\n")
 				.append("    td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }\n")
 				.append("    .data-warning { border: 2px solid #b42318; background: #fef3f2; color: #1f2328; padding: 0.75rem 1rem;"
 						+ " border-radius: 6px; margin: 1rem 0; }\n")
@@ -303,6 +306,8 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 				.append(" used by the view, ")
 				.append(overview.ignoredTables().size())
 				.append(" ignored for lacking test bindings, ")
+				.append(overview.identifyingTables().isEmpty() ? ""
+						: overview.identifyingTables().size() + " used only to identify records, ")
 				.append(overview.notIncludedTables().size())
 				.append(" not included)</li>\n");
 		List<String> notes = overview.multiplicityNotes();
@@ -317,6 +322,16 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 		builder.append("  </ul>\n")
 				.append(InputViewDiagram.render(overview));
 		appendInputTableSummary(builder, overview);
+		if (!overview.identifyingTables().isEmpty()) {
+			builder.append("  <p><strong>Used only to identify records</strong> (no test reads them; the reports name "
+					+ "records by these terms): ")
+					.append(overview.identifyingTables().stream()
+							.map(table -> "<code>" + escapeHtml(table.name()) + "</code> ("
+									+ escapeHtml(String.join(", ", overview.description().recordIdentification()
+											.termsFrom(table.name()))) + ")")
+							.collect(Collectors.joining(", ")))
+					.append("</p>\n");
+		}
 		if (!overview.ignoredTables().isEmpty()) {
 			builder.append("  <p><strong>Ignored in view construction</strong> (no test binding reads any of their terms): ")
 					.append(overview.ignoredTables().stream()
@@ -638,13 +653,14 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 				.append("  <table>\n    <thead><tr><th>Record</th><th>Problems after amendment</th>"
 						+ "<th>Proposed amendments</th></tr></thead>\n    <tbody>\n");
 		for (ReportDigest.AttentionRecord record : records.subList(0, shown)) {
-			builder.append("      <tr><td>")
+			builder.append("      <tr class=\"attention-record\"><td>")
 					.append(escapeHtml(record.recordLabel()))
 					.append("</td><td>")
 					.append(escapeHtml(record.problems().isEmpty() ? "—" : String.join("; ", record.problems())))
 					.append("</td><td>")
 					.append(escapeHtml(record.amendments().isEmpty() ? "—" : String.join("; ", record.amendments())))
 					.append("</td></tr>\n");
+			appendAttentionRows(builder, record);
 		}
 		builder.append("    </tbody>\n  </table>\n");
 		if (records.size() > shown) {
@@ -652,6 +668,35 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 					+ "bdq-report-responses.txt.</p>\n");
 		}
 		builder.append("</section>\n");
+	}
+
+	/**
+	 * Appends a record's related rows needing attention as indented rows beneath it, each naming
+	 * the row's file and line and the values its failing tests read.
+	 *
+	 * @param builder the report being built; appended to in place
+	 * @param record the record needing attention
+	 */
+	private static void appendAttentionRows(StringBuilder builder, ReportDigest.AttentionRecord record) {
+		for (ReportDigest.RowAttention row : record.rows()) {
+			builder.append("      <tr class=\"attention-row\"><td>↳ ")
+					.append(escapeHtml(row.rowLabel()));
+			if (!row.values().isEmpty()) {
+				row.values().forEach(value -> builder.append("<br><span class=\"muted\">")
+						.append(escapeHtml(value))
+						.append("</span>"));
+			}
+			builder.append("</td><td>")
+					.append(escapeHtml(row.problems().isEmpty() ? "—" : String.join("; ", row.problems())))
+					.append("</td><td>")
+					.append(escapeHtml(row.amendments().isEmpty() ? "—" : String.join("; ", row.amendments())))
+					.append("</td></tr>\n");
+		}
+		if (record.moreRows() > 0) {
+			builder.append("      <tr class=\"attention-row\"><td colspan=\"3\" class=\"muted\">↳ ")
+					.append(record.moreRows())
+					.append(" more related row(s) of this record need attention</td></tr>\n");
+		}
 	}
 
 	/**

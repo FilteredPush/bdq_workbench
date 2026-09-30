@@ -212,6 +212,8 @@ public class StructuredMarkdownReportExporter implements ReportExporter {
 				.append(" used by the view, ")
 				.append(overview.ignoredTables().size())
 				.append(" ignored for lacking test bindings, ")
+				.append(overview.identifyingTables().isEmpty() ? ""
+						: overview.identifyingTables().size() + " used only to identify records, ")
 				.append(overview.notIncludedTables().size())
 				.append(" not included)\n");
 		List<String> notes = overview.multiplicityNotes();
@@ -236,6 +238,15 @@ public class StructuredMarkdownReportExporter implements ReportExporter {
 					.append(escapeCell(table.suppliedTermsSummary(MAX_LISTED_TERMS))).append(" |\n");
 		}
 		builder.append('\n');
+		if (!overview.identifyingTables().isEmpty()) {
+			builder.append("Used only to identify records (no test reads them; the reports name records by these "
+					+ "terms): ")
+					.append(overview.identifyingTables().stream()
+							.map(table -> "`" + escape(table.name()) + "` (" + escape(String.join(", ",
+									overview.description().recordIdentification().termsFrom(table.name()))) + ")")
+							.collect(Collectors.joining(", ")))
+					.append("\n\n");
+		}
 		if (!overview.ignoredTables().isEmpty()) {
 			builder.append("Ignored in view construction (no test binding reads any of their terms): ")
 					.append(overview.ignoredTables().stream()
@@ -461,10 +472,36 @@ public class StructuredMarkdownReportExporter implements ReportExporter {
 					.append(" | ")
 					.append(escapeCell(record.amendments().isEmpty() ? "—" : String.join("; ", record.amendments())))
 					.append(" |\n");
+			appendAttentionRows(builder, record);
 		}
 		builder.append('\n');
 		if (records.size() > shown) {
 			builder.append("Every record's results are in bdq-report-xls.xlsx and bdq-report-responses.txt.\n\n");
+		}
+	}
+
+	/**
+	 * Appends a record's related rows needing attention as rows beneath it, each naming the row's
+	 * file and line and the values its failing tests read.
+	 *
+	 * @param builder the report being built; appended to in place
+	 * @param record the record needing attention
+	 */
+	private static void appendAttentionRows(StringBuilder builder, ReportDigest.AttentionRecord record) {
+		for (ReportDigest.RowAttention row : record.rows()) {
+			builder.append("| ↳ ").append(escapeCell(row.rowLabel()));
+			if (!row.values().isEmpty()) {
+				builder.append(" (").append(escapeCell(String.join("; ", row.values()))).append(')');
+			}
+			builder.append(" | ")
+					.append(escapeCell(row.problems().isEmpty() ? "—" : String.join("; ", row.problems())))
+					.append(" | ")
+					.append(escapeCell(row.amendments().isEmpty() ? "—" : String.join("; ", row.amendments())))
+					.append(" |\n");
+		}
+		if (record.moreRows() > 0) {
+			builder.append("| ↳ ").append(record.moreRows())
+					.append(" more related row(s) of this record need attention | | |\n");
 		}
 	}
 

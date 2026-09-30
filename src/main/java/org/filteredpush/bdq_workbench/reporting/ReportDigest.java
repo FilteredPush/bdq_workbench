@@ -66,11 +66,18 @@ final class ReportDigest {
 	static final int MAX_AMENDMENT_GROUPS = 25;
 	/** Causes and amendment proposals listed among the high-impact action items. */
 	static final int MAX_HIGH_IMPACT_ITEMS = 5;
-	/** Rows named per record and test before the rest are counted. */
-	static final int MAX_ROWS_LISTED = 5;
+	/** Related rows listed under a record needing attention before the rest are counted. */
+	static final int MAX_ROWS_PER_RECORD = 10;
+	/** Values shown for each related row needing attention. */
+	static final int MAX_ROW_VALUES = 4;
 	/** Test labels named per empty term before the rest are counted. */
 	static final int MAX_TESTS_PER_TERM = 5;
 
+	/** Prefix of the record IDs ingest synthesizes from row position when the data declares none. */
+	private static final String SYNTHESIZED_ID_PREFIX = "row-";
+	/** Terms whose value may be a record's identifier, named in its label when it has no catalog number. */
+	private static final List<String> IDENTIFIER_TERMS = List.of(
+			"occurrenceID", "materialEntityID", "eventID", "taxonID", "identificationID", "id");
 	private static final String MULTIRECORD_SENTINEL = "MULTIRECORD";
 	private static final String UNRESOLVED_SENTINEL = "*";
 	private static final String EXTERNAL_PREREQUISITES = "EXTERNAL_PREREQUISITES_NOT_MET";
@@ -81,6 +88,7 @@ final class ReportDigest {
 	private final Map<String, CanonicalRecord> recordsById = new LinkedHashMap<>();
 	private final Map<String, CanonicalRecord> relatedRowsByKey = new LinkedHashMap<>();
 	private final Map<String, String> labelsByRecordId = new LinkedHashMap<>();
+	private final Map<String, List<String>> actedUponTermsByTest = new LinkedHashMap<>();
 	private List<Response> perRecordResponses;
 	private Map<String, List<Response>> responseIndex;
 	private final Map<String, Phase> latestPhaseByTest = new LinkedHashMap<>();
@@ -124,13 +132,18 @@ final class ReportDigest {
 	 * <p>An occurrence-like record with a catalog number is named by its institution code,
 	 * collection code, and catalog number (or dataset and catalog number when the codes are
 	 * absent); every record also gets the data file and line it was read from. A record with
-	 * neither falls back to its identifier.
+	 * neither is named by its identifier and the term carrying it ({@code occurrenceID 2043…}),
+	 * after its institution and collection codes when known; a record whose identifier was
+	 * synthesized from its position is named by its position alone. Terms the record itself lacks are taken from the
+	 * {@link org.filteredpush.bdq_workbench.model.RecordIdentification} gathered at ingest from its
+	 * related rows, such as the material rows that carry a data package occurrence's catalog number.
 	 *
 	 * @param recordId the record identifier
 	 * @return the record's label
 	 */
 	String recordLabel(String recordId) {
-		return labelsByRecordId.computeIfAbsent(recordId, id -> labelFor(id, recordsById.get(id)));
+		return labelsByRecordId.computeIfAbsent(recordId, id -> labelFor(id, recordsById.get(id),
+				summary.dataset().inputDescription().recordIdentification()));
 	}
 
 	/**
@@ -418,15 +431,16 @@ final class ReportDigest {
 	/**
 	 * Lists the records with problems after amendment, or with proposed amendments.
 	 *
+	 * <p>A test evaluated once on the record puts its problem on the record. A test evaluated once
+	 * per related row (an expanded view) puts each failing row's problem on that row, listed under
+	 * the record it belongs to, and puts a failure of the record's own value (a term mapped from
+	 * both the grain and the expanded table) on the record. Amendments are placed the same way.
+	 *
 	 * @return the records needing attention, most problems first
 	 */
 	List<AttentionRecord> recordsNeedingAttention() {
-		Map<String, List<String>> problemsByRecord = new LinkedHashMap<>();
-		Map<String, List<String>> amendmentsByRecord = new LinkedHashMap<>();
-		for (String recordId : recordsById.keySet()) {
-			problemsByRecord.put(recordId, new ArrayList<>());
-			amendmentsByRecord.put(recordId, new ArrayList<>());
-		}
+		Map<String, AttentionBuilder> builders = new LinkedHashMap<>();
+		recordsById.keySet().forEach(recordId -> builders.put(recordId, new AttentionBuilder()));
 		Map<String, TestType> tests = new LinkedHashMap<>();
 		perRecordResponses().forEach(response -> tests.putIfAbsent(response.testId(), response.testType()));
 		tests.forEach((testId, type) -> {
@@ -434,33 +448,117 @@ final class ReportDigest {
 				return;
 			}
 			Phase phase = latestPhase(testId);
-			for (String recordId : recordsById.keySet()) {
-				String problem = describeProblem(testId, type, phase, recordId);
-				if (problem != null) {
-					problemsByRecord.get(recordId).add(problem);
-				}
-			}
+			builders.forEach((recordId, builder) -> addProblems(testId, type, phase, recordId, builder));
 		});
 		for (Response response : perRecordResponses()) {
 			if (response.phase() == Phase.AMENDMENT && !response.amendments().isEmpty()
 					&& AMENDMENT_STATUSES.contains(response.responseStatus())) {
-				response.amendments().forEach((term, proposed) -> amendmentsByRecord
-						.computeIfAbsent(response.recordId(), ignored -> new ArrayList<>())
-						.add(DarwinCoreTermResolver.localName(term) + ": " + displayValue(originalValue(response, term))
-								+ " → " + displayValue(proposed)));
+				AttentionBuilder builder = builders.computeIfAbsent(response.recordId(), ignored -> new AttentionBuilder());
+				CanonicalRecord row = relatedRow(response.subjectRef());
+				response.amendments().forEach((term, proposed) -> {
+					String change = DarwinCoreTermResolver.localName(term) + ": "
+							+ displayValue(originalValue(response, term)) + " → " + displayValue(proposed);
+					if (row == null) {
+						builder.amendments.add(change);
+					} else {
+						builder.row(response.subjectRef(), row).amendments.add(change);
+					}
+				});
 			}
 		}
 		List<AttentionRecord> attention = new ArrayList<>();
-		problemsByRecord.forEach((recordId, problems) -> {
-			List<String> amendments = amendmentsByRecord.getOrDefault(recordId, List.of());
-			if (!problems.isEmpty() || !amendments.isEmpty()) {
-				attention.add(new AttentionRecord(recordLabel(recordId), List.copyOf(problems),
-						amendments.stream().distinct().toList()));
+		builders.forEach((recordId, builder) -> {
+			if (!builder.isEmpty()) {
+				attention.add(builder.build(recordLabel(recordId)));
 			}
 		});
-		attention.sort(Comparator.comparingInt((AttentionRecord row) -> row.problems().size()).reversed()
-				.thenComparing(row -> -row.amendments().size()));
+		attention.sort(Comparator.comparingInt(AttentionRecord::problemCount).reversed()
+				.thenComparing(row -> -row.amendmentCount()));
 		return attention;
+	}
+
+	/**
+	 * Adds one test's problems for one record: on the record, or on each failing related row.
+	 *
+	 * @param testId the test
+	 * @param type the test type
+	 * @param phase the phase to read
+	 * @param recordId the record
+	 * @param builder the record's attention entry
+	 */
+	private void addProblems(String testId, TestType type, Phase phase, String recordId, AttentionBuilder builder) {
+		List<Response> recordLevel = recordLevel(testId, phase, recordId);
+		if (recordLevel.stream().noneMatch(response -> isProblem(type, response))) {
+			return;
+		}
+		List<Response> details = responsesFor(testId, phase, recordId).stream()
+				.filter(response -> !response.derived() && response.subjectRef() != null)
+				.toList();
+		boolean expanded = details.stream().anyMatch(response -> relatedRow(response.subjectRef()) != null);
+		if (!expanded) {
+			builder.problems.add(testLabel(testId));
+			return;
+		}
+		boolean onRecord = false;
+		boolean onRow = false;
+		for (Response failing : details.stream().filter(response -> isProblem(type, response)).toList()) {
+			CanonicalRecord row = relatedRow(failing.subjectRef());
+			String problem = testLabel(testId) + ": " + failing.responseResult();
+			if (row == null) {
+				onRecord = true;
+				builder.recordOwnValueProblems.add(problem);
+			} else {
+				onRow = true;
+				AttentionBuilder.RowBuilder rowBuilder = builder.row(failing.subjectRef(), row);
+				rowBuilder.problems.add(problem);
+				rowBuilder.termsByTest.add(actedUponTerms(testId));
+			}
+		}
+		if (!onRecord && !onRow) {
+			/* The record-level result is a problem though no single evaluation is (an error or an
+			 * undetermined evaluation decided the rollup): report it on the record. */
+			builder.problems.add(testLabel(testId));
+		}
+	}
+
+	/**
+	 * Resolves an evaluation subject to the related row it was evaluated on.
+	 *
+	 * @param subject the subject reference, possibly {@code null}
+	 * @return the related row, or {@code null} when the subject is the record itself
+	 */
+	private CanonicalRecord relatedRow(SubjectRef subject) {
+		if (subject == null || subject.relationName() == null) {
+			return null;
+		}
+		return relatedRowsByKey.get(relatedKey(subject.relationName(), subject.rowRef()));
+	}
+
+	/**
+	 * Lists the terms a test acts upon, by local name, from its bindings.
+	 *
+	 * @param testId the test
+	 * @return the acted-upon terms
+	 */
+	private List<String> actedUponTerms(String testId) {
+		return actedUponTermsByTest.computeIfAbsent(testId, id -> summary.bindings().stream()
+				.filter(binding -> id.equals(binding.testId()))
+				.flatMap(binding -> binding.parameterBindings().stream())
+				.filter(bound -> bound.parameter().role() == ParameterRole.ACTED_UPON)
+				.map(bound -> DarwinCoreTermResolver.localName(bound.parameter().source()))
+				.distinct()
+				.toList());
+	}
+
+	/**
+	 * Names a related row by its data file and line, else its relation and row reference.
+	 *
+	 * @param subject the row's subject reference
+	 * @param row the row
+	 * @return e.g. {@code "identification.csv line 918"}
+	 */
+	private static String rowLabel(SubjectRef subject, CanonicalRecord row) {
+		return row.sourceRow().known() ? row.sourceRow().label() : subject.relationName() + " " + subject.rowRef();
 	}
 
 	/**
@@ -592,70 +690,6 @@ final class ReportDigest {
 	}
 
 	/**
-	 * Describes one test's problem for one record, noting how many expanded rows had it.
-	 *
-	 * @param testId the test
-	 * @param type the test type
-	 * @param phase the phase to read
-	 * @param recordId the record
-	 * @return e.g. {@code "Taxon found (2 of 3 rows)"}, or {@code null} when there is no problem
-	 */
-	private String describeProblem(String testId, TestType type, Phase phase, String recordId) {
-		List<Response> recordLevel = recordLevel(testId, phase, recordId);
-		if (recordLevel.stream().noneMatch(response -> isProblem(type, response))) {
-			return null;
-		}
-		List<Response> details = responsesFor(testId, phase, recordId).stream()
-				.filter(response -> !response.derived() && response.subjectRef() != null)
-				.toList();
-		if (details.size() > 1) {
-			List<Response> failing = details.stream().filter(response -> isProblem(type, response)).toList();
-			String result = failing.get(0).responseResult();
-			return testLabel(testId) + ": " + result + " in " + rowList(failing) + " (" + failing.size() + " of "
-					+ details.size() + " evaluations)";
-		}
-		return testLabel(testId);
-	}
-
-	/**
-	 * Names the rows a record's evaluations came from, grouping lines by data file: e.g.
-	 * {@code "the record itself, identification.csv lines 3, 5"}, listing at most
-	 * {@link #MAX_ROWS_LISTED} rows.
-	 *
-	 * @param evaluations the evaluations
-	 * @return the rows, most listed first
-	 */
-	private String rowList(List<Response> evaluations) {
-		Map<String, List<String>> linesByFile = new LinkedHashMap<>();
-		boolean recordItself = false;
-		int listed = 0;
-		for (Response response : evaluations) {
-			if (listed >= MAX_ROWS_LISTED) {
-				break;
-			}
-			SubjectRef subject = response.subjectRef();
-			CanonicalRecord row = relatedRowsByKey.get(relatedKey(subject.relationName(), subject.rowRef()));
-			if (row == null) {
-				recordItself = true;
-			} else if (row.sourceRow().known()) {
-				linesByFile.computeIfAbsent(row.sourceRow().file(), ignored -> new ArrayList<>())
-						.add(Long.toString(row.sourceRow().line()));
-			} else {
-				linesByFile.computeIfAbsent(subject.relationName(), ignored -> new ArrayList<>()).add(subject.rowRef());
-			}
-			listed++;
-		}
-		List<String> parts = new ArrayList<>();
-		if (recordItself) {
-			parts.add("the record itself");
-		}
-		linesByFile.forEach((file, lines) -> parts.add(file + (lines.size() == 1 ? " line " : " lines ")
-				+ String.join(", ", lines.stream().sorted(ReportDigest::compareLineNumbers).toList())));
-		String rows = String.join(", ", parts);
-		return evaluations.size() > listed ? rows + " (+" + (evaluations.size() - listed) + " more)" : rows;
-	}
-
-	/**
 	 * Returns a record's record-level response(s) for one test in one phase: the derived rollup
 	 * when there is one, otherwise the record's own response(s).
 	 *
@@ -770,29 +804,58 @@ final class ReportDigest {
 	 *
 	 * @param recordId the record identifier
 	 * @param record the record, or {@code null} when unknown
+	 * @param identification identifying terms gathered from related rows, for terms the record lacks
 	 * @return the label
 	 */
-	private static String labelFor(String recordId, CanonicalRecord record) {
+	private static String labelFor(String recordId, CanonicalRecord record,
+			org.filteredpush.bdq_workbench.model.RecordIdentification identification) {
 		if (record == null) {
 			return recordId;
 		}
-		String catalogNumber = term(record, "catalogNumber");
+		java.util.function.UnaryOperator<String> term = localName -> firstNonBlank(term(record, localName),
+				identification.term(recordId, localName));
+		String catalogNumber = term.apply("catalogNumber");
 		String name = "";
 		if (!catalogNumber.isBlank()) {
-			String institution = term(record, "institutionCode");
-			String collection = term(record, "collectionCode");
+			String institution = term.apply("institutionCode");
+			String collection = term.apply("collectionCode");
 			if (!institution.isBlank() || !collection.isBlank()) {
 				name = joinNonBlank(":", institution, collection, catalogNumber);
 			} else {
-				String dataset = firstNonBlank(term(record, "datasetName"), term(record, "datasetID"));
+				String dataset = firstNonBlank(term.apply("datasetName"), term.apply("datasetID"));
 				name = dataset.isBlank() ? "catalog number " + catalogNumber : dataset + ":" + catalogNumber;
 			}
+		} else {
+			name = identifierName(recordId, record, term.apply("institutionCode"), term.apply("collectionCode"));
 		}
 		String position = record.sourceRow().label();
 		if (!name.isBlank()) {
 			return position.isBlank() ? name : name + " (" + position + ")";
 		}
 		return position.isBlank() ? recordId : position;
+	}
+
+	/**
+	 * Names a record that has no catalog number by the identifier it was read with, the term that
+	 * carries it, and its institution and collection codes when known: e.g.
+	 * {@code "example.org:Modified Example occurrenceID 20432407122"}.
+	 *
+	 * @param recordId the record identifier
+	 * @param record the record
+	 * @param institution the record's institution code, possibly {@code ""}
+	 * @param collection the record's collection code, possibly {@code ""}
+	 * @return the name, or {@code ""} when the identifier was synthesized from the row position
+	 */
+	private static String identifierName(String recordId, CanonicalRecord record, String institution,
+			String collection) {
+		if (recordId == null || recordId.isBlank() || recordId.startsWith(SYNTHESIZED_ID_PREFIX)) {
+			return "";
+		}
+		String idTerm = IDENTIFIER_TERMS.stream()
+				.filter(candidate -> recordId.equals(term(record, candidate)))
+				.findFirst()
+				.orElse("ID");
+		return joinNonBlank(" ", joinNonBlank(":", institution, collection), idTerm + " " + recordId);
 	}
 
 	/**
@@ -873,20 +936,12 @@ final class ReportDigest {
 	}
 
 	/**
-	 * Orders line numbers numerically, falling back to text for non-numeric row references.
+	 * Keys a related row by its relation and row reference.
 	 *
-	 * @param left a line number or row reference
-	 * @param right another
-	 * @return the comparison
+	 * @param relation the relation name
+	 * @param rowId the row reference
+	 * @return the key
 	 */
-	private static int compareLineNumbers(String left, String right) {
-		try {
-			return Long.compare(Long.parseLong(left), Long.parseLong(right));
-		} catch (NumberFormatException e) {
-			return left.compareTo(right);
-		}
-	}
-
 	private static String relatedKey(String relation, String rowId) {
 		return relation + "\u0000" + rowId;
 	}
@@ -1039,10 +1094,152 @@ final class ReportDigest {
 	 * A record needing attention.
 	 *
 	 * @param recordLabel the record's label
-	 * @param problems the labels of tests reporting a problem after amendment
-	 * @param amendments the changes proposed for the record
+	 * @param problems the tests reporting a problem on the record itself after amendment
+	 * @param amendments the changes proposed for the record itself
+	 * @param rows the record's related rows with problems or proposed amendments, in file and line
+	 *     order, at most {@link #MAX_ROWS_PER_RECORD}
+	 * @param moreRows how many further related rows needing attention were left out
 	 */
-	record AttentionRecord(String recordLabel, List<String> problems, List<String> amendments) {
+	record AttentionRecord(String recordLabel, List<String> problems, List<String> amendments,
+			List<RowAttention> rows, int moreRows) {
+
+		/**
+		 * Creates an entry with no related rows.
+		 *
+		 * @param recordLabel the record's label
+		 * @param problems the tests reporting a problem on the record
+		 * @param amendments the changes proposed for the record
+		 */
+		AttentionRecord(String recordLabel, List<String> problems, List<String> amendments) {
+			this(recordLabel, problems, amendments, List.of(), 0);
+		}
+
+		/**
+		 * @return the problems on the record and on all of its related rows
+		 */
+		int problemCount() {
+			return problems.size() + rows.stream().mapToInt(row -> row.problems().size()).sum();
+		}
+
+		/**
+		 * @return the amendments proposed for the record and its related rows
+		 */
+		int amendmentCount() {
+			return amendments.size() + rows.stream().mapToInt(row -> row.amendments().size()).sum();
+		}
+	}
+
+	/**
+	 * A related row of a record needing attention: one row of an expanded table, such as one
+	 * identification of an occurrence.
+	 *
+	 * @param rowLabel the row's data file and line
+	 * @param values the row's values of the terms its failing tests act upon, as {@code term: value}
+	 * @param problems the tests reporting a problem on this row, with their results
+	 * @param amendments the changes proposed for this row
+	 */
+	record RowAttention(String rowLabel, List<String> values, List<String> problems, List<String> amendments) {
+	}
+
+	/**
+	 * Collects one record's attention entry while the tests are read.
+	 */
+	private static final class AttentionBuilder {
+		private final List<String> problems = new ArrayList<>();
+		private final List<String> recordOwnValueProblems = new ArrayList<>();
+		private final List<String> amendments = new ArrayList<>();
+		private final Map<String, RowBuilder> rows = new LinkedHashMap<>();
+
+		/**
+		 * Returns the builder of one related row, creating it on first use.
+		 *
+		 * @param subject the row's subject reference
+		 * @param row the row
+		 * @return the row's builder
+		 */
+		RowBuilder row(SubjectRef subject, CanonicalRecord row) {
+			return rows.computeIfAbsent(relatedKey(subject.relationName(), subject.rowRef()),
+					ignored -> new RowBuilder(subject, row));
+		}
+
+		/**
+		 * @return {@code true} when nothing needs attention
+		 */
+		boolean isEmpty() {
+			return problems.isEmpty() && recordOwnValueProblems.isEmpty() && amendments.isEmpty() && rows.isEmpty();
+		}
+
+		/**
+		 * Builds the entry, listing the record's own-value failures of expanded tests after its other
+		 * problems, and its rows in file and line order.
+		 *
+		 * @param recordLabel the record's label
+		 * @return the entry
+		 */
+		AttentionRecord build(String recordLabel) {
+			List<String> recordProblems = new ArrayList<>(problems);
+			recordOwnValueProblems.stream().distinct()
+					.forEach(problem -> recordProblems.add(problem + " (the record's own value)"));
+			List<RowAttention> ordered = rows.values().stream()
+					.sorted(Comparator.comparing((RowBuilder row) -> row.row.sourceRow().file())
+							.thenComparingLong(row -> row.row.sourceRow().line()))
+					.map(RowBuilder::build)
+					.toList();
+			int shown = Math.min(MAX_ROWS_PER_RECORD, ordered.size());
+			return new AttentionRecord(recordLabel, List.copyOf(recordProblems), amendments.stream().distinct().toList(),
+					ordered.subList(0, shown), ordered.size() - shown);
+		}
+
+		/**
+		 * Collects one related row's problems, amendments, and the terms to show its values of.
+		 */
+		private static final class RowBuilder {
+			private final SubjectRef subject;
+			private final CanonicalRecord row;
+			private final List<String> problems = new ArrayList<>();
+			private final List<String> amendments = new ArrayList<>();
+			private final List<List<String>> termsByTest = new ArrayList<>();
+
+			/**
+			 * @param subject the row's subject reference
+			 * @param row the row
+			 */
+			RowBuilder(SubjectRef subject, CanonicalRecord row) {
+				this.subject = subject;
+				this.row = row;
+			}
+
+			/**
+			 * Builds the row's entry, showing at most {@link #MAX_ROW_VALUES} of the values the row
+			 * itself carries: the amended terms, then the failing tests' acted-upon terms taken one test at a time (each
+			 * test's first term, then each test's second, ...), so every failure's input is shown
+			 * before any test's secondary terms.
+			 *
+			 * @return the row's entry
+			 */
+			RowAttention build() {
+				Set<String> terms = new LinkedHashSet<>();
+				amendments.forEach(change -> terms.add(change.substring(0, change.indexOf(':'))));
+				int longest = termsByTest.stream().mapToInt(List::size).max().orElse(0);
+				for (int position = 0; position < longest; position++) {
+					for (List<String> testTerms : termsByTest) {
+						if (position < testTerms.size()) {
+							terms.add(testTerms.get(position));
+						}
+					}
+				}
+				/* Only terms the row carries: a term overlaid from a single-valued table (an event's
+				 * coordinates) belongs to the record, not to this row. */
+				List<String> values = terms.stream()
+						.filter(term -> row.terms().keySet().stream()
+								.anyMatch(key -> DarwinCoreTermResolver.localName(key).equalsIgnoreCase(term)))
+						.map(term -> term + ": " + displayValue(term(row, term)))
+						.limit(MAX_ROW_VALUES)
+						.toList();
+				return new RowAttention(rowLabel(subject, row), values, problems.stream().distinct().toList(),
+						amendments.stream().distinct().toList());
+			}
+		}
 	}
 
 	/**

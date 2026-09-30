@@ -188,6 +188,22 @@ public class DefaultIngestService implements IngestService {
     }
 
     /**
+     * Attaches a synthetic-data scan, and the terms gathered to name each record from its related
+     * rows, to a relationally ingested dataset's input description.
+     *
+     * @param dataset the ingested dataset
+     * @param markers the scan of its raw input rows
+     * @param relational the relational rows the dataset was built from
+     * @return the dataset carrying the scan and the record identification
+     */
+    private static RecordDataset withMarkers(RecordDataset dataset, SyntheticDataMarkers markers,
+            RelationalIngestResult relational) {
+        RecordDataset marked = withMarkers(dataset, markers);
+        return marked.withInputDescription(marked.inputDescription().withRecordIdentification(
+                RecordIdentificationCollector.collect(relational)));
+    }
+
+    /**
      * Attaches a synthetic-data scan to a dataset's input description.
      *
      * @param dataset the ingested dataset
@@ -234,7 +250,7 @@ public class DefaultIngestService implements IngestService {
                 relational,
                 view,
                 "dataset view file " + datasetViewPath,
-                flattened.dataset().records().size())), SyntheticDataDetector.scanGraphs(relational.graphs()));
+                flattened.dataset().records().size())), SyntheticDataDetector.scanGraphs(relational.graphs()), relational);
     }
 
     /**
@@ -264,7 +280,7 @@ public class DefaultIngestService implements IngestService {
             }
             List<CanonicalRecord> rows = relational.graphs().stream().map(RecordGraph::core).toList();
             return withMarkers(new RecordDataset(rows, List.of(), DatasetInputDescriber.structured(relational, "")),
-                    SyntheticDataDetector.scanGraphs(relational.graphs()));
+                    SyntheticDataDetector.scanGraphs(relational.graphs()), relational);
         }
         DatasetView view = AutomaticDatasetViews.build(relational, joinPolicies, joinPolicyResolver);
         LOG.info("Built dataset view over grain table {} with joins {}", view.grainTable(),
@@ -275,7 +291,7 @@ public class DefaultIngestService implements IngestService {
                 relational,
                 view,
                 "automatic dataset view (" + AutomaticDatasetViews.describePolicies(view) + ")",
-                flattened.dataset().records().size())), SyntheticDataDetector.scanGraphs(relational.graphs()));
+                flattened.dataset().records().size())), SyntheticDataDetector.scanGraphs(relational.graphs()), relational);
     }
 
     private void logDiagnostics(List<String>... groups) {

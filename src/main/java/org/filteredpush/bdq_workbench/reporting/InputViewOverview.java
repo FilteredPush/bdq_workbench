@@ -46,7 +46,11 @@ import org.filteredpush.bdq_workbench.model.RelationshipSchema;
  * through one of the table's columns. Related tables that supply no bound term are reported as
  * ignored for lacking test bindings — they contributed nothing any test read — and tables that
  * carry bound terms the view did not take from them (unrelated to the grain table, or not joined
- * or mapped by a flattened view) are reported separately as not included.
+ * or mapped by a flattened view) are reported separately as not included. A related table that
+ * no test reads but that supplies the terms naming the grain records (institution code,
+ * collection code, catalog number, dataset — {@link
+ * org.filteredpush.bdq_workbench.model.RecordIdentification}) is not ignored: it identifies
+ * records in the reports, and is reported as such.
  *
  * @param description the recorded input description
  * @param tables one overview row per input table, in declaration order
@@ -105,7 +109,8 @@ public record InputViewOverview(
 				.map(relation -> relation.restrictedTo(selected))
 				.toList();
 		return new DatasetInputDescription(input.viewMode(), input.viewSource(), input.grainTable(), selected.size(),
-				input.tables(), input.relationships(), relations, input.grainMappedTerms(), input.syntheticMarkers());
+				input.tables(), input.relationships(), relations, input.grainMappedTerms(), input.syntheticMarkers(),
+				input.recordIdentification());
 	}
 
 	/**
@@ -136,6 +141,13 @@ public record InputViewOverview(
 	 */
 	public List<TableOverview> ignoredTables() {
 		return tables.stream().filter(table -> table.role() == TableRole.IGNORED_NO_BINDINGS).toList();
+	}
+
+	/**
+	 * @return the tables no test reads that supply the terms naming the grain records
+	 */
+	public List<TableOverview> identifyingTables() {
+		return tables.stream().filter(table -> table.role() == TableRole.IDENTIFYING).toList();
 	}
 
 	/**
@@ -304,7 +316,8 @@ public record InputViewOverview(
 				table.rowType(),
 				table.recordCount(),
 				table.columns().size(),
-				classify(grain, relation != null, !supplied.isEmpty(), hasBoundColumn(table, termsByBinding)),
+				classify(grain, relation != null, !supplied.isEmpty(), hasBoundColumn(table, termsByBinding),
+						description.recordIdentification().identifiesFrom(table.name())),
 				relationToGrain(description, table),
 				suppliedDisplay,
 				testCount,
@@ -355,10 +368,11 @@ public record InputViewOverview(
 	 * @param included whether the view included the table as a relation
 	 * @param suppliesBoundTerm whether the table supplied a bound term through the view
 	 * @param hasBoundColumn whether the table carries a bound term at all
+	 * @param identifiesRecords whether the table supplied terms naming the grain records
 	 * @return the table's role
 	 */
 	private static TableRole classify(boolean grain, boolean included, boolean suppliesBoundTerm,
-			boolean hasBoundColumn) {
+			boolean hasBoundColumn, boolean identifiesRecords) {
 		if (grain) {
 			return TableRole.GRAIN;
 		}
@@ -367,6 +381,9 @@ public record InputViewOverview(
 		}
 		if (hasBoundColumn) {
 			return TableRole.NOT_INCLUDED;
+		}
+		if (identifiesRecords) {
+			return TableRole.IDENTIFYING;
 		}
 		return TableRole.IGNORED_NO_BINDINGS;
 	}
@@ -415,6 +432,12 @@ public record InputViewOverview(
 
 		/** A related table the view included and that supplied terms tests read. */
 		CONTRIBUTING("joined into view"),
+
+		/**
+		 * A table no test binding read any term from, but whose rows supplied the terms naming the
+		 * grain records in the reports.
+		 */
+		IDENTIFYING("identifies records: no test bindings"),
 
 		/** A table no test binding read any term from, so it was left out of the view. */
 		IGNORED_NO_BINDINGS("ignored: no test bindings"),

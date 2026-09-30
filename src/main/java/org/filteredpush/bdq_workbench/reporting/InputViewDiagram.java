@@ -66,7 +66,8 @@ final class InputViewDiagram {
 	private static final int MAX_VIEW_TEXT_CHARS = 46;
 	private static final int TEXT_INSET = 10;
 	private static final List<TableRole> ROLE_ORDER = List.of(
-			TableRole.GRAIN, TableRole.CONTRIBUTING, TableRole.NOT_INCLUDED, TableRole.IGNORED_NO_BINDINGS);
+			TableRole.GRAIN, TableRole.CONTRIBUTING, TableRole.NOT_INCLUDED, TableRole.IDENTIFYING,
+			TableRole.IGNORED_NO_BINDINGS);
 
 	/**
 	 * CSS rules the diagram's classes rely on, for inclusion in the report's style block.
@@ -82,7 +83,8 @@ final class InputViewDiagram {
 			+ "    .vw-contrib rect { fill: #dafbe1; stroke: #1a7f37; }\n"
 			+ "    .vw-notincl rect { fill: #fff8c5; stroke: #9a6700; stroke-dasharray: 2 3; }\n"
 			+ "    .vw-ignored rect { fill: #f6f8fa; stroke: #8c959f; stroke-dasharray: 5 3; }\n"
-			+ "    .vw-ignored text, .vw-notincl text { fill: #57606a; }\n"
+			+ "    .vw-ident rect { fill: #f6f8fa; stroke: #0969da; stroke-dasharray: 5 3; }\n"
+			+ "    .vw-ignored text, .vw-notincl text, .vw-ident text { fill: #57606a; }\n"
 			+ "    .vw-view rect { fill: #fbefff; stroke: #8250df; stroke-width: 2; }\n"
 			+ "    .vw-expanded rect { fill: #ffffff; stroke-dasharray: 6 3; }\n"
 			+ "    .vw-rel { fill: none; stroke: #57606a; stroke-width: 1.5; }\n"
@@ -96,6 +98,7 @@ final class InputViewDiagram {
 			+ "    .view-legend .lg-contrib::before { background: #dafbe1; border-color: #1a7f37; }\n"
 			+ "    .view-legend .lg-notincl::before { background: #fff8c5; border-color: #9a6700; border-style: dotted; }\n"
 			+ "    .view-legend .lg-ignored::before { background: #f6f8fa; border-color: #8c959f; border-style: dashed; }\n"
+			+ "    .view-legend .lg-ident::before { background: #f6f8fa; border-color: #0969da; border-style: dashed; }\n"
 			+ "    .view-legend .lg-view::before { background: #fbefff; border-color: #8250df; }\n";
 
 	private InputViewDiagram() {
@@ -151,6 +154,7 @@ final class InputViewDiagram {
 				.append("<span class=\"lg-grain\">grain table</span>")
 				.append("<span class=\"lg-contrib\">joined into view</span>")
 				.append("<span class=\"lg-notincl\">has bound terms, not included in view</span>")
+				.append("<span class=\"lg-ident\">identifies records only</span>")
 				.append("<span class=\"lg-ignored\">ignored: no test bindings</span>")
 				.append("<span class=\"lg-view\">execution view</span>")
 				.append("</div>\n");
@@ -340,6 +344,8 @@ final class InputViewDiagram {
 			case GRAIN -> "grain · " + table.suppliedTerms().size() + " bound term(s)";
 			case CONTRIBUTING -> multiplicity(relation) + " · " + table.suppliedTerms().size() + " bound term(s)";
 			case NOT_INCLUDED -> "not included in view";
+			case IDENTIFYING -> "names records: " + String.join(", ",
+					description.recordIdentification().termsFrom(table.name()));
 			case IGNORED_NO_BINDINGS -> relation == null
 					? "ignored: no test bindings"
 					: "ignored: no test bindings (" + multiplicity(relation) + ")";
@@ -384,6 +390,11 @@ final class InputViewDiagram {
 				+ " record(s), one per " + description.grainTable() + " row");
 		if (!flattened.isEmpty()) {
 			flat.add("flattened in: " + String.join(", ", flattened));
+		}
+		if (!overview.identifyingTables().isEmpty()) {
+			flat.add("records named from: " + overview.identifyingTables().stream()
+					.map(TableOverview::name)
+					.collect(java.util.stream.Collectors.joining(", ")));
 		}
 		if (!overview.ignoredTables().isEmpty()) {
 			flat.add(overview.ignoredTables().size() + " table(s) ignored: no test bindings");
@@ -501,6 +512,7 @@ final class InputViewDiagram {
 			case GRAIN -> "vw-grain";
 			case CONTRIBUTING -> "vw-contrib";
 			case NOT_INCLUDED -> "vw-notincl";
+			case IDENTIFYING -> "vw-ident";
 			case IGNORED_NO_BINDINGS -> "vw-ignored";
 		};
 	}

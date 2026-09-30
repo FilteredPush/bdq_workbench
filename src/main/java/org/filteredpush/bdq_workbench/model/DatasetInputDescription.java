@@ -46,6 +46,8 @@ import java.util.Map;
  *     table; empty otherwise
  * @param syntheticMarkers input records carrying the BDQ markers for synthetic, modified, or
  *     example data, scanned from the raw input rows
+ * @param recordIdentification the terms naming each record, gathered from its grain row and
+ *     related rows whether or not the view mapped them
  */
 public record DatasetInputDescription(
 		ViewMode viewMode,
@@ -56,7 +58,8 @@ public record DatasetInputDescription(
 		List<RelationshipSchema> relationships,
 		List<ViewRelation> viewRelations,
 		List<String> grainMappedTerms,
-		SyntheticDataMarkers syntheticMarkers) {
+		SyntheticDataMarkers syntheticMarkers,
+		RecordIdentification recordIdentification) {
 
 	private static final DatasetInputDescription NONE = new DatasetInputDescription(
 			ViewMode.UNKNOWN, "", "", 0, List.of(), List.of(), List.of(), List.of());
@@ -87,6 +90,33 @@ public record DatasetInputDescription(
 	}
 
 	/**
+	 * Creates a description with no gathered record identification.
+	 *
+	 * @param viewMode how the input tables were turned into execution records
+	 * @param viewSource human-readable origin of the view
+	 * @param grainTable the table whose rows define the execution records
+	 * @param viewRecordCount the number of records the view produced
+	 * @param tables every table the input offered
+	 * @param relationships every relationship discovered between input tables
+	 * @param viewRelations the related tables the view included
+	 * @param grainMappedTerms the terms mapped directly from the grain table
+	 * @param syntheticMarkers the synthetic-data scan of the raw input rows
+	 */
+	public DatasetInputDescription(
+			ViewMode viewMode,
+			String viewSource,
+			String grainTable,
+			int viewRecordCount,
+			List<InputTable> tables,
+			List<RelationshipSchema> relationships,
+			List<ViewRelation> viewRelations,
+			List<String> grainMappedTerms,
+			SyntheticDataMarkers syntheticMarkers) {
+		this(viewMode, viewSource, grainTable, viewRecordCount, tables, relationships, viewRelations, grainMappedTerms,
+				syntheticMarkers, RecordIdentification.none());
+	}
+
+	/**
 	 * Canonical constructor; copies list components defensively and substitutes defaults for
 	 * null values.
 	 */
@@ -99,6 +129,7 @@ public record DatasetInputDescription(
 		viewRelations = List.copyOf(viewRelations == null ? List.of() : viewRelations);
 		grainMappedTerms = List.copyOf(grainMappedTerms == null ? List.of() : grainMappedTerms);
 		syntheticMarkers = syntheticMarkers == null ? SyntheticDataMarkers.notScanned() : syntheticMarkers;
+		recordIdentification = recordIdentification == null ? RecordIdentification.none() : recordIdentification;
 	}
 
 	/**
@@ -109,7 +140,18 @@ public record DatasetInputDescription(
 	 */
 	public DatasetInputDescription withSyntheticMarkers(SyntheticDataMarkers markers) {
 		return new DatasetInputDescription(viewMode, viewSource, grainTable, viewRecordCount, tables, relationships,
-				viewRelations, grainMappedTerms, markers);
+				viewRelations, grainMappedTerms, markers, recordIdentification);
+	}
+
+	/**
+	 * Returns a copy of this description carrying the terms gathered to name each record.
+	 *
+	 * @param identification the gathered identification
+	 * @return the copy
+	 */
+	public DatasetInputDescription withRecordIdentification(RecordIdentification identification) {
+		return new DatasetInputDescription(viewMode, viewSource, grainTable, viewRecordCount, tables, relationships,
+				viewRelations, grainMappedTerms, syntheticMarkers, identification);
 	}
 
 	/**

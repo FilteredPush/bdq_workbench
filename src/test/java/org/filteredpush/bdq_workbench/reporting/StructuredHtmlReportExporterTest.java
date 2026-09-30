@@ -97,9 +97,10 @@ class StructuredHtmlReportExporterTest {
 				+ "<td>Locality and depth</td></tr>");
 		assertThat(html).contains("<tr><td class=\"num\">2</td><td><code>geodeticDatum</code>: WGS 84 → "
 				+ "<strong>EPSG:4326</strong></td><td>Geodetic datum standardized</td>");
-		assertThat(html).contains("<tr><td>MCZ:Herp:A-1 (occurrence.txt line 2)</td><td>Scientific name found: "
-				+ "NOT_COMPLIANT in identification.txt line 3 (1 of 2 evaluations)</td><td>geodeticDatum: WGS 84 → "
-				+ "EPSG:4326</td></tr>");
+		assertThat(html).contains("<tr class=\"attention-record\"><td>MCZ:Herp:A-1 (occurrence.txt line 2)</td><td>—"
+				+ "</td><td>geodeticDatum: WGS 84 → EPSG:4326</td></tr>\n"
+				+ "      <tr class=\"attention-row\"><td>↳ identification.txt line 3<br><span class=\"muted\">"
+				+ "scientificName: Aus</span></td><td>Scientific name found: NOT_COMPLIANT</td><td>—</td></tr>\n");
 		assertThat(html).contains("<li><strong>Tests evaluated once per related row:</strong>");
 		assertThat(html).contains("<li>Scientific name found — 4 evaluations over 3 record(s), one per identification row"
 				+ "</li>");

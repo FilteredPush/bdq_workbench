@@ -20,7 +20,8 @@ class ReportDigestTest {
 	void recordsAreNamedByValuesFromTheOriginalData() {
 		assertThat(digest.recordLabel("occ-1")).isEqualTo("MCZ:Herp:A-1 (occurrence.txt line 2)");
 		assertThat(digest.recordLabel("occ-2")).isEqualTo("Survey:77 (occurrence.txt line 3)");
-		assertThat(digest.recordLabel("occ-3")).isEqualTo("occurrence.txt line 4");
+		/* No catalog number: named by its identifier (no term carries it in this fixture). */
+		assertThat(digest.recordLabel("occ-3")).isEqualTo("ID occ-3 (occurrence.txt line 4)");
 		assertThat(digest.recordLabel("unknown")).isEqualTo("unknown");
 		assertThat(digest.subjectRowLabel(new SubjectRef("occ-1", "identification", "identification",
 				"identification", "row-2"))).isEqualTo("identification.txt line 3");
@@ -83,14 +84,20 @@ class ReportDigestTest {
 	}
 
 	@Test
-	void recordsNeedingAttentionListProblemsWithRowCountsAndAmendments() {
-		assertThat(digest.recordsNeedingAttention())
+	void recordsNeedingAttentionListFailingRelatedRowsUnderTheirRecord() {
+		List<ReportDigest.AttentionRecord> attention = digest.recordsNeedingAttention();
+
+		assertThat(attention)
 				.extracting(ReportDigest.AttentionRecord::recordLabel, ReportDigest.AttentionRecord::problems,
 						ReportDigest.AttentionRecord::amendments)
 				.containsExactly(
-						tuple("MCZ:Herp:A-1 (occurrence.txt line 2)", List.of("Scientific name found: NOT_COMPLIANT in identification.txt line 3 (1 of 2 evaluations)"),
-								List.of("geodeticDatum: WGS 84 → EPSG:4326")),
-						tuple("occurrence.txt line 4", List.of(), List.of("geodeticDatum: WGS 84 → EPSG:4326")));
+						tuple("MCZ:Herp:A-1 (occurrence.txt line 2)", List.of(), List.of("geodeticDatum: WGS 84 → EPSG:4326")),
+						tuple("ID occ-3 (occurrence.txt line 4)", List.of(), List.of("geodeticDatum: WGS 84 → EPSG:4326")));
+		/* The failing identification is its own entry under the occurrence, with the value tested. */
+		assertThat(attention.get(0).rows()).containsExactly(new ReportDigest.RowAttention("identification.txt line 3",
+				List.of("scientificName: Aus"), List.of("Scientific name found: NOT_COMPLIANT"), List.of()));
+		assertThat(attention.get(0).problemCount()).isEqualTo(1);
+		assertThat(attention.get(1).rows()).isEmpty();
 	}
 
 	@Test

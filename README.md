@@ -243,9 +243,15 @@ high-impact action items (issues, non-compliance and its most frequent causes, t
 proposals that most reduced problems, empty terms), pre/post measure differences, records with quality for the use case (all multi-record QA measures COMPLETE), a per-test table of
 problems before and after amendment, information elements empty in every record, proposed
 amendments ranked by how many records they affect, and a capped list of records needing
-attention. Tests are named by their labels, and records by values from the original data —
-`institutionCode:collectionCode:catalogNumber` (or dataset and catalog number) plus the data file
-and line within the archive or package. Report headers, and the text summary, state any results
+attention, in which each related row that needs attention (such as one identification of an
+occurrence, under an `EXPAND` join) is listed on its own line beneath its record, with its data
+file and line, the values tested, and its problems and amendments. Tests are named by their
+labels, and records by values from the original data —
+`institutionCode:collectionCode:catalogNumber` (or dataset and catalog number; without a catalog
+number, the codes and the record's identifier, e.g. `occurrenceID …`) plus the data file and line
+within the archive or package. These terms are read from the record's related rows when the grain
+table lacks them — a Darwin Core Data Package keeps them on the material table — whether or not
+the view maps them, and such a table is reported as used to identify records rather than ignored. Report headers, and the text summary, state any results
 with external prerequisites not met. The full per-record results remain in the spreadsheet and
 the response list (`bdq-report-responses.txt`, which leads with record and test label columns).
 
