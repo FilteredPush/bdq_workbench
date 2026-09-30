@@ -248,6 +248,11 @@ public final class BdqWorkbenchApplication {
                 case "--discovery-packages" -> "bdq.discovery.packages";
                 case "--threads" -> "bdq.threads";
                 case "--dedup" -> "bdq.execution.dedup";
+                case "--external-concurrency" -> "bdq.execution.concurrency.external";
+                case "--retries" -> "bdq.execution.retries";
+                case "--reuse-pre-results" -> "bdq.execution.reuse";
+                case "--execution-override" -> "bdq.execution.overrides";
+                case "--lane-limit" -> "bdq.execution.lane.limits";
                 case "--record-filter" -> "bdq.record.filters";
                 case "--join-policy" -> "bdq.dataset.join.policies";
                 default -> null;
@@ -263,6 +268,9 @@ public final class BdqWorkbenchApplication {
                 overrides.put(key, overrides.get(key) + "; " + value);
             } else if ("bdq.dataset.join.policies".equals(key) && overrides.containsKey(key)) {
                 overrides.put(key, overrides.get(key) + "," + value);
+            } else if (("bdq.execution.overrides".equals(key) || "bdq.execution.lane.limits".equals(key))
+                    && overrides.containsKey(key)) {
+                overrides.put(key, overrides.get(key) + ";" + value);
             } else {
                 overrides.put(key, value);
             }
@@ -303,6 +311,19 @@ public final class BdqWorkbenchApplication {
         out.println("  --threads <n>                  Worker thread count (>= 1)");
         out.println("  --dedup <true|false>           Run each test once per distinct combination of");
         out.println("                                 input values instead of once per record (default true)");
+        out.println("  --external-concurrency <n>     Most concurrent calls per likely external service");
+        out.println("                                 lane, e.g. tests with a source authority (default 2)");
+        out.println("  --retries <n>                  Workbench retries of transient external failures,");
+        out.println("                                 with backoff (default 2, 0 disables)");
+        out.println("  --reuse-pre-results <true|false> Reuse a successful PRE_AMENDMENT result in");
+        out.println("                                 POST_AMENDMENT when its inputs were not amended");
+        out.println("                                 (default true)");
+        out.println("  --execution-override <target=spec> Lane settings for a test ID or implementation");
+        out.println("                                 class[#method]; spec is a comma-separated list of");
+        out.println("                                 external|local|unclassified, lane:NAME, max:N;");
+        out.println("                                 repeatable");
+        out.println("  --lane-limit <laneKey=n>       Concurrency limit of one lane, e.g. source:worms=1;");
+        out.println("                                 repeatable");
         out.println("  --record-filter <field=values> Restrict input records before execution;");
         out.println("                                 repeatable, quote values containing |; within a field");
         out.println("                                 values are ORed and fields are ANDed");
@@ -339,7 +360,8 @@ public final class BdqWorkbenchApplication {
                 new RdfPolicyResolverService(config.useCaseXml(), config.rdfDefinitions()),
                 new ClasspathAnnotationTestDiscoveryService(config.implementationPackages()),
                 new DefaultTestBindingService(),
-                new ParallelPhaseExecutionService(config.threadCount(), new ReflectionExecutionAdapter(), config.dedupEnabled()),
+                new ParallelPhaseExecutionService(config.threadCount(), new ReflectionExecutionAdapter(), null,
+                        config.dedupEnabled(), config.executionPolicy()),
                 new ReportingService(List.of(
                         new SummaryReportExporter(),
                         new DetailedResponseStreamExporter(),

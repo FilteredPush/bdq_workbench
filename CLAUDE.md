@@ -58,7 +58,11 @@ touching the network.
 Configuration defaults live in `src/main/resources/application.properties`
 (`bdq.usecase.file`, `bdq.rdf.files`, `bdq.dataset`, `bdq.dataset.table`, `bdq.dataset.view`,
 `bdq.dataset.join.policies`, `bdq.usecase.id`,
-`bdq.discovery.packages`, `bdq.threads`, `bdq.execution.dedup`) and are merged with CLI/GUI
+`bdq.discovery.packages`, `bdq.threads`, `bdq.execution.dedup`, and the scheduling/resilience
+settings `bdq.execution.lanes`, `bdq.execution.concurrency.*`, `bdq.execution.adaptive`,
+`bdq.execution.circuit.*`, `bdq.execution.retries`, `bdq.execution.retry.delay.*`,
+`bdq.execution.reuse`, `bdq.execution.overrides`, `bdq.execution.lane.limits`, which
+`ConfigLoader.parseExecutionPolicy` turns into `AppConfig.executionPolicy()`) and are merged with CLI/GUI
 overrides by `ConfigLoader`. `bdq.usecase.file` and `bdq.rdf.files` ship blank, which means "use
 the `WorkbenchDefaults` published sources"; set either to a local path or an HTTP URL to pin a
 run. `bdq.dataset.table` (CLI `--dataset-table`, GUI advanced options) names which table of a
@@ -213,7 +217,8 @@ understanding how the stages connect — read its class Javadoc first. The pipel
    computed, invoked, applied back to the precise source row(s) identified by retained
    `SourceCell` provenance, and any cached partition touching the changed fields is invalidated,
    before the next binding's groups are computed; PRE_AMENDMENT and POST_AMENDMENT never mutate
-   records mid-phase, so their bindings' groups are all submitted together. Ambiguous write-backs
+   records mid-phase, so their bindings' groups are all planned first and then dispatched
+   round-robin across bindings (`FairDispatchOrder`). Ambiguous write-backs
    (for example aggregated or multi-source provenance) are refused and surfaced as error responses
    rather than silently writing to an arbitrary row. Implementations name the terms they amend as
    they declare them (`dwc:geodeticDatum`), while ingested records are keyed by local names
@@ -221,7 +226,24 @@ understanding how the stages connect — read its class Javadoc first. The pipel
    pairing) maps each amendment key onto the record's own term via
    `DarwinCoreTermResolver.recordTermFor`; `Response.amendments()` keeps the implementation's keys.
    Built-in multi-record measures count *records*, not evaluations: a record's derived rollup stands
-   for its per-row evaluations, so an expanded test cannot exceed 100% of the records. `ReflectionExecutionAdapter` is the actual
+   for its per-row evaluations, so an expanded test cannot exceed 100% of the records.
+
+   **Scheduling and resilience** (README, "Execution scheduling and resilience"). Group
+   invocations do not go straight to a thread pool: `ResourceLaneScheduler` (one per `execute`
+   call) queues each in the resource lane `ExecutionResourceClassifier` assigns its binding
+   (override → source-authority parameter → local method name → `class#method`), starting it only
+   when a worker and a lane permit are free, so waiting work never holds a worker. It classifies
+   every response with `ResponseFailureClassifier`, halves a lane's limit on external failures and
+   restores it on successes, opens a lane's circuit after consecutive failures (cooldowns and
+   retry backoff run on a `DelayScheduler` timer, never a sleeping worker), and retries likely
+   transient failures per `RetryPolicy`, completing the group's future only with the final
+   attempt — which is what keeps AMENDMENT write-back ordered. Lane events and
+   `ExecutionRunStatistics` go to `ExecutionProgressListener`'s default methods. In
+   POST_AMENDMENT, a binding rebound from PRE_AMENDMENT reuses the successful PRE result of a
+   group whose `InvocationFingerprint` is unchanged (`PrePostResultReuse`); failures,
+   amendments, explicit POST bindings and legacy bindings are never reused. All of it is
+   configured by the immutable `ExecutionPolicy`; the legacy service constructors use the
+   defaults with reuse off. `ReflectionExecutionAdapter` is the actual
    per-invocation adapter: it builds a reflective argument array from the effective subject's bound
    parameters, invokes the target method, and reads back an ffdq-style result purely reflectively
    (`getResultState()`, `getValue().getObject()`, `getComment()`) so this module has no

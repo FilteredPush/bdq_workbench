@@ -24,6 +24,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.filteredpush.bdq_workbench.execution.ExecutionPolicy;
 import org.filteredpush.bdq_workbench.model.DatasetViewCardinalityPolicy;
 import org.filteredpush.bdq_workbench.model.RecordFilterSpec;
 
@@ -56,6 +57,9 @@ import org.filteredpush.bdq_workbench.model.RecordFilterSpec;
  * @param datasetJoinPolicies multiplicity-handling policies keyed by related table name, used
  *     when a multi-table dataset is run without {@code datasetView}; tables with more than one row
  *     per grain record need one (see {@link DatasetViewCardinalityPolicy})
+ * @param executionPolicy how test execution shares the worker pool among external services and
+ *     local work: resource lanes, adaptive throttling, circuit breaking, retries, and
+ *     PRE-to-POST result reuse; defaults to {@link ExecutionPolicy#defaults()}
  */
 public record AppConfig(
 		Path useCaseXml,
@@ -68,7 +72,39 @@ public record AppConfig(
 		RecordFilterSpec recordFilter,
 		String datasetTable,
 		String datasetView,
-		Map<String, DatasetViewCardinalityPolicy> datasetJoinPolicies) {
+		Map<String, DatasetViewCardinalityPolicy> datasetJoinPolicies,
+		ExecutionPolicy executionPolicy) {
+
+	/**
+	 * Creates a configuration with the default execution policy.
+	 *
+	 * @param useCaseXml path to the use case XML definition file
+	 * @param rdfDefinitions RDF/OWL files used to resolve policy/test metadata
+	 * @param datasetPath path to the dataset input
+	 * @param useCaseId optional use case identifier
+	 * @param implementationPackages Java packages to scan for test implementations
+	 * @param threadCount number of worker threads to use
+	 * @param dedupEnabled whether distinct-value execution is enabled
+	 * @param recordFilter pre-execution record filter criteria
+	 * @param datasetTable which dataset table to run against
+	 * @param datasetView optional dataset view JSON path
+	 * @param datasetJoinPolicies multiplicity-handling policies keyed by related table name
+	 */
+	public AppConfig(
+			Path useCaseXml,
+			List<Path> rdfDefinitions,
+			Path datasetPath,
+			String useCaseId,
+			List<String> implementationPackages,
+			int threadCount,
+			boolean dedupEnabled,
+			RecordFilterSpec recordFilter,
+			String datasetTable,
+			String datasetView,
+			Map<String, DatasetViewCardinalityPolicy> datasetJoinPolicies) {
+		this(useCaseXml, rdfDefinitions, datasetPath, useCaseId, implementationPackages, threadCount, dedupEnabled,
+				recordFilter, datasetTable, datasetView, datasetJoinPolicies, ExecutionPolicy.defaults());
+	}
 
 	/**
 	 * Creates a configuration with no join policies.
@@ -165,8 +201,8 @@ public record AppConfig(
 	}
 
 	/**
-	 * Canonical constructor; substitutes an empty record filter and table selection when none
-	 * is supplied.
+	 * Canonical constructor; substitutes an empty record filter and table selection, and the
+	 * default execution policy, when none is supplied.
 	 */
 	public AppConfig {
 		recordFilter = recordFilter == null ? RecordFilterSpec.empty() : recordFilter;
@@ -174,6 +210,7 @@ public record AppConfig(
 		datasetView = datasetView == null ? "" : datasetView.trim();
 		datasetJoinPolicies = Collections.unmodifiableMap(new LinkedHashMap<>(
 				datasetJoinPolicies == null ? Map.of() : datasetJoinPolicies));
+		executionPolicy = executionPolicy == null ? ExecutionPolicy.defaults() : executionPolicy;
 	}
 
 	/**
@@ -184,6 +221,17 @@ public record AppConfig(
 	 */
 	public AppConfig withUseCaseId(String newUseCaseId) {
 		return new AppConfig(useCaseXml, rdfDefinitions, datasetPath, newUseCaseId, implementationPackages, threadCount,
-				dedupEnabled, recordFilter, datasetTable, datasetView, datasetJoinPolicies);
+				dedupEnabled, recordFilter, datasetTable, datasetView, datasetJoinPolicies, executionPolicy);
+	}
+
+	/**
+	 * Returns a copy of this configuration with a different execution policy.
+	 *
+	 * @param newExecutionPolicy the execution policy, or {@code null} for the defaults
+	 * @return the copy
+	 */
+	public AppConfig withExecutionPolicy(ExecutionPolicy newExecutionPolicy) {
+		return new AppConfig(useCaseXml, rdfDefinitions, datasetPath, useCaseId, implementationPackages, threadCount,
+				dedupEnabled, recordFilter, datasetTable, datasetView, datasetJoinPolicies, newExecutionPolicy);
 	}
 }

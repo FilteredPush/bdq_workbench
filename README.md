@@ -168,6 +168,7 @@ Current flow-control options are intentionally modest:
 - **Parameter overrides**: GUI preflight supports per-test parameter editing plus saving/loading parameter settings.
 - **Isolated test execution**: GUI preflight/debug tools can run one bound test independently against the prepared dataset.
 - **Distinct-value reduction**: CLI/config `bdq.execution.dedup` and the GUI's `Reduce repeated test calls by distinct input values` checkbox toggle whether eligible bindings run once per distinct input-value group instead of once per record.
+- **External-service scheduling and resilience**: `bdq.execution.*` settings (and the CLI's `--external-concurrency`, `--retries`, `--reuse-pre-results`, `--execution-override`, `--lane-limit`) control per-resource concurrency lanes, adaptive throttling, circuit breaking, retries, and PRE-to-POST result reuse; see [Execution scheduling and resilience](#execution-scheduling-and-resilience).
 - **Not currently supported**: there is still no user-facing phase skip/select control, and the main run UI still does not expose cancellation.
 
 ## Architecture overview
@@ -277,7 +278,7 @@ A few behaviors worth knowing about:
   invoked, and its resulting amendments applied to every group member, and any cached partition
   touching the changed fields is discarded, before the next binding's groups are computed.
   PRE_AMENDMENT and POST_AMENDMENT never mutate records mid-phase, so their bindings' groups are
-  all computed and submitted together.
+  all computed up front and dispatched round-robin across bindings (see below).
 - **Not every binding is eligible.** Implementations bound via the legacy `(Map record)`/
   `(Map record, Map parameters)` signatures read the whole record or parameter map rather than
   specific declared terms, so the workbench can't know what subset of fields they actually depend
@@ -285,6 +286,103 @@ A few behaviors worth knowing about:
 - **Configurable via `bdq.execution.dedup`** (CLI `--dedup true|false`, default `true`). Disabling
   it runs every binding once per record exactly as if none were dedup-eligible, useful for
   debugging or comparing behavior against the pre-reduction execution path.
+
+## Execution scheduling and resilience
+
+The workbench cannot know beforehand whether a discovered test implementation calls an external
+service (WoRMS, IRMNG, GBIF, a geography layer server, ...). Running every group of one test on
+every worker at once can send a burst of simultaneous requests to that service; the service then
+throttles or rejects them, implementation libraries retry immediately, and whole test runs end in
+`EXTERNAL_PREREQUISITES_NOT_MET`. `ParallelPhaseExecutionService` therefore schedules invocations
+as follows (all without changing which responses are produced or their order):
+
+1. **Fair dispatch.** In PRE_AMENDMENT and POST_AMENDMENT every binding's distinct-value groups
+   are planned first and then dispatched round-robin — group 1 of test A, group 1 of B, group 1 of
+   C, group 2 of A, ... — so one test cannot fill every worker. AMENDMENT bindings still run one at
+   a time, in order.
+2. **Resource lanes.** Each binding is assigned a resource lane (`ExecutionResourceClassifier`),
+   in this order of precedence: an explicit override for its test ID, implementation signature,
+   `class#method`, or class; then a source-authority-like parameter (`bdq:sourceAuthority`,
+   `bdq:taxonIsMarine`, `bdq:geospatialLand`, ...), which marks it *likely external* and names
+   the lane after the authority (`source:worms`), so different tests using one service share a
+   lane; then clearly local method names (`...Notempty`, `...Inrange` without a source authority),
+   which run *local*; everything else is *unclassified* and gets a lane per `class#method`. A lane
+   runs at most its limit of invocations at once; work waiting on a lane stays in the scheduler's
+   queue and never occupies a worker, so unrelated lanes and local work keep running. These static
+   hints are only a starting point: overrides replace them, and a lane not pinned by an override
+   that has run many invocations without an external failure (a "source authority" can be a
+   bundled local data layer) is promoted to the local limit.
+3. **Runtime adaptation and circuit breaker.** `ResponseFailureClassifier` sorts each response
+   into completed, likely transient external (timeouts, connection failures, unknown host,
+   HTTP 429/5xx), non-transient configuration (invalid/unsupported source authority,
+   HTTP 400/401/403/404), ambiguous external (`EXTERNAL_PREREQUISITES_NOT_MET` without a clear
+   diagnostic), or internal. A transient or ambiguous external failure halves the lane's limit
+   (minimum 1); successes restore it one slot at a time. After consecutive external failures the
+   lane's circuit opens: its queued work pauses, without holding workers, for a cooldown that
+   doubles on each reopening; then one probe runs, and a successful probe closes the circuit and
+   resumes the lane gradually. A lane that keeps failing after several openings is given up for
+   the run, and its remaining work is reported as `EXTERNAL_PREREQUISITES_NOT_MET` without being
+   invoked. Configuration failures never throttle, open a circuit, or retry.
+4. **Retries.** A group whose response is a likely transient external failure is retried (the
+   group, not each record), after an exponential backoff with jitter scheduled on a timer rather
+   than a sleeping worker; an ambiguous failure is retried at most once. The retry rejoins its
+   lane's queue and obeys the lane's current limit and circuit. Only the final attempt's response
+   is fanned out to the group's records; its message notes the attempt count (the comment and
+   status are the implementation's own), so a group that never recovers still reports the latest
+   `EXTERNAL_PREREQUISITES_NOT_MET` diagnostic. An AMENDMENT group's retries settle before its
+   amendments are applied and before the next amendment binding runs.
+5. **PRE-to-POST reuse.** POST_AMENDMENT re-runs every PRE_AMENDMENT validation, issue, and
+   measure that has no explicit POST_AMENDMENT binding. When amendments left all of a group's
+   inputs unchanged, the successful PRE_AMENDMENT result is copied into POST_AMENDMENT (with the
+   POST_AMENDMENT phase, fresh timestamps, and a note in its message) instead of invoking the
+   test again. An invocation's fingerprint covers the implementation signature, test ID and type,
+   parameter values, the governing relation of the evaluated subject, and the value of every
+   declared `ACTED_UPON`/`CONSULTED` term. Errors, unable-to-run results, and every
+   `EXTERNAL_PREREQUISITES_NOT_MET` result are never reused; amendments, explicitly POST-bound
+   tests, legacy whole-record bindings, and bindings with an unresolved input are always invoked;
+   reuse is off when `bdq.execution.dedup` is `false`.
+
+Lane events (throttled, capacity restored, circuit opened/half-open/closed, retry scheduled,
+succeeded, or exhausted) are logged and reported to `ExecutionProgressListener.onResourceLaneEvent`;
+at the end of a run the per-resource and per-test statistics (invocations, maximum concurrency,
+external failures, retries, recovered and exhausted retries, circuit openings, reused and skipped
+calls) are logged and passed to `ExecutionProgressListener.onExecutionStatistics`.
+
+Settings (`application.properties`, overridable like any other setting):
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `bdq.threads` | `4` | Worker pool size (unchanged) |
+| `bdq.execution.lanes` | `true` | Per-resource lanes (`false`: one shared lane using the whole pool) |
+| `bdq.execution.concurrency.external` | `2` | Limit of a likely external lane (CLI `--external-concurrency`) |
+| `bdq.execution.concurrency.unclassified` | `4` | Limit of an unclassified lane |
+| `bdq.execution.concurrency.local` | `0` | Limit of a local lane; `0` = the whole worker pool |
+| `bdq.execution.adaptive` | `true` | Adaptive throttling and circuit breaker |
+| `bdq.execution.circuit.failures` | `3` | Consecutive external failures that open a circuit; `0` disables it |
+| `bdq.execution.circuit.cooldown.ms` / `.max.ms` | `5000` / `60000` | Initial and maximum circuit cooldown |
+| `bdq.execution.retries` | `2` | Workbench retries of a transient failure; `0` disables (CLI `--retries`) |
+| `bdq.execution.retry.delay.ms` / `.max.ms` | `500` / `8000` | Base and maximum retry backoff (reduced by up to half at random) |
+| `bdq.execution.reuse` | `true` | PRE-to-POST result reuse (CLI `--reuse-pre-results`) |
+| `bdq.execution.overrides` | empty | `target=spec;...`, spec from `external`/`local`/`unclassified`, `lane:NAME`, `max:N` (CLI `--execution-override`, repeatable) |
+| `bdq.execution.lane.limits` | empty | `laneKey=N;...`, e.g. `source:worms=1` (CLI `--lane-limit`, repeatable) |
+
+Every limit is capped at the worker count. For example, to put every test of the georeference
+library that consults WoRMS into one lane that makes one call at a time:
+
+```bash
+java -jar target/bdq_workbench-0.1.0-SNAPSHOT.jar --dataset occurrences.zip \
+  --execution-override 'org.filteredpush.qc.georeference.DwCGeoRefDQDefaults#validationCoordinatesTerrestrialmarine=external,lane:worms' \
+  --lane-limit lane:worms=1
+```
+
+Programmatically, pass an `ExecutionPolicy` (built with `ExecutionPolicy.builder()`) to the
+`ParallelPhaseExecutionService(threads, adapter, listener, dedup, policy)` constructor. The older
+constructors remain and use the same defaults except that PRE-to-POST reuse is off, so existing
+callers see every POST_AMENDMENT invocation they did before; the CLI and GUI use the policy from
+their configuration (the GUI takes it from `application.properties` and any `--gui` overrides).
+Lanes, adaptive state, and statistics are scoped to one `execute` call, and the worker pool, the
+timer, and every queued, delayed, or in-flight invocation are shut down when it returns, fails, or
+is cancelled.
 
 ## Spreadsheet (XLSX) report export
 
