@@ -41,6 +41,7 @@ import org.filteredpush.bdq_workbench.model.ImplementationStatus;
 import org.filteredpush.bdq_workbench.model.MethodParameter;
 import org.filteredpush.bdq_workbench.model.ParameterRole;
 import org.filteredpush.bdq_workbench.model.ParameterizationCapability;
+import org.filteredpush.bdq_workbench.model.SingleRecordValidationMeasureSpec;
 import org.filteredpush.bdq_workbench.model.TestDefinition;
 import org.filteredpush.bdq_workbench.model.TestType;
 import org.slf4j.Logger;
@@ -59,6 +60,11 @@ import org.slf4j.LoggerFactory;
  *       {@link BuiltInMeasureSpec#IMPLEMENTATION_CLASS}/{@link BuiltInMeasureSpec#IMPLEMENTATION_METHOD}
  *       handle rather than a discovered method, targeting the {@code VALIDATION} test named in
  *       the measure's label.
+ *   <li>Built-in single-record validation measures — MEASURE_VALIDATIONTESTS_COMPLIANT,
+ *       MEASURE_VALIDATIONTESTS_NOTCOMPLIANT and MEASURE_VALIDATIONTESTS_PREREQUISITESNOTMET,
+ *       recognized via {@link SingleRecordValidationMeasureSpec#from(TestDefinition)} and bound to
+ *       its synthetic implementation handle, since their input is the record's VALIDATION
+ *       responses rather than record terms. Having no target test, they are always runnable.
  *   <li>An explicit {@code testId -> implementationClass#implementationMethod} mapping entry, if
  *       one is supplied and matches a discovered method — this overrides automatic selection
  *       entirely.
@@ -158,6 +164,11 @@ public class DefaultTestBindingService implements TestBindingService {
                         LinkedHashMap::new));
 
         for (TestDefinition test : tests) {
+            var singleRecordMeasure = SingleRecordValidationMeasureSpec.from(test);
+            if (singleRecordMeasure.isPresent()) {
+                bindSingleRecordValidationMeasure(test, singleRecordMeasure.get(), bindings, reviews);
+                continue;
+            }
             var builtInMeasure = BuiltInMeasureSpec.from(test);
             if (builtInMeasure.isPresent()) {
                 TestDefinition targetTest = validationTestsByLabel.get(builtInMeasure.get().targetTestLabel());
@@ -254,6 +265,45 @@ public class DefaultTestBindingService implements TestBindingService {
 
         adjustBuiltInMeasureRunnability(bindings, unresolved, reviews);
         return new TestBindingResult(List.copyOf(bindings), List.copyOf(unresolved), List.copyOf(reviews));
+    }
+
+    /**
+     * Binds a built-in single-record validation measure to its synthetic implementation handle.
+     *
+     * @param test the measure test from the use case's policy
+     * @param spec the recognized measure spec
+     * @param bindings the bindings under construction, to which the new binding is added
+     * @param reviews the binding reviews under construction, to which the new review is added
+     */
+    private static void bindSingleRecordValidationMeasure(
+            TestDefinition test,
+            SingleRecordValidationMeasureSpec spec,
+            List<ImplementationBinding> bindings,
+            List<BindingReview> reviews) {
+        List<String> diagnostics = List.of("Built-in SingleRecord validation measure", spec.description());
+        bindings.add(new ImplementationBinding(
+                test.id(),
+                test.type(),
+                SingleRecordValidationMeasureSpec.IMPLEMENTATION_CLASS,
+                SingleRecordValidationMeasureSpec.IMPLEMENTATION_METHOD,
+                test.phase(),
+                spec.asBindingParameters(test.label()),
+                BindingStatus.BOUND,
+                ParameterizationCapability.DEFAULT_ONLY,
+                "built-in single-record validation measure",
+                true,
+                List.of(),
+                diagnostics));
+        reviews.add(new BindingReview(
+                test,
+                ImplementationStatus.FOUND,
+                BindingStatus.BOUND,
+                ParameterizationCapability.DEFAULT_ONLY,
+                SingleRecordValidationMeasureSpec.IMPLEMENTATION_CLASS + "#"
+                        + SingleRecordValidationMeasureSpec.IMPLEMENTATION_METHOD,
+                Map.of(),
+                true,
+                diagnostics));
     }
 
     /**
