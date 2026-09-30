@@ -47,7 +47,7 @@ final class RecordGroupPartitioner {
      * that subjects missing the same field still group together (a real Darwin Core value is never
      * expected to collide with this sentinel).
      */
-    private static final String NULL_SENTINEL = "<<NULL>>";
+    static final String NULL_SENTINEL = "<<NULL>>";
 
     private RecordGroupPartitioner() {
     }

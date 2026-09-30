@@ -20,18 +20,20 @@
 package org.filteredpush.bdq_workbench.execution;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import org.filteredpush.bdq_workbench.model.BoundMethodParameter;
 import org.filteredpush.bdq_workbench.model.BuiltInMeasureSpec;
 import org.filteredpush.bdq_workbench.model.CanonicalRecord;
@@ -73,8 +75,11 @@ import org.slf4j.LoggerFactory;
  *
  * <p><b>Amendment sequencing.</b> PRE_AMENDMENT and POST_AMENDMENT never mutate records mid-phase
  * (amendments are only ever applied for the AMENDMENT phase), so every eligible binding's groups
- * for either of those phases are computed and submitted together, and the resulting responses are
- * collected in submission order. The AMENDMENT phase is different: one binding's amendment can
+ * for either of those phases are computed together and then dispatched fairly, round-robin across
+ * bindings (group 1 of A, group 1 of B, …, group 2 of A, …; see {@link FairDispatchOrder}), so that
+ * one binding cannot monopolize every worker — and, if it calls an external service, burst that
+ * service with simultaneous requests. The resulting responses are still collected binding by
+ * binding and sorted deterministically. The AMENDMENT phase is different: one binding's amendment can
  * change term values a later binding in the same phase groups or reads by, so AMENDMENT-phase
  * bindings are processed one at a time — each binding's groups are computed, invoked, fanned out
  * to every group member, and its resulting amendments applied to the dataset, before the next
@@ -88,8 +93,17 @@ import org.slf4j.LoggerFactory;
  * POST_AMENDMENT binding) into the POST_AMENDMENT phase, so that such tests are evaluated against
  * post-amendment data by default.
  *
+ * <p><b>Resource lanes.</b> Invocations are not handed straight to a worker pool. Each binding is
+ * assigned an {@link ExecutionResourceKey} and a concurrency limit by
+ * {@link ExecutionResourceClassifier} (explicit {@link ExecutionPolicy} overrides first, then
+ * source-authority parameters, then conservative defaults), and a run-scoped
+ * {@link ResourceLaneScheduler} queues each invocation in its lane, starting it on one of the
+ * {@code threadCount} workers only when that lane has a free permit. Waiting work therefore never
+ * occupies a worker, bindings that share an external source share its limit, and unrelated lanes
+ * and local work keep running while one lane is saturated.
+ *
  * <p>Bindings identified by {@link BuiltInMeasureSpec#isBuiltIn} (synthetic COMPLETENESS/COUNT
- * measures with no real implementation to invoke) are not submitted to the executor at all (grouped
+ * measures with no real implementation to invoke) are not submitted to the scheduler at all (grouped
  * or otherwise); instead {@link #synthesizeBuiltInMeasure} computes their result directly from the
  * other responses already produced in the same phase, once their target test's direct bindings
  * have also run in that phase.
@@ -107,17 +121,27 @@ import org.slf4j.LoggerFactory;
  * they would have failed identically) rather than aborting the phase.
  *
  * <p>If the calling thread is interrupted (for example because the GUI requested that a running
- * session stop), execution is cancelled promptly: queued work is not collected, worker threads are
- * interrupted via the phase executor's shutdown, and a {@link CancellationException} is raised to
+ * session stop), execution is cancelled promptly: queued work is cancelled, worker threads are
+ * interrupted when the run's scheduler is closed, and a {@link CancellationException} is raised to
  * the caller instead of being converted into misleading partial results.
  */
 public class ParallelPhaseExecutionService implements TestExecutionService {
     private static final Logger LOG = LoggerFactory.getLogger(ParallelPhaseExecutionService.class);
     private static final String DERIVED_IMPLEMENTATION_METHOD = "deriveRollup";
+    /**
+     * Policy used by the constructors that predate {@link ExecutionPolicy}: every scheduling and
+     * resilience feature is on, but PRE-to-POST reuse is off, so those callers keep observing one
+     * real invocation per distinct-value group per phase.
+     */
+    private static final ExecutionPolicy LEGACY_CONSTRUCTOR_POLICY =
+            ExecutionPolicy.defaults().toBuilder().prePostReuseEnabled(false).build();
     private final int threadCount;
     private final ExecutionAdapter executionAdapter;
     private final ExecutionProgressListener progressListener;
     private final boolean dedupEnabled;
+    private final ExecutionPolicy policy;
+    private final java.util.function.Supplier<DelayScheduler> delaySchedulerFactory;
+    private volatile ExecutionRunStatistics lastRunStatistics = new ExecutionRunStatistics(List.of(), List.of());
 
     /**
      * Creates a service with no progress reporting (an {@link ExecutionProgressListener} with all
@@ -181,10 +205,78 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
             ExecutionAdapter executionAdapter,
             ExecutionProgressListener progressListener,
             boolean dedupEnabled) {
+        this(threadCount, executionAdapter, progressListener, dedupEnabled, LEGACY_CONSTRUCTOR_POLICY);
+    }
+
+    /**
+     * Creates a service governed by an explicit {@link ExecutionPolicy}: resource lanes and their
+     * limits and overrides, adaptive throttling, circuit breaking, retries, and PRE-to-POST reuse.
+     *
+     * @param threadCount the number of worker threads shared by every resource lane; values less
+     *     than 1 are treated as 1
+     * @param executionAdapter the adapter used to invoke each binding against each record
+     * @param progressListener the listener notified of phase, response, and resource lane events;
+     *     {@code null} means no listener
+     * @param dedupEnabled whether to invoke each eligible binding once per distinct combination of
+     *     its declared input values rather than once per record
+     * @param policy the execution policy; {@code null} means {@link ExecutionPolicy#defaults()}
+     */
+    public ParallelPhaseExecutionService(
+            int threadCount,
+            ExecutionAdapter executionAdapter,
+            ExecutionProgressListener progressListener,
+            boolean dedupEnabled,
+            ExecutionPolicy policy) {
+        this(threadCount, executionAdapter, progressListener, dedupEnabled, policy, DelayScheduler::newDefault);
+    }
+
+    /**
+     * Creates a policy-governed service with an injectable timer for circuit cooldowns and retry
+     * backoff, so tests can control time instead of waiting for it.
+     *
+     * @param threadCount the number of worker threads shared by every resource lane; values less
+     *     than 1 are treated as 1
+     * @param executionAdapter the adapter used to invoke each binding against each record
+     * @param progressListener the listener notified of phase, response, and resource lane events;
+     *     {@code null} means no listener
+     * @param dedupEnabled whether to invoke each eligible binding once per distinct combination of
+     *     its declared input values rather than once per record
+     * @param policy the execution policy; {@code null} means {@link ExecutionPolicy#defaults()}
+     * @param delaySchedulerFactory creates one timer per run; each is closed when its run ends
+     */
+    ParallelPhaseExecutionService(
+            int threadCount,
+            ExecutionAdapter executionAdapter,
+            ExecutionProgressListener progressListener,
+            boolean dedupEnabled,
+            ExecutionPolicy policy,
+            java.util.function.Supplier<DelayScheduler> delaySchedulerFactory) {
+        this.delaySchedulerFactory = delaySchedulerFactory;
         this.threadCount = Math.max(1, threadCount);
         this.executionAdapter = executionAdapter;
-        this.progressListener = progressListener;
+        this.progressListener = progressListener == null ? new ExecutionProgressListener() {
+        } : progressListener;
         this.dedupEnabled = dedupEnabled;
+        this.policy = policy == null ? ExecutionPolicy.defaults() : policy;
+    }
+
+    /**
+     * Returns the per-resource and per-test statistics of the most recently finished run (empty
+     * before the first run).
+     *
+     * @return the last run's statistics
+     */
+    public ExecutionRunStatistics lastRunStatistics() {
+        return lastRunStatistics;
+    }
+
+    /**
+     * Returns the execution policy this service applies.
+     *
+     * @return the policy
+     */
+    public ExecutionPolicy policy() {
+        return policy;
     }
 
     /**
@@ -215,11 +307,29 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
         RecordDataset immutableSource = dataset.copy();
         RecordDataset amendmentCopy = dataset.copy();
 
-        results.addAll(executePhase(Phase.PRE_AMENDMENT, immutableSource, bindingsForPhase(Phase.PRE_AMENDMENT, bindings), discoveredByKey));
-        throwIfCancellationRequested("before AMENDMENT phase");
-        results.addAll(executePhase(Phase.AMENDMENT, amendmentCopy, bindingsForPhase(Phase.AMENDMENT, bindings), discoveredByKey));
-        throwIfCancellationRequested("before POST_AMENDMENT phase");
-        results.addAll(executePhase(Phase.POST_AMENDMENT, amendmentCopy, bindingsForPhase(Phase.POST_AMENDMENT, bindings), discoveredByKey));
+        LOG.debug("Executing with {} workers and {}", threadCount, policy);
+        ExecutionStatisticsCollector statistics = new ExecutionStatisticsCollector();
+        RunContext run = new RunContext(
+                new ExecutionResourceClassifier(policy, threadCount, discovered),
+                new ResourceLaneScheduler(threadCount, policy, delaySchedulerFactory.get(), this::notifyLaneEvent, statistics),
+                statistics,
+                new PrePostResultReuse(policy.prePostReuseEnabled() && dedupEnabled));
+        List<ImplementationBinding> postBindings = bindingsForPhase(Phase.POST_AMENDMENT, bindings);
+        Set<ImplementationBinding> originals = Collections.newSetFromMap(new IdentityHashMap<>());
+        originals.addAll(bindings);
+        postBindings.stream()
+                .filter(binding -> !originals.contains(binding))
+                .forEach(run.reuse()::markRebound);
+        try {
+            results.addAll(executePhase(Phase.PRE_AMENDMENT, immutableSource, bindingsForPhase(Phase.PRE_AMENDMENT, bindings), discoveredByKey, run));
+            throwIfCancellationRequested("before AMENDMENT phase");
+            results.addAll(executePhase(Phase.AMENDMENT, amendmentCopy, bindingsForPhase(Phase.AMENDMENT, bindings), discoveredByKey, run));
+            throwIfCancellationRequested("before POST_AMENDMENT phase");
+            results.addAll(executePhase(Phase.POST_AMENDMENT, amendmentCopy, postBindings, discoveredByKey, run));
+        } finally {
+            run.scheduler().close();
+            publishStatistics(statistics.snapshot());
+        }
 
         results.sort(Comparator
                 .comparing(Response::phase)
@@ -230,6 +340,37 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
                 .thenComparing(Response::implementationClass)
                 .thenComparing(Response::implementationMethod));
         return results;
+    }
+
+    /**
+     * Forwards a resource lane event to the progress listener, isolating listener failures.
+     *
+     * @param phase the phase the event occurred in
+     * @param event the event
+     */
+    private void notifyLaneEvent(Phase phase, ResourceLaneEvent event) {
+        try {
+            progressListener.onResourceLaneEvent(phase, event);
+        } catch (RuntimeException e) {
+            LOG.warn("Progress listener failed handling {}: {}", event, e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Records, logs, and reports a finished run's statistics.
+     *
+     * @param statistics the run's statistics
+     */
+    private void publishStatistics(ExecutionRunStatistics statistics) {
+        lastRunStatistics = statistics;
+        if (!statistics.resources().isEmpty()) {
+            LOG.info("{}", statistics.describe());
+        }
+        try {
+            progressListener.onExecutionStatistics(statistics);
+        } catch (RuntimeException e) {
+            LOG.warn("Progress listener failed handling execution statistics: {}", e.getMessage(), e);
+        }
     }
 
     /**
@@ -250,16 +391,18 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
      *     {@link #bindingsForPhase}
      * @param discoveredByKey discovered implementations keyed by
      *     {@code "<implementationClass>#<implementationMethod>"}
+     * @param run the run-scoped classifier and resource lane scheduler
      * @return the responses produced in this phase (direct invocations, fanned out per record,
      *     followed by synthesized built-in measures); empty if there is no work to do
-     * @throws RuntimeException if the executor is interrupted while awaiting results, or if an
+     * @throws RuntimeException if the caller is interrupted while awaiting results, or if an
      *     unexpected (non-{@link ExecutionException}) failure occurs while collecting results
      */
     private List<Response> executePhase(
             Phase phase,
             RecordDataset dataset,
             List<ImplementationBinding> bindings,
-            Map<String, List<DiscoveredImplementation>> discoveredByKey) {
+            Map<String, List<DiscoveredImplementation>> discoveredByKey,
+            RunContext run) {
         throwIfCancellationRequested("before phase " + phase);
         List<ImplementationBinding> phaseBindings = bindings.stream()
                 .filter(binding -> !BuiltInMeasureSpec.isBuiltIn(binding))
@@ -280,7 +423,6 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
         LOG.debug("Starting phase {} with {} records, {} direct bindings, {} built-in measures",
                 phase, dataset.records().size(), phaseBindings.size(), builtInMeasures.size());
         progressListener.onPhaseStarted(phase, total);
-        ExecutorService executor = Executors.newFixedThreadPool(threadCount);
         try {
             Map<String, CanonicalRecord> recordsById = new LinkedHashMap<>();
             dataset.records().forEach(record -> recordsById.put(record.id(), record));
@@ -290,7 +432,8 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
             if (phase == Phase.AMENDMENT) {
                 for (ImplementationBinding binding : phaseBindings) {
                     throwIfCancellationRequested("during phase " + phase);
-                    BindingExecutionPlan plan = submitGroupedBinding(phase, binding, groupCache, discoveredByKey, executor);
+                    BindingExecutionPlan plan = planGroupedBinding(phase, binding, groupCache, discoveredByKey, run);
+                    plan.invocations().forEach(invocation -> dispatch(phase, invocation, run));
                     for (Response response : plan.preResponses()) {
                         throwIfCancellationRequested("during phase " + phase);
                         responses.add(response);
@@ -301,7 +444,7 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
                     List<Response> detailResponses = new ArrayList<>();
                     for (GroupInvocation invocation : plan.invocations()) {
                         throwIfCancellationRequested("during phase " + phase);
-                        for (SubjectResponse fanned : collectAndFanOut(phase, invocation)) {
+                        for (SubjectResponse fanned : collectAndFanOut(phase, invocation, run)) {
                             throwIfCancellationRequested("during phase " + phase);
                             Map<String, String> recordAmendments = recordKeyedAmendments(
                                     fanned.response().amendments(), fanned.subject(), plan.binding());
@@ -320,7 +463,16 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
                 List<BindingExecutionPlan> plans = new ArrayList<>();
                 for (ImplementationBinding binding : phaseBindings) {
                     throwIfCancellationRequested("during phase " + phase);
-                    plans.add(submitGroupedBinding(phase, binding, groupCache, discoveredByKey, executor));
+                    plans.add(planGroupedBinding(phase, binding, groupCache, discoveredByKey, run));
+                }
+                /*
+                 * Dispatch fairly across bindings (group 1 of A, group 1 of B, ..., group 2 of A, ...)
+                 * so that one binding's groups cannot monopolize every worker; responses are still
+                 * collected per binding below, in binding order.
+                 */
+                for (GroupInvocation invocation : FairDispatchOrder.roundRobin(plans, BindingExecutionPlan::invocations)) {
+                    throwIfCancellationRequested("during phase " + phase);
+                    dispatch(phase, invocation, run);
                 }
                 for (BindingExecutionPlan plan : plans) {
                     throwIfCancellationRequested("during phase " + phase);
@@ -333,7 +485,7 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
                     }
                     for (GroupInvocation invocation : plan.invocations()) {
                         throwIfCancellationRequested("during phase " + phase);
-                        for (SubjectResponse fanned : collectAndFanOut(phase, invocation)) {
+                        for (SubjectResponse fanned : collectAndFanOut(phase, invocation, run)) {
                             throwIfCancellationRequested("during phase " + phase);
                             Response response = fanned.response();
                             responses.add(response);
@@ -382,32 +534,36 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
             LOG.error("Execution failed in phase {} with {} records, {} direct bindings, {} built-in measures",
                     phase, dataset.records().size(), phaseBindings.size(), builtInMeasures.size(), e);
             throw new RuntimeException("Execution failed in phase " + phase, e);
-        } finally {
-            executor.shutdownNow();
         }
     }
 
     /**
      * Partitions expanded evaluation subjects into groups for {@code binding} (via the shared
      * {@code groupCache} when {@code binding} is dedup-eligible and {@link #dedupEnabled}, or one
-     * singleton group per subject otherwise) and submits one {@link ExecutionAdapter#execute} task
-     * per group to {@code executor}, together with any pre-execution subject-expansion diagnostics.
+     * singleton group per subject otherwise) and prepares, without dispatching, one
+     * {@link ExecutionAdapter#execute} task per group, together with any pre-execution
+     * subject-expansion diagnostics. Dispatching is left to the caller so that the groups of
+     * several bindings can be interleaved fairly (see {@link FairDispatchOrder}).
      *
      * @param phase the phase being executed, passed through to progress reporting
-     * @param binding the binding to submit invocations for
+     * @param binding the binding to prepare invocations for
      * @param groupCache the phase-scoped shared partition cache
      * @param discoveredByKey discovered implementations keyed by
      *     {@code "<implementationClass>#<implementationMethod>"}
-     * @param executor the thread pool to submit invocations to
-     * @return the pending grouped invocations, any pre-execution diagnostic responses, and the
-     *     core records that should receive a derived rollup once detail responses are available
+     * @param run the run-scoped classifier used to assign the binding's resource lane, and the
+     *     store of PRE_AMENDMENT results a rebound POST_AMENDMENT binding may reuse (a reused group
+     *     is returned with its result already complete and is never dispatched)
+     * @return the pending (not yet dispatched) grouped invocations, any pre-execution diagnostic
+     *     responses, and the core records that should receive a derived rollup once detail
+     *     responses are available
      */
-    private BindingExecutionPlan submitGroupedBinding(
+    private BindingExecutionPlan planGroupedBinding(
             Phase phase,
             ImplementationBinding binding,
             PhaseGroupCache groupCache,
             Map<String, List<DiscoveredImplementation>> discoveredByKey,
-            ExecutorService executor) {
+            RunContext run) {
+        ResourceAssignment assignment = run.classifier().classify(binding);
         SubjectExpander.SubjectExpansionResult expansion = groupCache.expansionFor(canonicalFields(binding));
         List<RecordGroup> groups = groupsForBinding(binding, expansion, groupCache);
         List<DiscoveredImplementation> discoveredCandidates = discoveredByKey.getOrDefault(binding.legacyImplementationKey(), List.of());
@@ -417,9 +573,26 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
         IllegalStateException resolutionError = !discoveredCandidates.isEmpty() && implementation == null
                 ? new IllegalStateException(describeImplementationResolutionFailure(binding, discoveredCandidates))
                 : null;
+        boolean reuseCandidate = resolutionError == null
+                && run.reuse().enabled()
+                && isDedupEligible(binding)
+                && (phase == Phase.PRE_AMENDMENT || (phase == Phase.POST_AMENDMENT && run.reuse().isRebound(binding)));
         List<GroupInvocation> invocations = new ArrayList<>(groups.size());
         for (RecordGroup group : groups) {
-            invocations.add(new GroupInvocation(binding, group, executor.submit(() -> {
+            InvocationFingerprint fingerprint = reuseCandidate
+                    ? InvocationFingerprint.of(binding, group.representative()).orElse(null)
+                    : null;
+            Optional<Response> reused = phase == Phase.POST_AMENDMENT
+                    ? run.reuse().reuse(fingerprint, binding)
+                    : Optional.empty();
+            CompletableFuture<Response> result = new CompletableFuture<>();
+            if (reused.isPresent()) {
+                result.complete(reused.get());
+                run.statistics().reused(assignment.key(), binding.testId());
+                LOG.debug("Reusing PRE_AMENDMENT result of {} for {} record(s) with unchanged inputs",
+                        binding.testId(), group.members().size());
+            }
+            Callable<Response> task = () -> {
                 progressListener.onTaskStarted(phase);
                 try {
                     return resolutionError == null
@@ -428,7 +601,8 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
                 } finally {
                     progressListener.onTaskFinished(phase);
                 }
-            })));
+            };
+            invocations.add(new GroupInvocation(binding, group, assignment, task, result, fingerprint, reused.isPresent()));
         }
         return new BindingExecutionPlan(
                 binding,
@@ -437,6 +611,26 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
                         .map(problem -> errorResponse(problem.coreRecordId(), binding, new IllegalStateException(problem.detail())))
                         .toList(),
                 rollupCoreIds(binding, expansion.subjects()));
+    }
+
+    /**
+     * Queues one prepared group invocation in its resource lane; the run's
+     * {@link ResourceLaneScheduler} starts it once a worker and a lane permit are free and
+     * completes the invocation's result future with the task's response, or exceptionally with
+     * whatever it threw.
+     *
+     * @param phase the phase the invocation belongs to
+     * @param invocation the prepared invocation to run
+     * @param run the run-scoped scheduler
+     */
+    private static void dispatch(Phase phase, GroupInvocation invocation, RunContext run) {
+        if (invocation.reused()) {
+            return;
+        }
+        EvaluationSubject representative = invocation.group().representative();
+        run.scheduler().submit(phase, invocation.assignment(), invocation.binding(), invocation.task(),
+                detail -> laneUnavailableResponse(representative.effectiveRecord().id(), invocation.binding(), detail),
+                invocation.result());
     }
 
     /**
@@ -559,15 +753,17 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
      * {@link OutcomeStatus#ERROR} response, exactly as {@link #executePhase} did per-record before
      * distinct-value execution) and copies it to every member of the group.
      *
-     * @param phase the phase the invocation belongs to, used for error logging
+     * @param phase the phase the invocation belongs to, used for error logging and to remember
+     *     PRE_AMENDMENT results for later reuse
      * @param invocation the pending group invocation to collect
+     * @param run the run-scoped context holding the PRE-to-POST reuse store
      * @return one response per {@link RecordGroup#members()} of {@code invocation}'s group, all
      *     copied onto the exact member subject they apply to
      */
-    private List<SubjectResponse> collectAndFanOut(Phase phase, GroupInvocation invocation) {
+    private List<SubjectResponse> collectAndFanOut(Phase phase, GroupInvocation invocation, RunContext run) {
         Response representative;
         try {
-            representative = invocation.future().get();
+            representative = invocation.result().get();
         } catch (ExecutionException e) {
             Throwable cause = e.getCause() == null ? e : e.getCause();
             LOG.error("Unhandled execution failure in phase {} for test {} using {}.{} on record {}: {}",
@@ -584,6 +780,9 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
             CancellationException cancelled = new CancellationException("Execution cancelled during phase " + phase);
             cancelled.initCause(e);
             throw cancelled;
+        }
+        if (phase == Phase.PRE_AMENDMENT && invocation.fingerprint() != null) {
+            run.reuse().remember(invocation.fingerprint(), representative);
         }
         List<EvaluationSubject> members = invocation.group().members();
         List<SubjectResponse> fanned = new ArrayList<>(members.size());
@@ -1485,6 +1684,36 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
     }
 
     /**
+     * Builds the response reported for an invocation that was not made because its resource lane
+     * became unavailable: a failed external prerequisite, as the implementation itself would have
+     * reported for an unreachable source, carrying the lane's last diagnostic.
+     *
+     * @param recordId the ID of the record the invocation would have run against
+     * @param binding the binding that was not invoked
+     * @param detail the diagnostic naming the lane and its last failure
+     * @return the synthesized response
+     */
+    private static Response laneUnavailableResponse(String recordId, ImplementationBinding binding, String detail) {
+        java.time.Instant now = java.time.Instant.now();
+        return new Response(
+                recordId,
+                binding.testId(),
+                binding.testType(),
+                binding.implementationClass(),
+                binding.implementationMethod(),
+                binding.phase(),
+                binding.parameters(),
+                OutcomeStatus.FAILED,
+                ResponseFailureClassifier.EXTERNAL_PREREQUISITES_NOT_MET,
+                null,
+                detail,
+                detail,
+                Map.of(),
+                now,
+                now);
+    }
+
+    /**
      * Builds an {@link OutcomeStatus#UNABLE_TO_RUN} response for a binding that was intentionally
      * retained for diagnostics but not executed.
      *
@@ -1521,9 +1750,38 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
      * @param binding the binding the invocation was submitted for
      * @param group the distinct-value group the invocation was submitted for (invoked against
      *     {@link RecordGroup#representative()}, applicable to every {@link RecordGroup#members()})
-     * @param future the pending result of the invocation
+     * @param assignment the binding's resource lane assignment
+     * @param task the invocation to run against the group's representative
+     * @param result completed with the task's response (or exceptionally with its failure) once
+     *     the task has run, or already completed with a reused PRE_AMENDMENT result
+     * @param fingerprint the invocation's {@link InvocationFingerprint}, or {@code null} if it is
+     *     not eligible for PRE-to-POST reuse
+     * @param reused whether {@code result} holds a reused PRE_AMENDMENT result, in which case the
+     *     task is never dispatched
      */
-    private record GroupInvocation(ImplementationBinding binding, RecordGroup group, Future<Response> future) {
+    private record GroupInvocation(
+            ImplementationBinding binding,
+            RecordGroup group,
+            ResourceAssignment assignment,
+            Callable<Response> task,
+            CompletableFuture<Response> result,
+            InvocationFingerprint fingerprint,
+            boolean reused) {
+    }
+
+    /**
+     * Run-scoped collaborators shared by every phase of one {@link #execute} call.
+     *
+     * @param classifier assigns bindings to resource lanes
+     * @param scheduler dispatches invocations through those lanes
+     * @param statistics accumulates the run's statistics
+     * @param reuse remembers PRE_AMENDMENT results that POST_AMENDMENT may reuse
+     */
+    private record RunContext(
+            ExecutionResourceClassifier classifier,
+            ResourceLaneScheduler scheduler,
+            ExecutionStatisticsCollector statistics,
+            PrePostResultReuse reuse) {
     }
 
     private record SubjectResponse(EvaluationSubject subject, Response response) {

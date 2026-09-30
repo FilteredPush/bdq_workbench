@@ -100,4 +100,25 @@ public interface ExecutionProgressListener {
      */
     default void onPhaseCompleted(Phase phase, int completed, int total) {
     }
+
+    /**
+     * Invoked when a resource lane changes state or schedules or settles a retry: throttled,
+     * capacity restored, circuit opened, half-open probe, circuit closed, lane unavailable, retry
+     * scheduled, retry succeeded, or retries exhausted. May be called from worker or timer
+     * threads, never while the scheduler holds its lock.
+     *
+     * @param phase the phase the event occurred in
+     * @param event the event
+     */
+    default void onResourceLaneEvent(Phase phase, ResourceLaneEvent event) {
+    }
+
+    /**
+     * Invoked once at the end of a run (whether it completed, failed, or was cancelled) with
+     * per-resource and per-test invocation statistics.
+     *
+     * @param statistics the run's statistics
+     */
+    default void onExecutionStatistics(ExecutionRunStatistics statistics) {
+    }
 }

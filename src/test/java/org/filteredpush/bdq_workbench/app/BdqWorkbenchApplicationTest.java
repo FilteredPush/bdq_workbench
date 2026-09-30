@@ -85,6 +85,42 @@ class BdqWorkbenchApplicationTest {
     }
 
     @Test
+    void acceptsExecutionSchedulingOptionsAndRejectsMalformedOverrides() {
+        ByteArrayOutputStream err = new ByteArrayOutputStream();
+
+        BdqWorkbenchApplication.run(new String[] {
+                "--dataset", "missing-dataset.zip",
+                "--external-concurrency", "1",
+                "--retries", "3",
+                "--reuse-pre-results", "false",
+                "--execution-override", "org.example.Remote=external,lane:worms",
+                "--execution-override", "org.example.Local#validate=local",
+                "--lane-limit", "lane:worms=1",
+                "--lane-limit", "source:irmng=2"}, printStream(new ByteArrayOutputStream()), printStream(err));
+
+        assertThat(err.toString()).doesNotContain("Unknown argument")
+                .doesNotContain("Invalid")
+                .contains("Dataset input not found: missing-dataset.zip");
+
+        ByteArrayOutputStream badErr = new ByteArrayOutputStream();
+        BdqWorkbenchApplication.run(new String[] {
+                "--dataset", "missing-dataset.zip", "--execution-override", "org.example.Remote=sometimes"},
+                printStream(new ByteArrayOutputStream()), printStream(badErr));
+
+        assertThat(badErr.toString()).contains("Invalid execution override 'sometimes' for org.example.Remote");
+    }
+
+    @Test
+    void helpDescribesExecutionSchedulingOptions() {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+
+        BdqWorkbenchApplication.run(new String[] {"--help"}, printStream(out), printStream(new ByteArrayOutputStream()));
+
+        assertThat(out.toString()).contains("--external-concurrency <n>", "--retries <n>", "--reuse-pre-results",
+                "--execution-override <target=spec>", "--lane-limit <laneKey=n>");
+    }
+
+    @Test
     void helpDescribesJoinPolicies() {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
 
