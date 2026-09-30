@@ -182,8 +182,7 @@ public class DefaultTestBindingService implements TestBindingService {
                             "",
                             Map.of(),
                             true,
-                            List.of("No validation test found for built-in multi-record measure target "
-                                    + builtInMeasure.get().targetTestLabel())));
+                            List.of(missingMeasureTargetMessage(builtInMeasure.get().targetTestLabel()))));
                     continue;
                 }
                 BuiltInMeasureSpec resolvedMeasure = new BuiltInMeasureSpec(
@@ -992,6 +991,23 @@ public class DefaultTestBindingService implements TestBindingService {
      */
     private static Map<String, List<String>> indexAvailableTerms(Collection<String> availableTerms) {
        return DarwinCoreTermResolver.indexAvailableTerms(availableTerms);
+    }
+
+    /**
+     * Builds the diagnostic for a built-in multi-record measure whose target validation test is
+     * not among the use case's tests. A measure is only computed from the responses of a
+     * validation run in the same use case, so this is an inconsistency in the use case's
+     * policies (a MeasurementPolicy includes the measure but no ValidationPolicy includes its
+     * target), not a missing implementation.
+     *
+     * @param targetTestLabel the label of the validation test the measure summarizes
+     * @return the diagnostic message
+     */
+    private static String missingMeasureTargetMessage(String targetTestLabel) {
+        return "Target validation test " + targetTestLabel
+                + " of this built-in multi-record measure is not in the use case's ValidationPolicy,"
+                + " so there are no responses for the measure to summarize"
+                + " (the use case's policies are inconsistent)";
     }
 
     /**

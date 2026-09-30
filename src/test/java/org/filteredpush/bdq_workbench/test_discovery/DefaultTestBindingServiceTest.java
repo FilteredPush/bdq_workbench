@@ -370,6 +370,33 @@ class DefaultTestBindingServiceTest {
                 .containsEntry(BuiltInMeasureSpec.ACCEPTABLE_RESPONSE_STATUSES_KEY, "INTERNAL_PREREQUISITES_NOT_MET");
     }
 
+    /**
+     * A QA measure whose target validation is not among the use case's tests is unresolved, with
+     * a diagnostic saying the target is not in the use case's ValidationPolicy.
+     */
+    @Test
+    void diagnosesBuiltInMeasureTargetMissingFromUseCasePolicy() {
+        DefaultTestBindingService service = new DefaultTestBindingService();
+        TestDefinition measure = new TestDefinition(
+                "urn:test:qa-license",
+                "MULTIRECORD_MEASURE_QA_LICENSE_NOTEMPTY",
+                TestType.MEASURE,
+                Phase.PRE_AMENDMENT,
+                Map.of(),
+                Map.of(BuiltInMeasureSpec.EXPECTED_RESPONSE_METADATA_KEY,
+                        "COMPLETE if every VALIDATION_LICENSE_NOTEMPTY in the MultiRecord has Response.result=COMPLIANT; otherwise NOT_COMPLETE."));
+
+        TestBindingResult result = service.bind(List.of(measure), List.of(), Map.of(), Set.of());
+
+        assertThat(result.unresolved()).containsExactly(measure);
+        assertThat(result.reviews()).singleElement().satisfies(review -> {
+            assertThat(review.implementationStatus()).isEqualTo(ImplementationStatus.MISSING);
+            assertThat(review.diagnostics()).singleElement().asString()
+                    .contains("VALIDATION_LICENSE_NOTEMPTY")
+                    .contains("not in the use case's ValidationPolicy");
+        });
+    }
+
     @Test
     void diagnosesNamespaceMismatchBetweenRdfAndImplementationParameters() throws Exception {
         DefaultTestBindingService service = new DefaultTestBindingService();
