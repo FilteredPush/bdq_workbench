@@ -95,6 +95,7 @@ import org.filteredpush.bdq_workbench.model.DarwinCoreTermResolver;
 import org.filteredpush.bdq_workbench.model.RecordDataset;
 import org.filteredpush.bdq_workbench.model.RecordFilterSpec;
 import org.filteredpush.bdq_workbench.model.Response;
+import org.filteredpush.bdq_workbench.model.SingleRecordValidationMeasureSpec;
 import org.filteredpush.bdq_workbench.model.TestDefinition;
 import org.filteredpush.bdq_workbench.model.TestType;
 import org.filteredpush.bdq_workbench.model.UseCase;
@@ -1348,13 +1349,18 @@ final class BdqWorkbenchGui {
         outputArea.setLineWrap(true);
         outputArea.setWrapStyleWord(true);
         installTextAreaClipboardSupport(outputArea);
-        boolean runnableInDialog = binding != null && binding.isRunnable() && !BuiltInMeasureSpec.isBuiltIn(binding);
+        boolean runnableInDialog = binding != null
+                && binding.isRunnable()
+                && !BuiltInMeasureSpec.isBuiltIn(binding)
+                && !SingleRecordValidationMeasureSpec.isBuiltIn(binding);
         outputArea.setText(binding == null
                 ? "No runnable implementation is currently bound for this test.\n"
                 : !binding.isRunnable()
                         ? "This test is mapped for diagnostics only and is not runnable with the current binding status.\n"
                 : BuiltInMeasureSpec.isBuiltIn(binding)
                         ? "This built-in multi-record measure is evaluated during the full run after matching validation responses are available.\n"
+                : SingleRecordValidationMeasureSpec.isBuiltIn(binding)
+                        ? "This built-in single-record measure counts each record's validation responses, so it is evaluated during the full run after the validations have run.\n"
                         : "Use Run Test to execute this binding against each input record in isolation.\n");
 
         JProgressBar dialogProgress = new JProgressBar(0, Math.max(1, editedRun.dataset().records().size()));

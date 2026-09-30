@@ -221,7 +221,15 @@ understanding how the stages connect — read its class Javadoc first. The pipel
    pairing) maps each amendment key onto the record's own term via
    `DarwinCoreTermResolver.recordTermFor`; `Response.amendments()` keeps the implementation's keys.
    Built-in multi-record measures count *records*, not evaluations: a record's derived rollup stands
-   for its per-row evaluations, so an expanded test cannot exceed 100% of the records. `ReflectionExecutionAdapter` is the actual
+   for its per-row evaluations, so an expanded test cannot exceed 100% of the records. The three
+   SingleRecord measures over `bdqval:AllValidationTestsRunOnSingleRecord`
+   (MEASURE_VALIDATIONTESTS_COMPLIANT, _NOTCOMPLIANT, _PREREQUISITESNOTMET) are also built in, since
+   no implementation library can supply them: `SingleRecordValidationMeasureSpec` recognizes them by
+   test UUID (any version) or label and binds them to a synthetic handle, and
+   `SingleRecordValidationMeasures` computes one response per record after a phase's direct bindings
+   (before the multi-record measures), counting distinct VALIDATION tests by their record-level
+   response (the rollup for an expanded test), with INTERNAL_PREREQUISITES_NOT_MET for a record on
+   which no validation was attempted. `ReflectionExecutionAdapter` is the actual
    per-invocation adapter: it builds a reflective argument array from the effective subject's bound
    parameters, invokes the target method, and reads back an ffdq-style result purely reflectively
    (`getResultState()`, `getValue().getObject()`, `getComment()`) so this module has no

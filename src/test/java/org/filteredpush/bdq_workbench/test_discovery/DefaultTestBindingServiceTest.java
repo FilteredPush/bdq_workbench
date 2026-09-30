@@ -12,6 +12,7 @@ import org.filteredpush.bdq_workbench.model.MethodParameter;
 import org.filteredpush.bdq_workbench.model.ParameterRole;
 import org.filteredpush.bdq_workbench.model.ParameterizationCapability;
 import org.filteredpush.bdq_workbench.model.Phase;
+import org.filteredpush.bdq_workbench.model.SingleRecordValidationMeasureSpec;
 import org.filteredpush.bdq_workbench.model.TestDefinition;
 import org.filteredpush.bdq_workbench.model.TestType;
 import org.junit.jupiter.api.Test;
@@ -286,6 +287,40 @@ class DefaultTestBindingServiceTest {
         assertThat(measureReview.implementationStatus()).isEqualTo(ImplementationStatus.FOUND);
         assertThat(measureReview.bindingStatus()).isEqualTo(BindingStatus.BOUND);
         assertThat(measureReview.diagnostics()).contains("Built-in multi-record COUNT measure");
+    }
+
+    @Test
+    void bindsSingleRecordValidationMeasuresAsBuiltInsWithoutDiscoveredImplementations() {
+        DefaultTestBindingService service = new DefaultTestBindingService();
+        TestDefinition compliant = new TestDefinition(
+                "https://rs.tdwg.org/bdqtest/terms/45fb49eb-4a1b-4b49-876f-15d5034dfc73-2024-09-25",
+                "MEASURE_VALIDATIONTESTS_COMPLIANT",
+                TestType.MEASURE,
+                Phase.PRE_AMENDMENT,
+                Map.of());
+        TestDefinition prerequisites = new TestDefinition(
+                "https://rs.tdwg.org/bdqtest/terms/49a94636-a562-4e6b-803c-665c80628a3d-2024-09-25",
+                "MEASURE_VALIDATIONTESTS_PREREQUISITESNOTMET",
+                TestType.MEASURE,
+                Phase.PRE_AMENDMENT,
+                Map.of());
+
+        TestBindingResult result = service.bind(List.of(compliant, prerequisites), List.of(), Map.of(), Set.of());
+
+        assertThat(result.unresolved()).isEmpty();
+        assertThat(result.bindings())
+                .extracting(
+                        binding -> binding.implementationClass(),
+                        binding -> binding.bindingStatus(),
+                        binding -> binding.parameters().get(SingleRecordValidationMeasureSpec.TALLY_KEY))
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple(SingleRecordValidationMeasureSpec.IMPLEMENTATION_CLASS,
+                                BindingStatus.BOUND, "COMPLIANT"),
+                        org.assertj.core.groups.Tuple.tuple(SingleRecordValidationMeasureSpec.IMPLEMENTATION_CLASS,
+                                BindingStatus.BOUND, "PREREQUISITES_NOT_MET"));
+        assertThat(result.bindings()).allMatch(SingleRecordValidationMeasureSpec::isBuiltIn);
+        assertThat(result.reviews()).allSatisfy(review ->
+                assertThat(review.implementationStatus()).isEqualTo(ImplementationStatus.FOUND));
     }
 
     @Test
