@@ -27,8 +27,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.PriorityQueue;
+import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
@@ -75,6 +77,16 @@ import org.slf4j.LoggerFactory;
  * pauses, local work and unrelated lanes keep running and no combination of open circuits can
  * deadlock the run.
  *
+ * <p><b>Retries.</b> A group invocation whose response is a likely transient (or ambiguous)
+ * external failure is retried as allowed by {@link RetryPolicy}: after a backoff on the
+ * {@link DelayScheduler} (never on a worker thread) it rejoins its lane's queue with its original
+ * submission order, so it is subject to the lane's current limit and circuit state like any other
+ * work, and unrelated lanes run meanwhile. Its result future completes only with the final
+ * attempt's response, so callers (and amendment write-back) only ever see settled results. The
+ * final response's message is annotated with the attempt count; its comment and status are the
+ * implementation's own, so exhausted retries still report the latest external-prerequisite
+ * diagnostic rather than a generic error.
+ *
  * <p>Lanes are scoped to the scheduler, which lives for one execution run, so what is learned
  * about a resource in PRE_AMENDMENT carries over to later phases. All state is guarded by one
  * lock; the invocation itself, completion of result futures, and listener notification happen
@@ -94,6 +106,8 @@ final class ResourceLaneScheduler implements AutoCloseable {
 	private final DelayScheduler delays;
 	private final LaneEventSink events;
 	private final ExecutionStatisticsCollector statistics;
+	private final RetryPolicy retries;
+	private final Set<Task> retryPending = ConcurrentHashMap.newKeySet();
 	private final Map<ExecutionResourceKey, Lane> lanes = new LinkedHashMap<>();
 	private long sequence;
 	private int inFlight;
@@ -134,7 +148,7 @@ final class ResourceLaneScheduler implements AutoCloseable {
 	 */
 	ResourceLaneScheduler(int workerCount) {
 		this(workerCount, ExecutionPolicy.defaults(), DelayScheduler.newDefault(), (phase, event) -> {
-		}, new ExecutionStatisticsCollector());
+		}, new ExecutionStatisticsCollector(), new RetryPolicy(ExecutionPolicy.defaults()));
 	}
 
 	/**
@@ -152,6 +166,28 @@ final class ResourceLaneScheduler implements AutoCloseable {
 			DelayScheduler delays,
 			LaneEventSink events,
 			ExecutionStatisticsCollector statistics) {
+		this(workerCount, policy, delays, events, statistics, new RetryPolicy(policy));
+	}
+
+	/**
+	 * Creates a scheduler with its own worker pool and an explicit retry policy.
+	 *
+	 * @param workerCount the number of worker threads, at least 1
+	 * @param policy the execution policy governing adaptation and circuit breaking
+	 * @param delays the timer used for cooldowns and retry backoff; closed when this scheduler is
+	 *     closed
+	 * @param events receives lane events
+	 * @param statistics accumulates run statistics
+	 * @param retries decides which failures are retried and when
+	 */
+	ResourceLaneScheduler(
+			int workerCount,
+			ExecutionPolicy policy,
+			DelayScheduler delays,
+			LaneEventSink events,
+			ExecutionStatisticsCollector statistics,
+			RetryPolicy retries) {
+		this.retries = retries;
 		this.workerCount = Math.max(1, workerCount);
 		this.policy = policy;
 		this.externalLimit = Math.min(this.workerCount, policy.externalConcurrency());
@@ -331,21 +367,136 @@ final class ResourceLaneScheduler implements AutoCloseable {
 	 */
 	private void complete(Task task, Response response, Throwable failure) {
 		List<Runnable> after = new ArrayList<>();
+		Response settled = response;
+		boolean retrying = false;
 		synchronized (lock) {
 			inFlight--;
 			task.lane.inFlight--;
 			statistics.finished(task.lane.key, task.binding.testId());
 			if (!closed) {
-				observe(task, response, failure, after);
+				FailureCategory category = observe(task, response, failure, after);
+				if (failure == null) {
+					retrying = scheduleRetryIfAllowed(task, category, after);
+					if (!retrying && task.attempt > 1) {
+						settled = settleRetried(task, response, category, after);
+					}
+				}
 				drain(after);
 			}
 		}
-		if (failure != null) {
-			task.result.completeExceptionally(failure);
-		} else {
-			task.result.complete(response);
+		if (!retrying) {
+			if (failure != null) {
+				task.result.completeExceptionally(failure);
+			} else {
+				task.result.complete(settled);
+			}
 		}
 		runAll(after);
+	}
+
+	/**
+	 * Schedules a retry of a failed invocation if its failure category and attempt count allow
+	 * one. Must hold {@link #lock}.
+	 *
+	 * @param task the failed invocation
+	 * @param category its failure category
+	 * @param after collects actions to run once the lock is released
+	 * @return whether a retry was scheduled (in which case the result must not be completed yet)
+	 */
+	private boolean scheduleRetryIfAllowed(Task task, FailureCategory category, List<Runnable> after) {
+		int retriesUsed = task.attempt - 1;
+		if (retriesUsed >= retries.maxRetries(category)) {
+			return false;
+		}
+		Duration delay = retries.delayBeforeRetry(retriesUsed + 1);
+		task.attempt++;
+		task.failedAttempts++;
+		statistics.retryScheduled(task.lane.key, task.binding.testId());
+		retryPending.add(task);
+		task.retryHandle = delays.schedule(delay, () -> requeue(task));
+		emit(task.phase, task.lane, ResourceLaneEvent.Type.RETRY_SCHEDULED, task.binding.testId(), task.attempt,
+				category + " failure; retrying in " + delay.toMillis() + " ms: " + task.lane.lastDiagnostic, after);
+		return true;
+	}
+
+	/**
+	 * Reports the final outcome of an invocation that was retried and annotates its response's
+	 * message with the attempt count. Must hold {@link #lock}.
+	 *
+	 * @param task the invocation
+	 * @param response its final response
+	 * @param category the final response's failure category
+	 * @param after collects actions to run once the lock is released
+	 * @return the annotated response
+	 */
+	private Response settleRetried(Task task, Response response, FailureCategory category, List<Runnable> after) {
+		String note;
+		if (category.isExternalHealthFailure()) {
+			statistics.retryExhausted(task.lane.key, task.binding.testId());
+			emit(task.phase, task.lane, ResourceLaneEvent.Type.RETRY_EXHAUSTED, task.binding.testId(), task.attempt,
+					"still failing after " + task.attempt + " attempts: " + task.lane.lastDiagnostic, after);
+			note = "[workbench: external prerequisite still not met after " + task.attempt + " attempts]";
+		} else {
+			if (category == FailureCategory.COMPLETED) {
+				statistics.retryRecovered(task.lane.key, task.binding.testId());
+				emit(task.phase, task.lane, ResourceLaneEvent.Type.RETRY_SUCCEEDED, task.binding.testId(), task.attempt,
+						"succeeded after " + task.failedAttempts + " external failure(s)", after);
+			}
+			note = "[workbench: attempt " + task.attempt + " after " + task.failedAttempts
+					+ " external failure(s)]";
+		}
+		return withMessageNote(response, note);
+	}
+
+	/**
+	 * Returns a retried invocation to its lane's queue once its backoff has elapsed.
+	 *
+	 * @param task the invocation to retry
+	 */
+	private void requeue(Task task) {
+		List<Runnable> after = new ArrayList<>();
+		synchronized (lock) {
+			if (closed || !retryPending.remove(task)) {
+				return;
+			}
+			task.retryHandle = null;
+			task.lane.queue.add(task);
+			drain(after);
+		}
+		runAll(after);
+	}
+
+	/**
+	 * Copies a response with a note appended to its message; the comment, status, and result are
+	 * unchanged.
+	 *
+	 * @param response the response
+	 * @param note the note
+	 * @return the annotated copy
+	 */
+	static Response withMessageNote(Response response, String note) {
+		String message = response.message() == null || response.message().isBlank()
+				? note
+				: response.message() + " " + note;
+		return new Response(
+				response.recordId(),
+				response.testId(),
+				response.testType(),
+				response.implementationClass(),
+				response.implementationMethod(),
+				response.phase(),
+				response.parameters(),
+				response.status(),
+				response.responseStatus(),
+				response.responseResult(),
+				response.comment(),
+				message,
+				response.amendments(),
+				response.startedAt(),
+				response.finishedAt(),
+				response.subjectRef(),
+				response.derived(),
+				response.contributingSubjectRefs());
 	}
 
 	/**
@@ -577,8 +728,8 @@ final class ResourceLaneScheduler implements AutoCloseable {
 	}
 
 	/**
-	 * Cancels queued work and pending cooldowns, interrupts in-flight work, and shuts the worker
-	 * pool and timer down.
+	 * Cancels queued work, pending retries and cooldowns, interrupts in-flight work, and shuts the
+	 * worker pool and timer down.
 	 */
 	@Override
 	public void close() {
@@ -596,6 +747,13 @@ final class ResourceLaneScheduler implements AutoCloseable {
 					lane.cooldownHandle = null;
 				}
 			}
+			for (Task task : retryPending) {
+				if (task.retryHandle != null) {
+					task.retryHandle.cancel();
+				}
+				dropped.add(task);
+			}
+			retryPending.clear();
 		}
 		dropped.forEach(task -> task.result.cancel(false));
 		workers.shutdownNow();
@@ -758,6 +916,9 @@ final class ResourceLaneScheduler implements AutoCloseable {
 		private final Function<String, Response> unavailable;
 		private final CompletableFuture<Response> result;
 		private boolean probe;
+		private int attempt = 1;
+		private int failedAttempts;
+		private DelayScheduler.Cancellable retryHandle;
 
 		/**
 		 * Creates a task.

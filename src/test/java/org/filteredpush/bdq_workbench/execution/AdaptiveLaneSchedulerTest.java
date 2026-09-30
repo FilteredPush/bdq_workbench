@@ -57,7 +57,9 @@ class AdaptiveLaneSchedulerTest {
 	private final ExecutionStatisticsCollector statistics = new ExecutionStatisticsCollector();
 
 	private ResourceLaneScheduler scheduler(ExecutionPolicy policy, int workers) {
-		return new ResourceLaneScheduler(workers, policy, timer, (phase, event) -> events.add(event), statistics);
+		/* Retries are covered by RetrySchedulerTest; here each failure should settle at once. */
+		return new ResourceLaneScheduler(workers, policy.toBuilder().retriesEnabled(false).build(), timer,
+				(phase, event) -> events.add(event), statistics);
 	}
 
 	private static ResourceAssignment external(int limit) {
