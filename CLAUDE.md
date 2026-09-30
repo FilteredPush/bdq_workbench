@@ -229,7 +229,8 @@ understanding how the stages connect — read its class Javadoc first. The pipel
    `SingleRecordValidationMeasures` computes one response per record after a phase's direct bindings
    (before the multi-record measures), counting distinct VALIDATION tests by their record-level
    response (the rollup for an expanded test), with INTERNAL_PREREQUISITES_NOT_MET for a record on
-   which no validation was attempted. `ReflectionExecutionAdapter` is the actual
+   which no validation was attempted and an ERROR response for a record on which any validation
+   errored or was unable to run. `ReflectionExecutionAdapter` is the actual
    per-invocation adapter: it builds a reflective argument array from the effective subject's bound
    parameters, invokes the target method, and reads back an ffdq-style result purely reflectively
    (`getResultState()`, `getValue().getObject()`, `getComment()`) so this module has no

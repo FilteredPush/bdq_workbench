@@ -42,14 +42,18 @@ import org.filteredpush.bdq_workbench.model.TestType;
  * related rows, otherwise the record's own response — and the distinct tests whose record-level
  * response has the measure's outcome are counted. Following the specification, a record with no
  * VALIDATION responses at all gets INTERNAL_PREREQUISITES_NOT_MET; otherwise the measure reports
- * RUN_HAS_RESULT with the count as its result. Validations that errored or were unable to run count
- * as attempted but match no outcome, and are noted in the response's comment.
+ * RUN_HAS_RESULT with the count as its result. If any of the record's VALIDATION tests errored or
+ * was unable to run, its outcome is unknown and no count would be accurate, so the measure is
+ * reported as {@link OutcomeStatus#ERROR} naming those tests, as the built-in multi-record measures
+ * do for failed target responses.
  */
 final class SingleRecordValidationMeasures {
 	/** Response status for a measure that ran and has a result. */
 	private static final String RUN_HAS_RESULT = "RUN_HAS_RESULT";
 	/** Response status for a record on which no VALIDATION tests were attempted. */
 	private static final String INTERNAL_PREREQUISITES_NOT_MET = "INTERNAL_PREREQUISITES_NOT_MET";
+	/** Response status for a record on which a VALIDATION test failed to evaluate. */
+	private static final String ERROR = "ERROR";
 
 	/** Not instantiable: a holder for static synthesis logic. */
 	private SingleRecordValidationMeasures() {
@@ -126,22 +130,39 @@ final class SingleRecordValidationMeasures {
 			return response(phase, recordId, binding, OutcomeStatus.FAILED, INTERNAL_PREREQUISITES_NOT_MET, null,
 					comment, finishedAt);
 		}
-		long matching = 0;
-		long unevaluated = 0;
-		for (List<Response> testResponses : byTest.values()) {
-			List<Response> recordLevel = recordLevel(testResponses);
-			if (recordLevel.stream().anyMatch(spec::counts)) {
-				matching++;
-			} else if (recordLevel.stream().allMatch(SingleRecordValidationMeasures::failedToEvaluate)) {
-				unevaluated++;
-			}
+		List<String> failedTestIds = failedTestIds(byTest);
+		if (!failedTestIds.isEmpty()) {
+			/*
+			 * A validation that errored or could not run has no outcome, so any count would silently
+			 * leave it out; report the measure as an error instead, as the multi-record measures do.
+			 */
+			String comment = "Cannot count VALIDATION Tests with " + spec.tally().criterion() + " because "
+					+ failedTestIds.size() + " of " + byTest.size()
+					+ " VALIDATION Tests failed or were unable to run on this record: "
+					+ String.join(", ", failedTestIds);
+			return response(phase, recordId, binding, OutcomeStatus.ERROR, ERROR, null, comment, finishedAt);
 		}
+		long matching = byTest.values().stream()
+				.filter(testResponses -> recordLevel(testResponses).stream().anyMatch(spec::counts))
+				.count();
 		String comment = matching + " of " + byTest.size() + " VALIDATION Tests had " + spec.tally().criterion();
-		if (unevaluated > 0) {
-			comment += "; " + unevaluated + " could not be evaluated (error or unable to run)";
-		}
 		return response(phase, recordId, binding, OutcomeStatus.PASSED, RUN_HAS_RESULT, Long.toString(matching),
 				comment, finishedAt);
+	}
+
+	/**
+	 * Lists the tests whose record-level response for a record failed to evaluate.
+	 *
+	 * @param byTest the record's VALIDATION responses, keyed by test ID
+	 * @return the IDs of the tests with a record-level {@link OutcomeStatus#ERROR} or
+	 *     {@link OutcomeStatus#UNABLE_TO_RUN} response, in encounter order
+	 */
+	private static List<String> failedTestIds(Map<String, List<Response>> byTest) {
+		return byTest.entrySet().stream()
+				.filter(entry -> recordLevel(entry.getValue()).stream()
+						.anyMatch(SingleRecordValidationMeasures::failedToEvaluate))
+				.map(Map.Entry::getKey)
+				.toList();
 	}
 
 	/**

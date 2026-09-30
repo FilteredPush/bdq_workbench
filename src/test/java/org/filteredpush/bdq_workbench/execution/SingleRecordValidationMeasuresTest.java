@@ -37,7 +37,7 @@ class SingleRecordValidationMeasuresTest {
 
 	/**
 	 * Each record gets one response per measure per phase, counting its distinct validations with
-	 * the measure's outcome; an errored validation is attempted but counts toward no outcome.
+	 * the measure's outcome; a record with an errored validation gets an ERROR measure instead.
 	 */
 	@Test
 	void countsEachRecordsValidationOutcomesInBothPhases() throws Exception {
@@ -61,21 +61,22 @@ class SingleRecordValidationMeasuresTest {
 					.containsExactly(
 							tuple("r1", "RUN_HAS_RESULT", "2"),
 							tuple("r2", "RUN_HAS_RESULT", "0"),
-							tuple("r3", "RUN_HAS_RESULT", "1"));
+							tuple("r3", "ERROR", null));
 			assertThat(measureResponses(responses, phase, "urn:test:notCompliant"))
 					.extracting(Response::recordId, Response::responseResult)
-					.containsExactly(tuple("r1", "0"), tuple("r2", "1"), tuple("r3", "0"));
+					.containsExactly(tuple("r1", "0"), tuple("r2", "1"), tuple("r3", null));
 			assertThat(measureResponses(responses, phase, "urn:test:prerequisites"))
 					.extracting(Response::recordId, Response::responseResult)
-					.containsExactly(tuple("r1", "0"), tuple("r2", "1"), tuple("r3", "0"));
+					.containsExactly(tuple("r1", "0"), tuple("r2", "1"), tuple("r3", null));
 		}
-		assertThat(measureResponses(responses, Phase.PRE_AMENDMENT, "urn:test:compliant"))
-				.allSatisfy(response -> {
-					assertThat(response.testType()).isEqualTo(TestType.MEASURE);
-					assertThat(response.status()).isEqualTo(OutcomeStatus.PASSED);
-				});
-		assertThat(measureResponses(responses, Phase.PRE_AMENDMENT, "urn:test:compliant").get(2).comment())
-				.isEqualTo("1 of 2 VALIDATION Tests had Response.result=COMPLIANT; 1 could not be evaluated (error or unable to run)");
+		List<Response> compliant = measureResponses(responses, Phase.PRE_AMENDMENT, "urn:test:compliant");
+		assertThat(compliant).allSatisfy(response -> assertThat(response.testType()).isEqualTo(TestType.MEASURE));
+		assertThat(compliant).extracting(Response::status)
+				.containsExactly(OutcomeStatus.PASSED, OutcomeStatus.PASSED, OutcomeStatus.ERROR);
+		assertThat(compliant.get(1).comment()).isEqualTo("0 of 2 VALIDATION Tests had Response.result=COMPLIANT");
+		assertThat(compliant.get(2).comment()).isEqualTo(
+				"Cannot count VALIDATION Tests with Response.result=COMPLIANT because 1 of 2"
+						+ " VALIDATION Tests failed or were unable to run on this record: " + EVENT_DATE_TEST);
 	}
 
 	/**
