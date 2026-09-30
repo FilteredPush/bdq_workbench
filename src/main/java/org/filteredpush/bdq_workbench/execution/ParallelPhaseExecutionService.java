@@ -137,6 +137,8 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
     private final ExecutionProgressListener progressListener;
     private final boolean dedupEnabled;
     private final ExecutionPolicy policy;
+    private final java.util.function.Supplier<DelayScheduler> delaySchedulerFactory;
+    private volatile ExecutionRunStatistics lastRunStatistics = new ExecutionRunStatistics(List.of(), List.of());
 
     /**
      * Creates a service with no progress reporting (an {@link ExecutionProgressListener} with all
@@ -222,12 +224,47 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
             ExecutionProgressListener progressListener,
             boolean dedupEnabled,
             ExecutionPolicy policy) {
+        this(threadCount, executionAdapter, progressListener, dedupEnabled, policy, DelayScheduler::newDefault);
+    }
+
+    /**
+     * Creates a policy-governed service with an injectable timer for circuit cooldowns and retry
+     * backoff, so tests can control time instead of waiting for it.
+     *
+     * @param threadCount the number of worker threads shared by every resource lane; values less
+     *     than 1 are treated as 1
+     * @param executionAdapter the adapter used to invoke each binding against each record
+     * @param progressListener the listener notified of phase, response, and resource lane events;
+     *     {@code null} means no listener
+     * @param dedupEnabled whether to invoke each eligible binding once per distinct combination of
+     *     its declared input values rather than once per record
+     * @param policy the execution policy; {@code null} means {@link ExecutionPolicy#defaults()}
+     * @param delaySchedulerFactory creates one timer per run; each is closed when its run ends
+     */
+    ParallelPhaseExecutionService(
+            int threadCount,
+            ExecutionAdapter executionAdapter,
+            ExecutionProgressListener progressListener,
+            boolean dedupEnabled,
+            ExecutionPolicy policy,
+            java.util.function.Supplier<DelayScheduler> delaySchedulerFactory) {
+        this.delaySchedulerFactory = delaySchedulerFactory;
         this.threadCount = Math.max(1, threadCount);
         this.executionAdapter = executionAdapter;
         this.progressListener = progressListener == null ? new ExecutionProgressListener() {
         } : progressListener;
         this.dedupEnabled = dedupEnabled;
         this.policy = policy == null ? ExecutionPolicy.defaults() : policy;
+    }
+
+    /**
+     * Returns the per-resource and per-test statistics of the most recently finished run (empty
+     * before the first run).
+     *
+     * @return the last run's statistics
+     */
+    public ExecutionRunStatistics lastRunStatistics() {
+        return lastRunStatistics;
     }
 
     /**
@@ -268,9 +305,11 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
         RecordDataset amendmentCopy = dataset.copy();
 
         LOG.debug("Executing with {} workers and {}", threadCount, policy);
+        ExecutionStatisticsCollector statistics = new ExecutionStatisticsCollector();
         RunContext run = new RunContext(
                 new ExecutionResourceClassifier(policy, threadCount, discovered),
-                new ResourceLaneScheduler(threadCount));
+                new ResourceLaneScheduler(threadCount, policy, delaySchedulerFactory.get(), this::notifyLaneEvent, statistics),
+                statistics);
         try {
             results.addAll(executePhase(Phase.PRE_AMENDMENT, immutableSource, bindingsForPhase(Phase.PRE_AMENDMENT, bindings), discoveredByKey, run));
             throwIfCancellationRequested("before AMENDMENT phase");
@@ -279,6 +318,7 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
             results.addAll(executePhase(Phase.POST_AMENDMENT, amendmentCopy, bindingsForPhase(Phase.POST_AMENDMENT, bindings), discoveredByKey, run));
         } finally {
             run.scheduler().close();
+            publishStatistics(statistics.snapshot());
         }
 
         results.sort(Comparator
@@ -290,6 +330,37 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
                 .thenComparing(Response::implementationClass)
                 .thenComparing(Response::implementationMethod));
         return results;
+    }
+
+    /**
+     * Forwards a resource lane event to the progress listener, isolating listener failures.
+     *
+     * @param phase the phase the event occurred in
+     * @param event the event
+     */
+    private void notifyLaneEvent(Phase phase, ResourceLaneEvent event) {
+        try {
+            progressListener.onResourceLaneEvent(phase, event);
+        } catch (RuntimeException e) {
+            LOG.warn("Progress listener failed handling {}: {}", event, e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Records, logs, and reports a finished run's statistics.
+     *
+     * @param statistics the run's statistics
+     */
+    private void publishStatistics(ExecutionRunStatistics statistics) {
+        lastRunStatistics = statistics;
+        if (!statistics.resources().isEmpty()) {
+            LOG.info("{}", statistics.describe());
+        }
+        try {
+            progressListener.onExecutionStatistics(statistics);
+        } catch (RuntimeException e) {
+            LOG.warn("Progress listener failed handling execution statistics: {}", e.getMessage(), e);
+        }
     }
 
     /**
@@ -524,7 +595,10 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
      * @param run the run-scoped scheduler
      */
     private static void dispatch(Phase phase, GroupInvocation invocation, RunContext run) {
-        run.scheduler().submit(phase, invocation.assignment(), invocation.binding(), invocation.task(), invocation.result());
+        EvaluationSubject representative = invocation.group().representative();
+        run.scheduler().submit(phase, invocation.assignment(), invocation.binding(), invocation.task(),
+                detail -> laneUnavailableResponse(representative.effectiveRecord().id(), invocation.binding(), detail),
+                invocation.result());
     }
 
     /**
@@ -1573,6 +1647,36 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
     }
 
     /**
+     * Builds the response reported for an invocation that was not made because its resource lane
+     * became unavailable: a failed external prerequisite, as the implementation itself would have
+     * reported for an unreachable source, carrying the lane's last diagnostic.
+     *
+     * @param recordId the ID of the record the invocation would have run against
+     * @param binding the binding that was not invoked
+     * @param detail the diagnostic naming the lane and its last failure
+     * @return the synthesized response
+     */
+    private static Response laneUnavailableResponse(String recordId, ImplementationBinding binding, String detail) {
+        java.time.Instant now = java.time.Instant.now();
+        return new Response(
+                recordId,
+                binding.testId(),
+                binding.testType(),
+                binding.implementationClass(),
+                binding.implementationMethod(),
+                binding.phase(),
+                binding.parameters(),
+                OutcomeStatus.FAILED,
+                ResponseFailureClassifier.EXTERNAL_PREREQUISITES_NOT_MET,
+                null,
+                detail,
+                detail,
+                Map.of(),
+                now,
+                now);
+    }
+
+    /**
      * Builds an {@link OutcomeStatus#UNABLE_TO_RUN} response for a binding that was intentionally
      * retained for diagnostics but not executed.
      *
@@ -1627,8 +1731,12 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
      *
      * @param classifier assigns bindings to resource lanes
      * @param scheduler dispatches invocations through those lanes
+     * @param statistics accumulates the run's statistics
      */
-    private record RunContext(ExecutionResourceClassifier classifier, ResourceLaneScheduler scheduler) {
+    private record RunContext(
+            ExecutionResourceClassifier classifier,
+            ResourceLaneScheduler scheduler,
+            ExecutionStatisticsCollector statistics) {
     }
 
     private record SubjectResponse(EvaluationSubject subject, Response response) {
