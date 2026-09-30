@@ -58,7 +58,7 @@ class StructuredMarkdownReportExporterTest {
 		assertThat(markdown).contains("| Geodetic datum standard | 2 → 0 of 3 | 0 / 0 |");
 		assertThat(markdown).contains("| `locality` | column present, always empty | Locality and depth |");
 		assertThat(markdown).contains("| 2 | `geodeticDatum`: WGS 84 → **EPSG:4326** | Geodetic datum standardized |");
-		assertThat(markdown).contains("| MCZ:Herp:A-1 (occurrence.txt line 2) | Scientific name found (1 of 2 rows) | "
+		assertThat(markdown).contains("| MCZ:Herp:A-1 (occurrence.txt line 2) | Scientific name found: NOT_COMPLIANT in identification.txt line 3 (1 of 2 evaluations) | "
 				+ "geodeticDatum: WGS 84 → EPSG:4326 |");
 		assertThat(markdown).contains("- Unresolved test — No implementation discovered\n");
 		assertThat(markdown).contains("## High-impact action items\n\n- Review issue findings: 0 record(s) with "

@@ -87,10 +87,12 @@ public record RelationalIngestResult(
 		int withMultipleRows = 0;
 		int maxRows = 0;
 		int totalRows = 0;
+		Map<String, Integer> rowsByRecord = new LinkedHashMap<>();
 		for (RecordGraph graph : graphs) {
 			List<CanonicalRecord> related = graph.relatedByRelation().getOrDefault(relationName, List.of());
 			if (!related.isEmpty()) {
 				withRows++;
+				rowsByRecord.put(graph.core().id(), related.size());
 			}
 			if (related.size() > 1) {
 				withMultipleRows++;
@@ -99,6 +101,6 @@ public record RelationalIngestResult(
 			totalRows += related.size();
 		}
 		return new ViewRelation(relationName, sourceTable, policy, withRows, withMultipleRows, maxRows, totalRows,
-				mappedTerms);
+				mappedTerms, rowsByRecord);
 	}
 }

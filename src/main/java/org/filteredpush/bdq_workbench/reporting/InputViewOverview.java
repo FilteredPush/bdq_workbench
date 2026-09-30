@@ -51,11 +51,14 @@ import org.filteredpush.bdq_workbench.model.RelationshipSchema;
  * @param description the recorded input description
  * @param tables one overview row per input table, in declaration order
  * @param boundTermCount the number of distinct terms the run's bindings read
+ * @param inputRecordCount the number of records the view produced before record filtering; the
+ *     description's own counts and relation measurements cover only the records the run selected
  */
 public record InputViewOverview(
 		DatasetInputDescription description,
 		List<TableOverview> tables,
-		int boundTermCount) {
+		int boundTermCount,
+		int inputRecordCount) {
 
 	/**
 	 * Canonical constructor; copies tables defensively.
@@ -71,7 +74,8 @@ public record InputViewOverview(
 	 * @return the overview; {@link #isKnown()} is {@code false} when ingest recorded no description
 	 */
 	public static InputViewOverview from(ExecutionSummary summary) {
-		DatasetInputDescription description = summary.dataset().inputDescription();
+		DatasetInputDescription input = summary.dataset().inputDescription();
+		DatasetInputDescription description = selectedRecordsOnly(input, summary);
 		List<Set<String>> termsByBinding = new ArrayList<>();
 		Map<String, String> displayByNormalized = new LinkedHashMap<>();
 		for (ImplementationBinding binding : summary.bindings()) {
@@ -81,7 +85,34 @@ public record InputViewOverview(
 		for (InputTable table : description.tables()) {
 			tables.add(describeTable(description, table, termsByBinding, displayByNormalized));
 		}
-		return new InputViewOverview(description, tables, displayByNormalized.size());
+		return new InputViewOverview(description, tables, displayByNormalized.size(), input.viewRecordCount());
+	}
+
+	/**
+	 * Re-measures the view over the records the run selected, when a record filter kept fewer than
+	 * the view produced, so multiplicity and related-row counts describe what was tested.
+	 *
+	 * @param input the description recorded at ingest, over every record
+	 * @param summary the run, whose dataset holds the selected records
+	 * @return the description over the selected records (the input itself when nothing was filtered)
+	 */
+	private static DatasetInputDescription selectedRecordsOnly(DatasetInputDescription input, ExecutionSummary summary) {
+		List<String> selected = summary.dataset().records().stream().map(record -> record.id()).toList();
+		if (!input.isKnown() || selected.size() >= input.viewRecordCount()) {
+			return input;
+		}
+		List<ViewRelation> relations = input.viewRelations().stream()
+				.map(relation -> relation.restrictedTo(selected))
+				.toList();
+		return new DatasetInputDescription(input.viewMode(), input.viewSource(), input.grainTable(), selected.size(),
+				input.tables(), input.relationships(), relations, input.grainMappedTerms(), input.syntheticMarkers());
+	}
+
+	/**
+	 * @return {@code true} when a record filter selected fewer records than the view produced
+	 */
+	public boolean filtered() {
+		return description.viewRecordCount() < inputRecordCount;
 	}
 
 	/**
@@ -147,11 +178,12 @@ public record InputViewOverview(
 					? "Each row of " + grain + " became one core record. Tables joined with a flattening policy "
 							+ "(FIRST_ROW, AGGREGATE, REJECT) were collapsed into that record; the rows of tables "
 							+ "joined with EXPAND were retained, so tests whose inputs come from an expanded table "
-							+ "were evaluated once per related row, and VALIDATION/ISSUE results were rolled up "
-							+ "to the core record."
+							+ "were evaluated once per related row. Each record keeps all of its evaluations; it is "
+							+ "COMPLIANT for a test only when every one of them is, and NOT_COMPLIANT when any is."
 					: "Each row of " + grain + " became one core record with its related rows "
 							+ "retained. Tests whose inputs come from a related table were evaluated once per related "
-							+ "row, and VALIDATION/ISSUE results were rolled up to the core record.";
+							+ "row. Each record keeps all of its evaluations; it is COMPLIANT for a test only when "
+							+ "every one of them is, and NOT_COMPLIANT when any is.";
 			case UNKNOWN -> "The ingest path did not record how the execution records were built.";
 		};
 	}
@@ -266,6 +298,7 @@ public record InputViewOverview(
 		List<String> suppliedDisplay = supplied.stream()
 				.map(term -> displayByNormalized.getOrDefault(term, term))
 				.toList();
+		int selectedRows = grain ? description.viewRecordCount() : relation == null ? -1 : relation.relatedRowCount();
 		return new TableOverview(
 				table.name(),
 				table.rowType(),
@@ -275,7 +308,8 @@ public record InputViewOverview(
 				relationToGrain(description, table),
 				suppliedDisplay,
 				testCount,
-				relation);
+				relation,
+				selectedRows);
 	}
 
 	/**
@@ -414,6 +448,8 @@ public record InputViewOverview(
 	 * @param suppliedTerms the bound terms the table supplied through the view
 	 * @param testCount how many test bindings read at least one term supplied by the table
 	 * @param relation the table's included relation, or {@code null} when not included
+	 * @param viewRowCount the table's rows in the view's selected records (the selected grain
+	 *     records, or the related rows linked to them); negative when not part of the view
 	 */
 	public record TableOverview(
 			String name,
@@ -424,7 +460,26 @@ public record InputViewOverview(
 			String relationToGrain,
 			List<String> suppliedTerms,
 			int testCount,
-			ViewRelation relation) {
+			ViewRelation relation,
+			int viewRowCount) {
+
+		/**
+		 * Creates a table overview without a count of the rows in the view.
+		 *
+		 * @param name the table name
+		 * @param rowType the detected row type name
+		 * @param recordCount the rows read from the table
+		 * @param columnCount the table's columns
+		 * @param role the table's part in the view
+		 * @param relationToGrain how the table relates to the grain table
+		 * @param suppliedTerms the bound terms the table supplied
+		 * @param testCount the test bindings reading the table
+		 * @param relation the table's included relation, or {@code null}
+		 */
+		public TableOverview(String name, String rowType, int recordCount, int columnCount, TableRole role,
+				String relationToGrain, List<String> suppliedTerms, int testCount, ViewRelation relation) {
+			this(name, rowType, recordCount, columnCount, role, relationToGrain, suppliedTerms, testCount, relation, -1);
+		}
 
 		/**
 		 * Canonical constructor; copies supplied terms defensively.
@@ -434,10 +489,12 @@ public record InputViewOverview(
 		}
 
 		/**
-		 * @return the record count for display, or {@code "?"} when unknown
+		 * @return the record count for display: {@code "132 of 5827"} when the view uses only some
+		 *     of the table's rows, the table's count otherwise, {@code "?"} when unknown
 		 */
 		public String recordCountLabel() {
-			return recordCount < 0 ? "?" : Integer.toString(recordCount);
+			String total = recordCount < 0 ? "?" : Integer.toString(recordCount);
+			return viewRowCount < 0 || viewRowCount == recordCount ? total : viewRowCount + " of " + total;
 		}
 
 		/**

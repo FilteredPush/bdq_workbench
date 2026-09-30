@@ -66,6 +66,8 @@ final class ReportDigest {
 	static final int MAX_AMENDMENT_GROUPS = 25;
 	/** Causes and amendment proposals listed among the high-impact action items. */
 	static final int MAX_HIGH_IMPACT_ITEMS = 5;
+	/** Rows named per record and test before the rest are counted. */
+	static final int MAX_ROWS_LISTED = 5;
 	/** Test labels named per empty term before the rest are counted. */
 	static final int MAX_TESTS_PER_TERM = 5;
 
@@ -223,24 +225,26 @@ final class ReportDigest {
 	 * @return the QA summary
 	 */
 	QualitySummary qualitySummary() {
-		List<BuiltInMeasureSpec> qaSpecs = new ArrayList<>();
-		Phase phase = null;
+		/*
+		 * QA measure bindings carry the phase they were declared for, but are evaluated in every
+		 * phase their target validation runs in; judge quality on the latest results available.
+		 */
+		Map<String, BuiltInMeasureSpec> byTarget = new LinkedHashMap<>();
 		for (Phase candidate : List.of(Phase.POST_AMENDMENT, Phase.PRE_AMENDMENT)) {
-			List<BuiltInMeasureSpec> specs = qaSpecs(candidate);
-			if (!specs.isEmpty()) {
-				qaSpecs = specs;
-				phase = candidate;
-				break;
-			}
+			qaSpecs(candidate).forEach(spec -> byTarget.putIfAbsent(spec.targetTestId(), spec));
 		}
-		if (phase == null) {
+		if (byTarget.isEmpty()) {
 			return new QualitySummary(null, List.of(), List.of(), recordsById.size());
 		}
+		List<BuiltInMeasureSpec> qaSpecs = List.copyOf(byTarget.values());
+		Phase phase = qaSpecs.stream().anyMatch(spec -> latestPhase(spec.targetTestId()) == Phase.POST_AMENDMENT)
+				? Phase.POST_AMENDMENT
+				: Phase.PRE_AMENDMENT;
 		List<String> meeting = new ArrayList<>();
 		for (String recordId : recordsById.keySet()) {
 			boolean meetsAll = true;
 			for (BuiltInMeasureSpec spec : qaSpecs) {
-				List<Response> responses = recordLevel(spec.targetTestId(), phase, recordId);
+				List<Response> responses = recordLevel(spec.targetTestId(), latestPhase(spec.targetTestId()), recordId);
 				if (responses.isEmpty() || !responses.stream().allMatch(spec::matchesQaCondition)) {
 					meetsAll = false;
 					break;
@@ -510,7 +514,60 @@ final class ReportDigest {
 				passed++;
 			}
 		}
-		return records == 0 ? null : new PhaseCounts(records, problems, passed, internal, external, errors);
+		if (records == 0) {
+			return null;
+		}
+		int evaluations = 0;
+		int problemEvaluations = 0;
+		for (String recordId : recordsById.keySet()) {
+			for (Response response : responsesFor(testId, phase, recordId)) {
+				if (!response.derived()) {
+					evaluations++;
+					if (isProblem(type, response)) {
+						problemEvaluations++;
+					}
+				}
+			}
+		}
+		return new PhaseCounts(records, problems, passed, internal, external, errors, evaluations, problemEvaluations);
+	}
+
+	/**
+	 * Lists the tests that ran once per expanded related row, rather than once per record.
+	 *
+	 * @return one entry per such test, in encounter order
+	 */
+	List<ExpandedTest> expandedTests() {
+		Map<String, TestType> tests = new LinkedHashMap<>();
+		perRecordResponses().forEach(response -> tests.putIfAbsent(response.testId(), response.testType()));
+		List<ExpandedTest> expanded = new ArrayList<>();
+		tests.forEach((testId, type) -> {
+			Phase phase = type == TestType.AMENDMENT ? Phase.AMENDMENT : latestPhase(testId);
+			Set<String> relations = new LinkedHashSet<>();
+			Set<String> records = new LinkedHashSet<>();
+			int evaluations = 0;
+			int problems = 0;
+			for (String recordId : recordsById.keySet()) {
+				for (Response response : responsesFor(testId, phase, recordId)) {
+					if (response.derived()) {
+						continue;
+					}
+					evaluations++;
+					records.add(recordId);
+					if (response.subjectRef() != null) {
+						relations.add(response.subjectRef().relationName());
+					}
+					if (isProblem(type, response)) {
+						problems++;
+					}
+				}
+			}
+			if (evaluations > records.size()) {
+				expanded.add(new ExpandedTest(testLabel(testId), type, evaluations, records.size(), problems,
+						List.copyOf(relations)));
+			}
+		});
+		return expanded;
 	}
 
 	/**
@@ -552,10 +609,50 @@ final class ReportDigest {
 				.filter(response -> !response.derived() && response.subjectRef() != null)
 				.toList();
 		if (details.size() > 1) {
-			long failing = details.stream().filter(response -> isProblem(type, response)).count();
-			return testLabel(testId) + " (" + failing + " of " + details.size() + " rows)";
+			List<Response> failing = details.stream().filter(response -> isProblem(type, response)).toList();
+			String result = failing.get(0).responseResult();
+			return testLabel(testId) + ": " + result + " in " + rowList(failing) + " (" + failing.size() + " of "
+					+ details.size() + " evaluations)";
 		}
 		return testLabel(testId);
+	}
+
+	/**
+	 * Names the rows a record's evaluations came from, grouping lines by data file: e.g.
+	 * {@code "the record itself, identification.csv lines 3, 5"}, listing at most
+	 * {@link #MAX_ROWS_LISTED} rows.
+	 *
+	 * @param evaluations the evaluations
+	 * @return the rows, most listed first
+	 */
+	private String rowList(List<Response> evaluations) {
+		Map<String, List<String>> linesByFile = new LinkedHashMap<>();
+		boolean recordItself = false;
+		int listed = 0;
+		for (Response response : evaluations) {
+			if (listed >= MAX_ROWS_LISTED) {
+				break;
+			}
+			SubjectRef subject = response.subjectRef();
+			CanonicalRecord row = relatedRowsByKey.get(relatedKey(subject.relationName(), subject.rowRef()));
+			if (row == null) {
+				recordItself = true;
+			} else if (row.sourceRow().known()) {
+				linesByFile.computeIfAbsent(row.sourceRow().file(), ignored -> new ArrayList<>())
+						.add(Long.toString(row.sourceRow().line()));
+			} else {
+				linesByFile.computeIfAbsent(subject.relationName(), ignored -> new ArrayList<>()).add(subject.rowRef());
+			}
+			listed++;
+		}
+		List<String> parts = new ArrayList<>();
+		if (recordItself) {
+			parts.add("the record itself");
+		}
+		linesByFile.forEach((file, lines) -> parts.add(file + (lines.size() == 1 ? " line " : " lines ")
+				+ String.join(", ", lines.stream().sorted(ReportDigest::compareLineNumbers).toList())));
+		String rows = String.join(", ", parts);
+		return evaluations.size() > listed ? rows + " (+" + (evaluations.size() - listed) + " more)" : rows;
 	}
 
 	/**
@@ -775,6 +872,21 @@ final class ReportDigest {
 		return value == null || value.isBlank() ? "(empty)" : value;
 	}
 
+	/**
+	 * Orders line numbers numerically, falling back to text for non-numeric row references.
+	 *
+	 * @param left a line number or row reference
+	 * @param right another
+	 * @return the comparison
+	 */
+	private static int compareLineNumbers(String left, String right) {
+		try {
+			return Long.compare(Long.parseLong(left), Long.parseLong(right));
+		} catch (NumberFormatException e) {
+			return left.compareTo(right);
+		}
+	}
+
 	private static String relatedKey(String relation, String rowId) {
 		return relation + "\u0000" + rowId;
 	}
@@ -833,9 +945,34 @@ final class ReportDigest {
 	 * @param internalPrerequisites records the test could not assess from the data given
 	 * @param externalPrerequisites records the test could not assess for want of an external resource
 	 * @param errors records whose evaluation failed
+	 * @param evaluations the test's evaluations behind those records (one per expanded related row,
+	 *     or one per record)
+	 * @param problemEvaluations evaluations reporting a problem
 	 */
 	record PhaseCounts(int records, int problems, int passed, int internalPrerequisites, int externalPrerequisites,
-			int errors) {
+			int errors, int evaluations, int problemEvaluations) {
+
+		/**
+		 * Creates counts for a test evaluated once per record.
+		 *
+		 * @param records records the test ran for
+		 * @param problems records with a problem
+		 * @param passed records without a problem
+		 * @param internalPrerequisites records not assessable from the data given
+		 * @param externalPrerequisites records not assessable for want of an external resource
+		 * @param errors records whose evaluation failed
+		 */
+		PhaseCounts(int records, int problems, int passed, int internalPrerequisites, int externalPrerequisites,
+				int errors) {
+			this(records, problems, passed, internalPrerequisites, externalPrerequisites, errors, records, problems);
+		}
+
+		/**
+		 * @return {@code true} when the test ran more than once for some record (per expanded row)
+		 */
+		boolean expanded() {
+			return evaluations > records;
+		}
 	}
 
 	/**
@@ -906,6 +1043,20 @@ final class ReportDigest {
 	 * @param amendments the changes proposed for the record
 	 */
 	record AttentionRecord(String recordLabel, List<String> problems, List<String> amendments) {
+	}
+
+	/**
+	 * A test that ran once per expanded related row rather than once per record.
+	 *
+	 * @param testLabel the test's label
+	 * @param type the test type
+	 * @param evaluations its evaluations, in its latest phase (the amendment phase for amendments)
+	 * @param records the records those evaluations belong to
+	 * @param problemEvaluations evaluations reporting a problem
+	 * @param relations the expanded relations its evaluations came from
+	 */
+	record ExpandedTest(String testLabel, TestType type, int evaluations, int records, int problemEvaluations,
+			List<String> relations) {
 	}
 
 	/**

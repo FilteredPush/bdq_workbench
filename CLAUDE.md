@@ -265,7 +265,11 @@ understanding how the stages connect — read its class Javadoc first. The pipel
    compile-time dependency on ffdq result types. After structured detail responses are available,
    VALIDATION and ISSUE tests additionally synthesize explicit derived per-core rollups (marked on
    `Response` as derived, with contributing `SubjectRef`s retained) while MEASURE and AMENDMENT
-   remain detail-only. Any exception during argument binding, invocation, subject expansion, or
+   remain detail-only. The grain record is the SingleRecord: it has quality for a test only when
+   every evaluation across its multiplicity does, so a rollup is NOT_COMPLIANT (IS_ISSUE, then
+   POTENTIAL_ISSUE) when any evaluation is, else the first undetermined result (ERROR,
+   UNABLE_TO_RUN, EXTERNAL_, then INTERNAL_PREREQUISITES_NOT_MET), and COMPLIANT (NOT_ISSUE) only
+   when all are. The per-row evaluations stay in the response stream and are reported row by row. Any exception during argument binding, invocation, subject expansion, or
    amendment write-back is caught and turned into a normalized response rather than propagated.
 6. **`reporting`** — `ReportingService`/`ReportExporter` implementations turn the final
    `ExecutionSummary` (normalized `Response` stream + `ExecutionSummaryMetadata`) into
@@ -326,7 +330,12 @@ understanding how the stages connect — read its class Javadoc first. The pipel
    (built by `DatasetInputDescriber` in `DefaultIngestService`, and carried through record
    filtering); `InputViewOverview` classifies each table against the run's `ACTED_UPON`/
    `CONSULTED` bindings, and `InputViewDiagram` draws the HTML report's inline SVG of the tables,
-   their relationships, and the view construction. Keep it an overview — the reports summarize
+   their relationships, and the view construction — the execution view in two parts, the flat grain
+   record and each `EXPAND` table's rows joined 1 : n. Under a record filter, `InputViewOverview`
+   re-measures each `ViewRelation` over the selected records (`ViewRelation.restrictedTo`, from its
+   `rowsByRecord`) and table counts read "selected of input". The section also lists the tests
+   evaluated once per related row (`ReportDigest.expandedTests`), and per-test findings give
+   "records (x of y evaluations)" for them. Keep it an overview — the reports summarize
    column counts and bound terms, not every column.
 
 `WorkbenchFacade.prepare(AppConfig)` runs ingestion → policy resolution → discovery → binding and

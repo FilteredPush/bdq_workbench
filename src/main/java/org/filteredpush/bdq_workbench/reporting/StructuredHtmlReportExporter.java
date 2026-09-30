@@ -159,7 +159,7 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 		appendSyntheticDataWarning(builder, summary);
 		appendExternalPrerequisitesNotice(builder, digest);
 		appendRunMetadata(builder, summary, digest);
-		appendInputView(builder, summary, InputViewOverview.from(summary));
+		appendInputView(builder, summary, InputViewOverview.from(summary), digest);
 		appendHighImpactActionItems(builder, digest);
 		appendMeasureDifferenceVisualization(builder, summary);
 		appendQualitySection(builder, digest);
@@ -259,13 +259,20 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 	 * @param builder the report being built; appended to in place
 	 * @param summary the execution summary carrying record-selection metadata
 	 * @param overview the input-view overview to render
+	 * @param digest the run's condensed findings, for the tests evaluated per related row
 	 */
-	private static void appendInputView(StringBuilder builder, ExecutionSummary summary, InputViewOverview overview) {
+	private static void appendInputView(StringBuilder builder, ExecutionSummary summary, InputViewOverview overview,
+			ReportDigest digest) {
 		builder.append("<section>\n")
 				.append("  <h2>Input data view</h2>\n");
 		if (!overview.isKnown()) {
-			builder.append("  <p><em>The view used to run the tests was not recorded by ingest.</em></p>\n")
-					.append("</section>\n");
+			builder.append("  <p><em>The view used to run the tests was not recorded by ingest.</em></p>\n");
+			if (!digest.expandedTests().isEmpty()) {
+				builder.append("  <ul>\n");
+				appendExpandedTests(builder, digest, "");
+				builder.append("  </ul>\n");
+			}
+			builder.append("</section>\n");
 			return;
 		}
 		DatasetInputDescription description = overview.description();
@@ -283,7 +290,7 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 		builder.append("    <li><strong>Grain table:</strong> <code>")
 				.append(escapeHtml(description.grainTable()))
 				.append("</code> → ")
-				.append(description.viewRecordCount())
+				.append(overview.inputRecordCount())
 				.append(" execution record(s), ")
 				.append(summary.metadata().filteredSingleRecordCount())
 				.append(" selected after record filtering</li>\n")
@@ -298,10 +305,13 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 				.append(" not included)</li>\n");
 		List<String> notes = overview.multiplicityNotes();
 		if (!notes.isEmpty()) {
-			builder.append("    <li><strong>Related-row multiplicity:</strong>\n      <ul>\n");
+			builder.append("    <li><strong>Related-row multiplicity")
+					.append(overview.filtered() ? " in the " + description.viewRecordCount() + " selected record(s)" : "")
+					.append(":</strong>\n      <ul>\n");
 			notes.forEach(note -> builder.append("        <li>").append(escapeHtml(note)).append("</li>\n"));
 			builder.append("      </ul>\n    </li>\n");
 		}
+		appendExpandedTests(builder, digest, description.grainTable());
 		builder.append("  </ul>\n")
 				.append(InputViewDiagram.render(overview));
 		appendInputTableSummary(builder, overview);
@@ -348,6 +358,39 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 		}
 		builder.append("    </tbody>\n")
 				.append("  </table>\n");
+	}
+
+	/**
+	 * Lists the tests evaluated once per related row, with their evaluation counts.
+	 *
+	 * @param builder the report being built; appended to in place
+	 * @param digest the run's condensed findings
+	 * @param grainTable the grain table, left out of the listed row sources
+	 */
+	private static void appendExpandedTests(StringBuilder builder, ReportDigest digest, String grainTable) {
+		List<ReportDigest.ExpandedTest> expanded = digest.expandedTests();
+		if (expanded.isEmpty()) {
+			return;
+		}
+		builder.append("    <li><strong>Tests evaluated once per related row:</strong>\n      <ul>\n");
+		for (ReportDigest.ExpandedTest test : expanded) {
+			List<String> sources = test.relations().stream()
+					.filter(relation -> !relation.equalsIgnoreCase(grainTable))
+					.toList();
+			builder.append("        <li>")
+					.append(escapeHtml(test.testLabel()))
+					.append(" — ")
+					.append(test.evaluations())
+					.append(" evaluations over ")
+					.append(test.records())
+					.append(" record(s)")
+					.append(sources.isEmpty() ? "" : ", one per " + escapeHtml(String.join(", ", sources)) + " row")
+					.append(test.relations().stream().anyMatch(relation -> relation.equalsIgnoreCase(grainTable))
+							? " plus the record's own value"
+							: "")
+					.append("</li>\n");
+		}
+		builder.append("      </ul>\n    </li>\n");
 	}
 
 	/**
@@ -487,10 +530,13 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 	 */
 	static String problemTransition(ReportDigest.TestFindings row) {
 		ReportDigest.PhaseCounts latest = row.latest();
-		if (row.pre() != null && row.post() != null) {
-			return row.pre().problems() + " → " + row.post().problems() + " of " + latest.records();
+		String records = row.pre() != null && row.post() != null
+				? row.pre().problems() + " → " + row.post().problems() + " of " + latest.records()
+				: latest.problems() + " of " + latest.records();
+		if (!latest.expanded()) {
+			return records;
 		}
-		return latest.problems() + " of " + latest.records();
+		return records + " records (" + latest.problemEvaluations() + " of " + latest.evaluations() + " evaluations)";
 	}
 
 	/**

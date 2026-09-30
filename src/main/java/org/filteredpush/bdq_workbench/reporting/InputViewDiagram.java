@@ -54,6 +54,8 @@ final class InputViewDiagram {
 	private static final int VIEW_WIDTH = 330;
 	private static final int VIEW_LINE_HEIGHT = 18;
 	private static final int VIEW_PADDING = 14;
+	/** Vertical gap between the flat record and each expanded part of the execution view. */
+	private static final int VIEW_PART_GAP = 30;
 	private static final int SVG_WIDTH = 880;
 	private static final int TOP = 40;
 	private static final int BOTTOM_PADDING = 16;
@@ -82,6 +84,7 @@ final class InputViewDiagram {
 			+ "    .vw-ignored rect { fill: #f6f8fa; stroke: #8c959f; stroke-dasharray: 5 3; }\n"
 			+ "    .vw-ignored text, .vw-notincl text { fill: #57606a; }\n"
 			+ "    .vw-view rect { fill: #fbefff; stroke: #8250df; stroke-width: 2; }\n"
+			+ "    .vw-expanded rect { fill: #ffffff; stroke-dasharray: 6 3; }\n"
 			+ "    .vw-rel { fill: none; stroke: #57606a; stroke-width: 1.5; }\n"
 			+ "    .vw-rel.inactive { stroke: #afb8c1; stroke-dasharray: 3 3; }\n"
 			+ "    .vw-flow { fill: none; stroke: #8250df; stroke-width: 1.5; }\n"
@@ -114,9 +117,15 @@ final class InputViewDiagram {
 			topByTable.put(key(ordered.get(index).name()), TOP + index * (TABLE_HEIGHT + TABLE_GAP));
 		}
 		int columnHeight = ordered.size() * (TABLE_HEIGHT + TABLE_GAP) - TABLE_GAP;
-		List<String> viewLines = viewLines(overview);
-		int viewHeight = viewLines.size() * VIEW_LINE_HEIGHT + 2 * VIEW_PADDING;
+		List<ViewPart> parts = viewParts(overview);
+		int viewHeight = parts.stream().mapToInt(ViewPart::height).sum() + (parts.size() - 1) * VIEW_PART_GAP;
 		int viewTop = TOP + Math.max(0, (columnHeight - viewHeight) / 2);
+		int partTop = viewTop;
+		List<ViewPart> placed = new ArrayList<>();
+		for (ViewPart part : parts) {
+			placed.add(part.at(partTop));
+			partTop += part.height() + VIEW_PART_GAP;
+		}
 		int height = TOP + Math.max(columnHeight, viewHeight) + BOTTOM_PADDING;
 
 		StringBuilder svg = new StringBuilder()
@@ -131,11 +140,11 @@ final class InputViewDiagram {
 		appendCaption(svg, TABLE_X, "Input tables");
 		appendCaption(svg, VIEW_X, "Execution view");
 		appendRelationshipArcs(svg, overview, topByTable);
-		appendFlows(svg, overview.description(), ordered, topByTable, viewTop, viewHeight);
+		appendFlows(svg, overview.description(), ordered, topByTable, placed);
 		for (TableOverview table : ordered) {
 			appendTableBox(svg, overview.description(), table, topByTable.get(key(table.name())));
 		}
-		appendViewBox(svg, viewLines, viewTop, viewHeight);
+		appendViewParts(svg, placed);
 		svg.append("    </svg>\n")
 				.append("  </div>\n")
 				.append("  <div class=\"view-legend\">")
@@ -215,41 +224,52 @@ final class InputViewDiagram {
 	}
 
 	/**
-	 * Appends one arrow from each table the view read from into the execution-view box.
+	 * Appends one arrow from each table the view read from into the part of the execution view it
+	 * feeds: the flat record for the grain and flattened tables, an expanded-rows part for each
+	 * expanded table.
 	 *
 	 * @param svg the SVG being built
 	 * @param description the recorded input description
 	 * @param ordered the tables in drawing order
 	 * @param topByTable each drawn table's top edge, keyed by lower-cased name
-	 * @param viewTop the view box's top edge
-	 * @param viewHeight the view box's height
+	 * @param parts the placed execution-view parts, the flat record first
 	 */
 	private static void appendFlows(
 			StringBuilder svg,
 			DatasetInputDescription description,
 			List<TableOverview> ordered,
 			Map<String, Integer> topByTable,
-			int viewTop,
-			int viewHeight) {
-		List<TableOverview> sources = ordered.stream()
-				.filter(table -> table.role() == TableRole.GRAIN || table.role() == TableRole.CONTRIBUTING)
-				.toList();
-		int startX = TABLE_X + TABLE_WIDTH;
-		for (int index = 0; index < sources.size(); index++) {
-			TableOverview table = sources.get(index);
-			int startY = topByTable.get(key(table.name())) + TABLE_HEIGHT / 2;
-			int endY = viewTop + viewHeight * (index + 1) / (sources.size() + 1);
-			svg.append("      <path class=\"vw-flow\" marker-end=\"url(#vw-arrow)\" d=\"M ")
-					.append(startX).append(' ').append(startY)
-					.append(" C ").append(startX + (VIEW_X - startX) / 2).append(' ').append(startY)
-					.append(' ').append(startX + (VIEW_X - startX) / 2).append(' ').append(endY)
-					.append(' ').append(VIEW_X - 2).append(' ').append(endY)
-					.append("\"/>\n");
-			svg.append("      <text class=\"vw-flow-label\" x=\"").append(startX + 6)
-					.append("\" y=\"").append(startY - 5).append("\">")
-					.append(escape(flowLabel(description, table)))
-					.append("</text>\n");
+			List<ViewPart> parts) {
+		Map<ViewPart, List<TableOverview>> sourcesByPart = new LinkedHashMap<>();
+		parts.forEach(part -> sourcesByPart.put(part, new ArrayList<>()));
+		for (TableOverview table : ordered) {
+			if (table.role() != TableRole.GRAIN && table.role() != TableRole.CONTRIBUTING) {
+				continue;
+			}
+			ViewPart target = parts.stream()
+					.filter(part -> part.table().equalsIgnoreCase(table.name()))
+					.findFirst()
+					.orElse(parts.get(0));
+			sourcesByPart.get(target).add(table);
 		}
+		int startX = TABLE_X + TABLE_WIDTH;
+		sourcesByPart.forEach((part, sources) -> {
+			for (int index = 0; index < sources.size(); index++) {
+				TableOverview table = sources.get(index);
+				int startY = topByTable.get(key(table.name())) + TABLE_HEIGHT / 2;
+				int endY = part.top() + part.height() * (index + 1) / (sources.size() + 1);
+				svg.append("      <path class=\"vw-flow\" marker-end=\"url(#vw-arrow)\" d=\"M ")
+						.append(startX).append(' ').append(startY)
+						.append(" C ").append(startX + (VIEW_X - startX) / 2).append(' ').append(startY)
+						.append(' ').append(startX + (VIEW_X - startX) / 2).append(' ').append(endY)
+						.append(' ').append(VIEW_X - 2).append(' ').append(endY)
+						.append("\"/>\n");
+				svg.append("      <text class=\"vw-flow-label\" x=\"").append(startX + 6)
+						.append("\" y=\"").append(startY - 5).append("\">")
+						.append(escape(flowLabel(description, table)))
+						.append("</text>\n");
+			}
+		});
 	}
 
 	/**
@@ -268,7 +288,7 @@ final class InputViewDiagram {
 			return "rows retained";
 		}
 		if (!relation.cardinalityPolicy().flattens()) {
-			return "expand: 1 subject per row";
+			return "expand: per row";
 		}
 		return relation.cardinalityPolicy().name().toLowerCase(Locale.ROOT).replace('_', ' ');
 	}
@@ -342,49 +362,101 @@ final class InputViewDiagram {
 	}
 
 	/**
-	 * Lists the lines drawn inside the execution-view box.
+	 * Lists the parts of the execution view: the flat record (grain plus flattened tables), then
+	 * one part per expanded table, whose rows are kept and evaluated one by one.
 	 *
 	 * @param overview the input-view overview
-	 * @return the view box lines, the first being its title
+	 * @return the unplaced parts, the flat record first
 	 */
-	private static List<String> viewLines(InputViewOverview overview) {
+	private static List<ViewPart> viewParts(InputViewOverview overview) {
 		DatasetInputDescription description = overview.description();
-		List<String> lines = new ArrayList<>();
-		lines.add(overview.modeLabel());
-		lines.add("grain: " + description.grainTable());
-		lines.add(description.viewRecordCount() + " execution record(s)");
-		lines.add(overview.includedTables().size() + " of " + overview.tables().size() + " input table(s) used");
-		switch (description.viewMode()) {
-			case FLATTENED -> lines.add("related rows collapsed per record");
-			case STRUCTURED -> lines.add("related rows retained per record");
-			default -> {
-			}
+		List<ViewRelation> expanded = description.viewRelations().stream()
+				.filter(relation -> relation.cardinalityPolicy() == null || !relation.cardinalityPolicy().flattens())
+				.toList();
+		List<String> flattened = overview.includedTables().stream()
+				.filter(table -> table.role() == TableRole.CONTRIBUTING)
+				.map(TableOverview::name)
+				.filter(name -> expanded.stream().noneMatch(relation -> relation.sourceTable().equalsIgnoreCase(name)))
+				.toList();
+		List<String> flat = new ArrayList<>();
+		flat.add(expanded.isEmpty() ? overview.modeLabel() : "Flat " + description.grainTable() + " record");
+		flat.add(description.viewRecordCount() + (overview.filtered() ? " of " + overview.inputRecordCount() : "")
+				+ " record(s), one per " + description.grainTable() + " row");
+		if (!flattened.isEmpty()) {
+			flat.add("flattened in: " + String.join(", ", flattened));
 		}
 		if (!overview.ignoredTables().isEmpty()) {
-			lines.add(overview.ignoredTables().size() + " ignored: no test bindings");
+			flat.add(overview.ignoredTables().size() + " table(s) ignored: no test bindings");
 		}
-		return lines;
+		List<ViewPart> parts = new ArrayList<>();
+		parts.add(new ViewPart(description.grainTable(), flat, false, 0));
+		for (ViewRelation relation : expanded) {
+			List<String> lines = List.of(
+					"Expanded " + relation.sourceTable() + " rows",
+					relation.relatedRowCount() + " row(s) for " + relation.coreRecordsWithRows() + " record(s), up to "
+							+ relation.maxRowsPerCoreRecord() + " each",
+					"tests reading its terms: once per row");
+			parts.add(new ViewPart(relation.sourceTable(), lines, true, 0));
+		}
+		return parts;
 	}
 
 	/**
-	 * Appends the execution-view box.
+	 * Appends the execution-view parts, joining each expanded part to the flat record with a
+	 * one-to-many connector.
 	 *
 	 * @param svg the SVG being built
-	 * @param lines the lines to draw, the first being its title
-	 * @param top the box's top edge
-	 * @param height the box's height
+	 * @param parts the placed parts, the flat record first
 	 */
-	private static void appendViewBox(StringBuilder svg, List<String> lines, int top, int height) {
-		svg.append("      <g class=\"vw-box vw-view\"><rect x=\"").append(VIEW_X).append("\" y=\"").append(top)
-				.append("\" width=\"").append(VIEW_WIDTH).append("\" height=\"").append(height)
-				.append("\" rx=\"8\"/>");
-		for (int index = 0; index < lines.size(); index++) {
-			appendText(svg, index == 0 ? "vw-name" : "",
-					VIEW_X + VIEW_PADDING,
-					top + VIEW_PADDING + (index + 1) * VIEW_LINE_HEIGHT - 5,
-					truncate(lines.get(index), MAX_VIEW_TEXT_CHARS));
+	private static void appendViewParts(StringBuilder svg, List<ViewPart> parts) {
+		ViewPart flat = parts.get(0);
+		int connectorX = VIEW_X + VIEW_WIDTH / 2;
+		for (ViewPart part : parts.subList(1, parts.size())) {
+			svg.append("      <path class=\"vw-rel\" d=\"M ").append(connectorX).append(' ')
+					.append(flat.top() + flat.height()).append(" L ").append(connectorX).append(' ').append(part.top())
+					.append("\"/>")
+					.append("<text class=\"vw-flow-label\" x=\"").append(connectorX + 6).append("\" y=\"")
+					.append(part.top() - VIEW_PART_GAP / 2 + 4).append("\">1 : n</text>\n");
 		}
-		svg.append("</g>\n");
+		for (ViewPart part : parts) {
+			svg.append("      <g class=\"vw-box ").append(part.expanded() ? "vw-view vw-expanded" : "vw-view")
+					.append("\"><rect x=\"").append(VIEW_X).append("\" y=\"").append(part.top())
+					.append("\" width=\"").append(VIEW_WIDTH).append("\" height=\"").append(part.height())
+					.append("\" rx=\"8\"/>");
+			for (int index = 0; index < part.lines().size(); index++) {
+				appendText(svg, index == 0 ? "vw-name" : "",
+						VIEW_X + VIEW_PADDING,
+						part.top() + VIEW_PADDING + (index + 1) * VIEW_LINE_HEIGHT - 5,
+						truncate(part.lines().get(index), MAX_VIEW_TEXT_CHARS));
+			}
+			svg.append("</g>\n");
+		}
+	}
+
+	/**
+	 * One box of the execution view.
+	 *
+	 * @param table the table the part stands for (the grain for the flat record)
+	 * @param lines the box's lines, the first being its title
+	 * @param expanded whether the part holds an expanded table's rows
+	 * @param top the box's top edge, once placed
+	 */
+	private record ViewPart(String table, List<String> lines, boolean expanded, int top) {
+
+		/**
+		 * @return the box's height
+		 */
+		int height() {
+			return lines.size() * VIEW_LINE_HEIGHT + 2 * VIEW_PADDING;
+		}
+
+		/**
+		 * @param newTop the box's top edge
+		 * @return this part placed at that edge
+		 */
+		ViewPart at(int newTop) {
+			return new ViewPart(table, lines, expanded, newTop);
+		}
 	}
 
 	/**

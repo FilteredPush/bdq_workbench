@@ -68,7 +68,7 @@ has more than one related row (for example, several identifications of one occur
 | Policy | Effect |
 |---|---|
 | `FIRST_ROW` (default) | Flatten: use the first related row and ignore the rest. |
-| `EXPAND` | Keep every related row. A test that reads any term mapped from this table runs once per related row, with the grain record's (and flattened tables') terms reused for each; VALIDATION and ISSUE results are also rolled up to the grain record. A grain record with no related rows is tested once with those terms blank. |
+| `EXPAND` | Keep every related row. A test that reads any term mapped from this table runs once per related row, with the grain record's (and flattened tables') terms reused for each. Every evaluation is kept and reported; the grain record's result for a VALIDATION or ISSUE test is derived from all of them — COMPLIANT only when every evaluation is, NOT_COMPLIANT when any is — and multi-record measures count grain records. A grain record with no related rows is tested once with those terms blank. |
 | `AGGREGATE` | Flatten: join all related rows' values with `" \| "`. Combined values usually fail tests on that term. |
 | `REJECT` | Flatten: leave the mapped terms empty, with a warning, for grain records that have more than one related row. |
 
@@ -81,7 +81,14 @@ previews expanded rows beneath each grain record, and warns where a policy drops
 
 When a term is mapped both from the grain and from an `EXPAND` table — for example, an occurrence
 core that carries its current identification and an identification-history extension — both are
-tested: the grain's value once, and each expanded row's value once, all rolled up to the record.
+tested: the grain's value once, and each expanded row's value once, all counting toward the record's result.
+
+The structured reports' "Input data view" section then draws the execution view in two parts — the
+flat grain record (with the tables flattened into it) and, for each `EXPAND` table, its expanded
+rows joined 1 : n — lists the tests evaluated once per related row with their evaluation and record
+counts, and names the offending rows (data file and lines) in the records needing attention. When
+`--record-filter` selects some records, table counts and multiplicity are given for the selected
+records ("132 of 5827").
 
 Without `--dataset-view`, the workbench builds the view itself: the grain is the table it would read
 anyway (occurrence when there is one), every column of the grain and its directly related tables is

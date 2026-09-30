@@ -70,7 +70,43 @@ class InputViewOverviewTest {
 		assertThat(overview.multiplicityNotes()).singleElement().asString()
 				.endsWith("1 had more than one (max 3), each evaluated separately");
 		assertThat(StructuredHtmlReportExporter.renderHtml(InputViewFixtures.expandedViewSummary()))
-				.contains(">expand: 1 subject per row</text>");
+				.contains(">expand: per row</text>");
+	}
+
+	@Test
+	void filteredRunMeasuresMultiplicityOverTheSelectedRecordsOnly() {
+		org.filteredpush.bdq_workbench.model.DatasetInputDescription description =
+				new org.filteredpush.bdq_workbench.model.DatasetInputDescription(
+						org.filteredpush.bdq_workbench.model.DatasetInputDescription.ViewMode.STRUCTURED, "view.json",
+						"occurrence", 3,
+						List.of(new org.filteredpush.bdq_workbench.model.DatasetInputDescription.InputTable(
+										"occurrence", "OCCURRENCE", 3, List.of("occurrenceID")),
+								new org.filteredpush.bdq_workbench.model.DatasetInputDescription.InputTable(
+										"identification", "TAXON", 6, List.of("occurrenceID", "scientificName"))),
+						List.of(new org.filteredpush.bdq_workbench.model.RelationshipSchema("identification",
+								"occurrenceID", "occurrence", "occurrenceID", "identification")),
+						List.of(new org.filteredpush.bdq_workbench.model.DatasetInputDescription.ViewRelation(
+								"identification", "identification",
+								org.filteredpush.bdq_workbench.model.DatasetViewCardinalityPolicy.EXPAND, 3, 2, 3, 6,
+								List.of("scientificName"), java.util.Map.of("occ-1", 3, "occ-2", 2, "occ-3", 1))),
+						List.of("occurrenceID"));
+		ExecutionSummary summary = new ExecutionSummary(List.of(), null,
+				new org.filteredpush.bdq_workbench.model.RecordDataset(List.of(
+						new org.filteredpush.bdq_workbench.model.CanonicalRecord("occ-2", java.util.Map.of()),
+						new org.filteredpush.bdq_workbench.model.CanonicalRecord("occ-3", java.util.Map.of())),
+						List.of(), description));
+
+		InputViewOverview overview = InputViewOverview.from(summary);
+
+		assertThat(overview.filtered()).isTrue();
+		assertThat(overview.inputRecordCount()).isEqualTo(3);
+		assertThat(overview.multiplicityNotes()).containsExactly("identification: 3 related row(s) across 2 of 2 "
+				+ "occurrence record(s); 1 had more than one (max 2), each evaluated separately");
+		assertThat(overview.tables()).extracting(TableOverview::recordCountLabel).containsExactly("2 of 3", "3 of 6");
+		String html = StructuredHtmlReportExporter.renderHtml(summary);
+		assertThat(html).contains("<strong>Related-row multiplicity in the 2 selected record(s):</strong>");
+		assertThat(html).contains(">Flat occurrence record</text>").contains(">Expanded identification rows</text>")
+				.contains(">3 row(s) for 2 record(s), up to 2 each</text>").contains(">1 : n</text>");
 	}
 
 	@Test

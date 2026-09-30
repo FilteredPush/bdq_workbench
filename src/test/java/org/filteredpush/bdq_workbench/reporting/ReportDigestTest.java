@@ -55,7 +55,7 @@ class ReportDigestTest {
 
 		assertThat(findings).extracting(ReportDigest.TestFindings::testLabel, StructuredHtmlReportExporter::problemTransition)
 				.containsExactly(
-						tuple("Scientific name found", "1 of 3"),
+						tuple("Scientific name found", "1 of 3 records (1 of 4 evaluations)"),
 						tuple("Country code not empty", "0 → 0 of 3"),
 						tuple("Geodetic datum standard", "2 → 0 of 3"));
 		assertThat(findings.get(0).exampleRecords()).containsExactly("MCZ:Herp:A-1 (occurrence.txt line 2)");
@@ -88,7 +88,7 @@ class ReportDigestTest {
 				.extracting(ReportDigest.AttentionRecord::recordLabel, ReportDigest.AttentionRecord::problems,
 						ReportDigest.AttentionRecord::amendments)
 				.containsExactly(
-						tuple("MCZ:Herp:A-1 (occurrence.txt line 2)", List.of("Scientific name found (1 of 2 rows)"),
+						tuple("MCZ:Herp:A-1 (occurrence.txt line 2)", List.of("Scientific name found: NOT_COMPLIANT in identification.txt line 3 (1 of 2 evaluations)"),
 								List.of("geodeticDatum: WGS 84 → EPSG:4326")),
 						tuple("occurrence.txt line 4", List.of(), List.of("geodeticDatum: WGS 84 → EPSG:4326")));
 	}

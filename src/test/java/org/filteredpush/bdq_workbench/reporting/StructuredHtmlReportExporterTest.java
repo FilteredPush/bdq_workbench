@@ -92,8 +92,12 @@ class StructuredHtmlReportExporterTest {
 				+ "<td>Locality and depth</td></tr>");
 		assertThat(html).contains("<tr><td class=\"num\">2</td><td><code>geodeticDatum</code>: WGS 84 → "
 				+ "<strong>EPSG:4326</strong></td><td>Geodetic datum standardized</td>");
-		assertThat(html).contains("<tr><td>MCZ:Herp:A-1 (occurrence.txt line 2)</td><td>Scientific name found (1 of 2 "
-				+ "rows)</td><td>geodeticDatum: WGS 84 → EPSG:4326</td></tr>");
+		assertThat(html).contains("<tr><td>MCZ:Herp:A-1 (occurrence.txt line 2)</td><td>Scientific name found: "
+				+ "NOT_COMPLIANT in identification.txt line 3 (1 of 2 evaluations)</td><td>geodeticDatum: WGS 84 → "
+				+ "EPSG:4326</td></tr>");
+		assertThat(html).contains("<li><strong>Tests evaluated once per related row:</strong>");
+		assertThat(html).contains("<li>Scientific name found — 4 evaluations over 3 record(s), one per identification row"
+				+ "</li>");
 		assertThat(html).contains("<li>Unresolved test <span class=\"muted\">— No implementation discovered</span></li>");
 		assertThat(html).doesNotContain("urn:test:").doesNotContain("<h2>Record <code>");
 		assertThat(html).contains("<li><strong>Validation non-compliance after amendment:</strong> 1 finding(s) across "
@@ -205,7 +209,7 @@ class StructuredHtmlReportExporterTest {
 
 		assertThat(html).contains("<strong>Flattened view.</strong>");
 		assertThat(html).contains(">first row</text>");
-		assertThat(html).contains("related rows collapsed per record");
+		assertThat(html).contains("flattened in: occurrence");
 		assertThat(html).contains("collapsed by FIRST_ROW");
 	}
 

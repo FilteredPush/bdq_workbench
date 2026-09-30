@@ -102,7 +102,7 @@ public class StructuredMarkdownReportExporter implements ReportExporter {
 					.append(".\n\n");
 		}
 		appendRunMetadata(builder, summary, digest);
-		appendInputView(builder, summary, InputViewOverview.from(summary));
+		appendInputView(builder, summary, InputViewOverview.from(summary), digest);
 		appendHighImpactActionItems(builder, digest);
 		appendMeasureDifferences(builder, summary);
 		appendQualitySection(builder, digest);
@@ -177,11 +177,15 @@ public class StructuredMarkdownReportExporter implements ReportExporter {
 	 * @param builder the report being built; appended to in place
 	 * @param summary the execution summary carrying record-selection metadata
 	 * @param overview the input-view overview to render
+	 * @param digest the run's condensed findings, for the tests evaluated per related row
 	 */
-	private static void appendInputView(StringBuilder builder, ExecutionSummary summary, InputViewOverview overview) {
+	private static void appendInputView(StringBuilder builder, ExecutionSummary summary, InputViewOverview overview,
+			ReportDigest digest) {
 		builder.append("## Input data view\n\n");
 		if (!overview.isKnown()) {
-			builder.append("- View: not recorded by ingest\n\n");
+			builder.append("- View: not recorded by ingest\n");
+			appendExpandedTests(builder, digest, "");
+			builder.append('\n');
 			return;
 		}
 		DatasetInputDescription description = overview.description();
@@ -196,7 +200,7 @@ public class StructuredMarkdownReportExporter implements ReportExporter {
 		builder.append("- Grain table: `")
 				.append(escape(description.grainTable()))
 				.append("` → ")
-				.append(description.viewRecordCount())
+				.append(overview.inputRecordCount())
 				.append(" execution record(s), ")
 				.append(summary.metadata().filteredSingleRecordCount())
 				.append(" selected after record filtering\n")
@@ -211,9 +215,12 @@ public class StructuredMarkdownReportExporter implements ReportExporter {
 				.append(" not included)\n");
 		List<String> notes = overview.multiplicityNotes();
 		if (!notes.isEmpty()) {
-			builder.append("- Related-row multiplicity:\n");
+			builder.append("- Related-row multiplicity")
+					.append(overview.filtered() ? " in the " + description.viewRecordCount() + " selected record(s)" : "")
+					.append(":\n");
 			notes.forEach(note -> builder.append("  - ").append(escape(note)).append('\n'));
 		}
+		appendExpandedTests(builder, digest, description.grainTable());
 		builder.append('\n')
 				.append("| Table | Row type | Records | Columns | Role in view | Relationship to grain | Tests reading it | Bound terms supplied |\n")
 				.append("|---|---|---:|---:|---|---|---:|---|\n");
@@ -245,6 +252,39 @@ public class StructuredMarkdownReportExporter implements ReportExporter {
 	 */
 	private static String escapeCell(String raw) {
 		return escape(raw).replace("|", "\\|");
+	}
+
+	/**
+	 * Lists the tests evaluated once per related row, with their evaluation counts.
+	 *
+	 * @param builder the report being built; appended to in place
+	 * @param digest the run's condensed findings
+	 * @param grainTable the grain table, left out of the listed row sources
+	 */
+	private static void appendExpandedTests(StringBuilder builder, ReportDigest digest, String grainTable) {
+		List<ReportDigest.ExpandedTest> expanded = digest.expandedTests();
+		if (expanded.isEmpty()) {
+			return;
+		}
+		builder.append("- Tests evaluated once per related row:\n");
+		for (ReportDigest.ExpandedTest test : expanded) {
+			List<String> sources = test.relations().stream()
+					.filter(relation -> !relation.equalsIgnoreCase(grainTable))
+					.toList();
+			builder.append("  - ")
+					.append(escape(test.testLabel()))
+					.append(" — ")
+					.append(test.evaluations())
+					.append(" evaluations over ")
+					.append(test.records())
+					.append(" record(s)")
+					.append(sources.isEmpty() ? "" : ", one per " + escape(String.join(", ", sources)) + " row")
+					.append(test.relations().stream().anyMatch(relation -> relation.equalsIgnoreCase(grainTable))
+							? " plus the record's own value"
+							: "")
+					.append("\n");
+		}
+		builder.append("");
 	}
 
 	/**

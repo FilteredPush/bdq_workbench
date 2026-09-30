@@ -19,7 +19,10 @@
  */
 package org.filteredpush.bdq_workbench.model;
 
+import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Describes how the records a run executed against were constructed from the input dataset.
@@ -198,6 +201,8 @@ public record DatasetInputDescription(
 	 * @param maxRowsPerCoreRecord the largest number of related rows seen for one grain record
 	 * @param relatedRowCount the total number of related rows linked to grain records
 	 * @param mappedTerms for a view-built relation, the terms mapped from this table; empty otherwise
+	 * @param rowsByRecord related rows per grain record (records with none omitted), so the
+	 *     relation can be re-measured over the records a filter kept
 	 */
 	public record ViewRelation(
 			String relationName,
@@ -207,15 +212,68 @@ public record DatasetInputDescription(
 			int coreRecordsWithMultipleRows,
 			int maxRowsPerCoreRecord,
 			int relatedRowCount,
-			List<String> mappedTerms) {
+			List<String> mappedTerms,
+			Map<String, Integer> rowsByRecord) {
 
 		/**
-		 * Canonical constructor; copies mapped terms defensively and substitutes defaults.
+		 * Creates a relation measurement without per-record row counts.
+		 *
+		 * @param relationName the relation key
+		 * @param sourceTable the related table
+		 * @param cardinalityPolicy the view's policy for the relation, or {@code null}
+		 * @param coreRecordsWithRows grain records with at least one related row
+		 * @param coreRecordsWithMultipleRows grain records with more than one related row
+		 * @param maxRowsPerCoreRecord the most related rows for one grain record
+		 * @param relatedRowCount related rows linked to grain records
+		 * @param mappedTerms the terms mapped from the relation
+		 */
+		public ViewRelation(String relationName, String sourceTable, DatasetViewCardinalityPolicy cardinalityPolicy,
+				int coreRecordsWithRows, int coreRecordsWithMultipleRows, int maxRowsPerCoreRecord, int relatedRowCount,
+				List<String> mappedTerms) {
+			this(relationName, sourceTable, cardinalityPolicy, coreRecordsWithRows, coreRecordsWithMultipleRows,
+					maxRowsPerCoreRecord, relatedRowCount, mappedTerms, Map.of());
+		}
+
+		/**
+		 * Canonical constructor; copies collections defensively and substitutes defaults.
 		 */
 		public ViewRelation {
 			relationName = relationName == null ? "" : relationName;
 			sourceTable = sourceTable == null ? "" : sourceTable;
 			mappedTerms = List.copyOf(mappedTerms == null ? List.of() : mappedTerms);
+			rowsByRecord = Map.copyOf(rowsByRecord == null ? Map.of() : rowsByRecord);
+		}
+
+		/**
+		 * Re-measures the relation over a subset of grain records (those a record filter kept).
+		 *
+		 * @param recordIds the grain records to measure over
+		 * @return the relation measured over those records, or this relation when it carries no
+		 *     per-record counts
+		 */
+		public ViewRelation restrictedTo(Collection<String> recordIds) {
+			if (rowsByRecord.isEmpty() && relatedRowCount > 0) {
+				return this;
+			}
+			int withRows = 0;
+			int withMultiple = 0;
+			int max = 0;
+			int total = 0;
+			Map<String, Integer> kept = new LinkedHashMap<>();
+			for (String recordId : recordIds) {
+				int rows = rowsByRecord.getOrDefault(recordId, 0);
+				if (rows > 0) {
+					withRows++;
+					kept.put(recordId, rows);
+				}
+				if (rows > 1) {
+					withMultiple++;
+				}
+				max = Math.max(max, rows);
+				total += rows;
+			}
+			return new ViewRelation(relationName, sourceTable, cardinalityPolicy, withRows, withMultiple, max, total,
+					mappedTerms, kept);
 		}
 	}
 }
