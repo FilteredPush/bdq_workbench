@@ -104,6 +104,11 @@ class SummaryReportExporterTest {
         assertThat(report).contains("Record filters:\n");
         assertThat(report).contains(" - dwc:country = Canada\n");
         assertThat(report).contains(" - dwc:genus = Abies | Pinus\n");
+        /* Selection reads in order (filters, then what they excluded and selected), outcome last. */
+        assertThat(report).containsSubsequence("Use case: ", "Input file: ", "External prerequisites not met: ",
+                "SingleRecords in input file: ", "Record filters:\n", "SingleRecords excluded by record filters: ",
+                "SingleRecords selected for execution: ", "Records with quality for this use case: ",
+                "Counts represent");
         assertThat(report).contains("Counts represent normalized BDQ response rows emitted during execution:\n");
         assertThat(report).contains("By phase:\n - PRE_AMENDMENT: 3\n - POST_AMENDMENT: 2\n");
         assertThat(report).contains("By response status:\n - RUN_HAS_RESULT: 5\n");

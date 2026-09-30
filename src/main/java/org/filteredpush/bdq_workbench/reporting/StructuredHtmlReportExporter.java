@@ -192,7 +192,9 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 	}
 
 	/**
-	 * Appends run metadata to the report preamble.
+	 * Appends run metadata to the report preamble, in the order a reader follows the run: what was
+	 * run on what input, when, which terms and records were selected (filters, then the resulting
+	 * record count), and last the outcome, the records with quality for the use case.
 	 *
 	 * @param builder the report being built; appended to in place
 	 * @param summary the execution summary carrying run metadata
@@ -214,9 +216,6 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 				.append("    <li><strong>Synthetic or modified example data:</strong> ")
 				.append(escapeHtml(summary.dataset().inputDescription().syntheticMarkers().summaryLine()))
 				.append("</li>\n")
-				.append("    <li><strong>Records with quality for this use case:</strong> ")
-				.append(escapeHtml(digest.qualityLine()))
-				.append("</li>\n")
 				.append("    <li><strong>External prerequisites not met:</strong> ")
 				.append(escapeHtml(digest.externalPrerequisiteLine()))
 				.append("</li>\n")
@@ -225,11 +224,6 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 				.append("</li>\n")
 				.append("    <li><strong>Run finished:</strong> ")
 				.append(escapeHtml(formatInstant(digest.runFinishedAt())))
-				.append("</li>\n")
-				.append("    <li><strong>Records selected for execution:</strong> ")
-				.append(summary.metadata().filteredSingleRecordCount())
-				.append(" of ")
-				.append(summary.metadata().inputSingleRecordCount())
 				.append("</li>\n")
 				.append("    <li><strong>Darwin Core terms selected for execution:</strong> ")
 				.append(summary.metadata().filteredDarwinCoreTermCount())
@@ -248,7 +242,15 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 					.append("</li>\n"));
 			builder.append("    </ul></li>\n");
 		}
-		builder.append("  </ul>\n")
+		builder.append("    <li><strong>Records selected for execution:</strong> ")
+				.append(summary.metadata().filteredSingleRecordCount())
+				.append(" of ")
+				.append(summary.metadata().inputSingleRecordCount())
+				.append("</li>\n")
+				.append("    <li><strong>Records with quality for this use case:</strong> ")
+				.append(escapeHtml(digest.qualityLine()))
+				.append("</li>\n")
+				.append("  </ul>\n")
 				.append("</section>\n");
 	}
 

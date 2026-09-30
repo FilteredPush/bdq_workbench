@@ -86,6 +86,11 @@ class StructuredHtmlReportExporterTest {
 				+ "</strong> 2 result(s), in Country code not empty (2)");
 		assertThat(html).contains("<li><strong>Records with quality for this use case:</strong> 1 of 3 record(s) meet "
 				+ "all 2 multi-record QA measure(s) (post-amendment)</li>");
+		/* Run metadata reads in run order: selection (filters, then records selected), outcome last. */
+		assertThat(html).containsSubsequence("<strong>Use case:</strong>", "<strong>Input file:</strong>",
+				"<strong>External prerequisites not met:</strong>", "<strong>Run finished:</strong>",
+				"<strong>Record filters:</strong>", "<strong>Records selected for execution:</strong>",
+				"<strong>Records with quality for this use case:</strong>", "</ul>\n</section>");
 		assertThat(html).contains("<p>Survey:77 (occurrence.txt line 3)</p>");
 		assertThat(html).contains("<tr><td>Geodetic datum standard</td><td class=\"num\">2 → 0 of 3</td>");
 		assertThat(html).contains("<tr><td><code>minimumDepthInMeters</code></td><td>no such column</td>"

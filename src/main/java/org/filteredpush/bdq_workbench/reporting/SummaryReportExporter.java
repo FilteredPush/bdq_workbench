@@ -99,10 +99,8 @@ public class SummaryReportExporter implements ReportExporter {
             builder.append("NOTE: external prerequisites not met: ").append(digest.externalPrerequisiteLine())
                     .append(".\n\n");
         }
-        appendExecutionContext(builder, executionSummary.metadata());
-        builder.append("Synthetic or modified example data: ").append(markers.summaryLine()).append('\n');
+        appendExecutionContext(builder, executionSummary.metadata(), markers, digest);
         builder.append("Records with quality for this use case: ").append(digest.qualityLine()).append('\n');
-        builder.append("External prerequisites not met: ").append(digest.externalPrerequisiteLine()).append('\n');
         appendCountExplanation(builder);
         appendPhaseCounts(builder, summary.phaseCounts());
         appendCountSection(builder, "By response status", summary.responseStatusCounts());
@@ -121,35 +119,37 @@ public class SummaryReportExporter implements ReportExporter {
     }
 
     /**
-     * Appends the run's execution context — use case identity, input file path, and the
-     * dataset's Darwin Core term and record counts — to the report.
+     * Appends the run's execution context to the report, in the order a reader follows the run:
+     * use case and input file, synthetic-data markers and external prerequisites, the Darwin Core
+     * terms present and selected, then the input record count, the record filters, and the
+     * records they excluded and selected. The caller appends the records with quality last.
      *
      * @param builder the report being built; appended to in place
      * @param metadata the execution summary metadata to describe
+     * @param markers the synthetic or modified data markers found in the input
+     * @param digest the run's condensed findings, for the external prerequisites line
      */
     private static void appendExecutionContext(
             StringBuilder builder,
-            org.filteredpush.bdq_workbench.model.ExecutionSummaryMetadata metadata) {
+            org.filteredpush.bdq_workbench.model.ExecutionSummaryMetadata metadata,
+            org.filteredpush.bdq_workbench.model.SyntheticDataMarkers markers,
+            ReportDigest digest) {
         builder.append("Use case: ")
                 .append(describeUseCase(metadata))
                 .append('\n');
         builder.append("Input file: ")
                 .append(metadata.inputFile().isBlank() ? "<unknown>" : metadata.inputFile())
                 .append('\n');
+        builder.append("Synthetic or modified example data: ").append(markers.summaryLine()).append('\n');
+        builder.append("External prerequisites not met: ").append(digest.externalPrerequisiteLine()).append('\n');
         builder.append("Darwin Core terms present in input file: ")
                 .append(metadata.inputDarwinCoreTermCount())
-                .append('\n');
-        builder.append("SingleRecords in input file: ")
-                .append(metadata.inputSingleRecordCount())
                 .append('\n');
         builder.append("Darwin Core terms selected for execution: ")
                 .append(metadata.filteredDarwinCoreTermCount())
                 .append('\n');
-        builder.append("SingleRecords selected for execution: ")
-                .append(metadata.filteredSingleRecordCount())
-                .append('\n');
-        builder.append("SingleRecords excluded by record filters: ")
-                .append(metadata.excludedSingleRecordCount())
+        builder.append("SingleRecords in input file: ")
+                .append(metadata.inputSingleRecordCount())
                 .append('\n');
         builder.append("Record filters:\n");
         if (metadata.recordFilters().isEmpty()) {
@@ -161,6 +161,12 @@ public class SummaryReportExporter implements ReportExporter {
                 	.append(String.join(" | ", values))
                 	.append('\n'));
         }
+        builder.append("SingleRecords excluded by record filters: ")
+                .append(metadata.excludedSingleRecordCount())
+                .append('\n');
+        builder.append("SingleRecords selected for execution: ")
+                .append(metadata.filteredSingleRecordCount())
+                .append('\n');
     }
 
     /**

@@ -115,7 +115,9 @@ public class StructuredMarkdownReportExporter implements ReportExporter {
 	}
 
 	/**
-	 * Appends run metadata to the report preamble.
+	 * Appends run metadata to the report preamble, in the order a reader follows the run: what was
+	 * run on what input, when, which terms and records were selected (filters, then the resulting
+	 * record count), and last the outcome, the records with quality for the use case.
 	 *
 	 * @param builder the report being built; appended to in place
 	 * @param summary the execution summary carrying run metadata
@@ -135,9 +137,6 @@ public class StructuredMarkdownReportExporter implements ReportExporter {
 				.append("- Synthetic or modified example data: ")
 				.append(escape(summary.dataset().inputDescription().syntheticMarkers().summaryLine()))
 				.append('\n')
-				.append("- Records with quality for this use case: ")
-				.append(escape(digest.qualityLine()))
-				.append('\n')
 				.append("- External prerequisites not met: ")
 				.append(escape(digest.externalPrerequisiteLine()))
 				.append('\n')
@@ -147,11 +146,6 @@ public class StructuredMarkdownReportExporter implements ReportExporter {
 				.append("- Run finished: ")
 				.append(escape(formatInstant(digest.runFinishedAt())))
 				.append('\n')
-				.append("- Records selected for execution: ")
-				.append(summary.metadata().filteredSingleRecordCount())
-				.append(" of ")
-				.append(summary.metadata().inputSingleRecordCount())
-				.append('\n')
 				.append("- Darwin Core terms selected for execution: ")
 				.append(summary.metadata().filteredDarwinCoreTermCount())
 				.append(" of ")
@@ -159,16 +153,23 @@ public class StructuredMarkdownReportExporter implements ReportExporter {
 				.append('\n');
 		builder.append("- Record filters: ");
 		if (summary.metadata().recordFilters().isEmpty()) {
-			builder.append("none\n\n");
-			return;
+			builder.append("none\n");
+		} else {
+			builder.append('\n');
+			summary.metadata().recordFilters().forEach((field, values) -> builder.append("  - ")
+					.append(escape(field))
+					.append(" = ")
+					.append(escape(String.join(" | ", values)))
+					.append('\n'));
 		}
-		builder.append('\n');
-		summary.metadata().recordFilters().forEach((field, values) -> builder.append("  - ")
-				.append(escape(field))
-				.append(" = ")
-				.append(escape(String.join(" | ", values)))
-				.append('\n'));
-		builder.append('\n');
+		builder.append("- Records selected for execution: ")
+				.append(summary.metadata().filteredSingleRecordCount())
+				.append(" of ")
+				.append(summary.metadata().inputSingleRecordCount())
+				.append('\n')
+				.append("- Records with quality for this use case: ")
+				.append(escape(digest.qualityLine()))
+				.append("\n\n");
 	}
 
 	/**

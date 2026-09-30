@@ -55,6 +55,10 @@ class StructuredMarkdownReportExporterTest {
 		assertThat(markdown).contains("> **External prerequisites not met:** 2 result(s), in Country code not empty (2)");
 		assertThat(markdown).contains("- Records with quality for this use case: 1 of 3 record(s) meet all 2 "
 				+ "multi-record QA measure(s) (post-amendment)\n");
+		/* Run metadata reads in run order: selection (filters, then records selected), outcome last. */
+		assertThat(markdown).containsSubsequence("- Use case: ", "- Input file: ", "- External prerequisites not met: ",
+				"- Run finished: ", "- Record filters: ", "- Records selected for execution: ",
+				"- Records with quality for this use case: ", "\n\n## ");
 		assertThat(markdown).contains("| Geodetic datum standard | 2 → 0 of 3 | 0 / 0 |");
 		assertThat(markdown).contains("| `locality` | column present, always empty | Locality and depth |");
 		assertThat(markdown).contains("| 2 | `geodeticDatum`: WGS 84 → **EPSG:4326** | Geodetic datum standardized |");

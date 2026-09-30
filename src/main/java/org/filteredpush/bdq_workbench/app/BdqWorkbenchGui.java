@@ -3744,7 +3744,8 @@ final class BdqWorkbenchGui {
     }
 
     /**
-     * Appends record-filter details to the preflight summary.
+     * Appends record-filter details to the preflight summary: the records loaded, the active
+     * filters, then the records they excluded and selected.
      *
      * @param builder the summary under construction
      * @param filterSummary the filter outcome to describe
@@ -3758,8 +3759,6 @@ final class BdqWorkbenchGui {
         }
         builder.append("Input records loaded: ").append(filterSummary.originalRecordCount()).append('\n');
         builder.append("Synthetic or modified example data: ").append(markers.summaryLine()).append('\n');
-        builder.append("Records selected for execution: ").append(filterSummary.filteredRecordCount()).append('\n');
-        builder.append("Records excluded by filters: ").append(filterSummary.excludedRecordCount()).append('\n');
         builder.append("Active record filters:\n");
         if (filterSummary.resolvedCriteria().isEmpty()) {
             builder.append(" - none\n");
@@ -3768,6 +3767,8 @@ final class BdqWorkbenchGui {
                     builder.append(" - ").append(field).append(" = ").append(String.join(" | ", values)).append('\n'));
         }
         filterSummary.diagnostics().forEach(diagnostic -> builder.append(" - ").append(diagnostic).append('\n'));
+        builder.append("Records excluded by filters: ").append(filterSummary.excludedRecordCount()).append('\n');
+        builder.append("Records selected for execution: ").append(filterSummary.filteredRecordCount()).append('\n');
         builder.append('\n');
     }
 
