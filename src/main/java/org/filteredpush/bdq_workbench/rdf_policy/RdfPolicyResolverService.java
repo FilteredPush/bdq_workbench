@@ -33,6 +33,7 @@ import java.util.Map;
 import java.util.Set;
 import org.apache.jena.rdf.model.Model;
 import org.apache.jena.rdf.model.ModelFactory;
+import org.apache.jena.rdf.model.Property;
 import org.apache.jena.rdf.model.RDFNode;
 import org.apache.jena.rdf.model.Resource;
 import org.filteredpush.bdq_workbench.app.AppException;
@@ -83,6 +84,11 @@ public class RdfPolicyResolverService implements PolicyResolverService {
     private static final String RDFS_RANGE_URI = "http://www.w3.org/2000/01/rdf-schema#range";
     private static final String TEST_METADATA_EXPECTED_RESPONSE = "expectedResponse";
     private static final String TEST_METADATA_NOTE = "note";
+    private static final String DCTERMS_IS_VERSION_OF_URI = "http://purl.org/dc/terms/isVersionOf";
+    private static final Set<String> EXPECTED_RESPONSE_LOCAL_NAMES = Set.of("hasExpectedResponse", "expectedResponse");
+    private static final Set<String> METHOD_LINK_LOCAL_NAMES =
+            Set.of("forValidation", "forIssue", "forMeasure", "forAmendment");
+    private static final String HAS_SPECIFICATION_LOCAL_NAME = "hasSpecification";
     private final Path useCaseXmlPath;
     private final List<Path> rdfFiles;
 
@@ -362,17 +368,101 @@ public class RdfPolicyResolverService implements PolicyResolverService {
         return stmt == null ? null : stmt.getString();
     }
 
+    /**
+     * Reads the metadata the binding layer needs from a test's definition: its expected-response
+     * text and its note.
+     *
+     * @param model the loaded RDF definitions
+     * @param uri the test's IRI
+     * @return the metadata found, keyed by {@link #TEST_METADATA_EXPECTED_RESPONSE} and
+     *     {@link #TEST_METADATA_NOTE}
+     */
     private static Map<String, String> resolveTestMetadata(Model model, String uri) {
         Resource resource = model.getResource(uri);
         if (resource == null) {
             return Map.of();
         }
         Map<String, String> metadata = new LinkedHashMap<>();
-        putIfPresent(metadata, TEST_METADATA_EXPECTED_RESPONSE,
-                resolveLiteralProperty(resource, Set.of("hasExpectedResponse", "expectedResponse")));
+        putIfPresent(metadata, TEST_METADATA_EXPECTED_RESPONSE, resolveExpectedResponse(model, resource));
         putIfPresent(metadata, TEST_METADATA_NOTE,
                 resolveLiteralProperty(resource, Set.of("note")));
         return Map.copyOf(metadata);
+    }
+
+    /**
+     * Resolves a test's expected-response text. A locally authored definition may state it on the
+     * test itself; the ratified {@code bdqtest.ttl} states it on the test's
+     * {@code bdqffdq:Specification}, reached from the {@code bdqffdq:*Method} whose
+     * {@code forValidation}/{@code forIssue}/{@code forMeasure}/{@code forAmendment} names the test
+     * (or a {@code dcterms:isVersionOf} variant of it) through {@code bdqffdq:hasSpecification}.
+     *
+     * @param model the loaded RDF definitions
+     * @param test the test resource
+     * @return the expected-response text, or {@code null} if neither place states one
+     */
+    private static String resolveExpectedResponse(Model model, Resource test) {
+        String direct = resolveLiteralProperty(test, EXPECTED_RESPONSE_LOCAL_NAMES);
+        if (direct != null) {
+            return direct;
+        }
+        for (Resource candidate : withVersionVariants(model, test)) {
+            var links = model.listStatements(null, null, candidate);
+            while (links.hasNext()) {
+                var link = links.nextStatement();
+                if (!METHOD_LINK_LOCAL_NAMES.contains(link.getPredicate().getLocalName())) {
+                    continue;
+                }
+                String fromSpecification = expectedResponseOfMethod(link.getSubject());
+                if (fromSpecification != null) {
+                    return fromSpecification;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Reads the expected-response text from a method's specification(s).
+     *
+     * @param method a {@code bdqffdq:*Method} resource
+     * @return the first expected-response text found, or {@code null}
+     */
+    private static String expectedResponseOfMethod(Resource method) {
+        var specifications = method.listProperties();
+        while (specifications.hasNext()) {
+            var statement = specifications.nextStatement();
+            if (!HAS_SPECIFICATION_LOCAL_NAME.equals(statement.getPredicate().getLocalName())
+                    || !statement.getObject().isResource()) {
+                continue;
+            }
+            String expected = resolveLiteralProperty(statement.getObject().asResource(), EXPECTED_RESPONSE_LOCAL_NAMES);
+            if (expected != null) {
+                return expected;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Collects a resource with its {@code dcterms:isVersionOf} variants in both directions, since
+     * a use case may name a test by its dated version IRI or its unversioned IRI.
+     *
+     * @param model the loaded RDF definitions
+     * @param resource the resource to expand
+     * @return {@code resource} followed by its version-related variants
+     */
+    private static List<Resource> withVersionVariants(Model model, Resource resource) {
+        Property isVersionOf = model.createProperty(DCTERMS_IS_VERSION_OF_URI);
+        List<Resource> variants = new ArrayList<>();
+        variants.add(resource);
+        resource.listProperties(isVersionOf).forEachRemaining(statement -> {
+            if (statement.getObject().isResource()) {
+                variants.add(statement.getObject().asResource());
+            }
+        });
+        model.listStatements(null, isVersionOf, resource)
+                .forEachRemaining(statement -> variants.add(statement.getSubject()));
+        return variants;
     }
 
     private static void putIfPresent(Map<String, String> metadata, String key, String value) {

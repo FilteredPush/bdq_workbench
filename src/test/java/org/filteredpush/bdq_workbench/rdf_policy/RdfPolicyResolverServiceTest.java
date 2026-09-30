@@ -324,4 +324,53 @@ class RdfPolicyResolverServiceTest {
                     "For Quality Assurance, filter record set until this measure is COMPLETE.");
         });
     }
+
+    @Test
+    void readsExpectedResponseFromTheSpecificationLinkedThroughTheTestsMethod() throws Exception {
+        Path useCaseFile = tempDir.resolve("bdquc.xml");
+        Files.writeString(useCaseFile, """
+                <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+                         xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+                         xmlns:dcterms="http://purl.org/dc/terms/">
+                  <rdf:Description rdf:about="https://rs.tdwg.org/bdquc/terms/version/Spatial-Temporal_Patterns-2026-04-22">
+                    <rdf:type rdf:resource="https://rs.tdwg.org/bdqffdq/terms/UseCase"/>
+                    <rdfs:label>Spatial-Temporal Patterns</rdfs:label>
+                    <dcterms:isVersionOf rdf:resource="https://rs.tdwg.org/bdquc/terms/Spatial-Temporal_Patterns"/>
+                  </rdf:Description>
+                </rdf:RDF>
+                """, StandardCharsets.UTF_8);
+
+        // The ratified bdqtest.ttl layout: the expected response is on the Specification, which the
+        // test's MeasurementMethod links to; here the method names the unversioned test IRI while
+        // the policy names the dated version, so the lookup must follow dcterms:isVersionOf.
+        Path definitions = tempDir.resolve("bdqtest.ttl");
+        Files.writeString(definitions, """
+                @prefix bdqffdq: <https://rs.tdwg.org/bdqffdq/terms/> .
+                @prefix dcterms: <http://purl.org/dc/terms/> .
+                @prefix ex: <https://example.org/> .
+                @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+                ex:policy1 a bdqffdq:ValidationPolicy ;
+                    bdqffdq:hasUseCase <https://rs.tdwg.org/bdquc/terms/Spatial-Temporal_Patterns> ;
+                    bdqffdq:hasTest ex:testMeasure-2025-03-07 .
+
+                ex:testMeasure-2025-03-07 a bdqffdq:Measure ;
+                    rdfs:label "MULTIRECORD_MEASURE_QA_BASISOFRECORD_NOTEMPTY" ;
+                    dcterms:isVersionOf ex:testMeasure .
+
+                ex:method a bdqffdq:MeasurementMethod ;
+                    bdqffdq:forMeasure ex:testMeasure ;
+                    bdqffdq:hasSpecification ex:specification .
+
+                ex:specification a bdqffdq:Specification ;
+                    bdqffdq:hasExpectedResponse "COMPLETE if every VALIDATION_BASISOFRECORD_NOTEMPTY in the MultiRecord has Response.result=COMPLIANT; otherwise NOT_COMPLETE." .
+                """, StandardCharsets.UTF_8);
+
+        RdfPolicyResolverService service = new RdfPolicyResolverService(useCaseFile, List.of(definitions));
+        var plan = service.resolve("https://rs.tdwg.org/bdquc/terms/version/Spatial-Temporal_Patterns-2026-04-22");
+
+        assertThat(plan.tests()).singleElement().satisfies(test -> assertThat(test.metadata())
+                .containsEntry("expectedResponse",
+                        "COMPLETE if every VALIDATION_BASISOFRECORD_NOTEMPTY in the MultiRecord has Response.result=COMPLIANT; otherwise NOT_COMPLETE."));
+    }
 }
