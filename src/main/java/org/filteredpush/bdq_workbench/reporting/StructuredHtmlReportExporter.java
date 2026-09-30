@@ -23,9 +23,11 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
+import org.filteredpush.bdq_workbench.model.BuiltInMeasureSpec;
 import org.filteredpush.bdq_workbench.model.DatasetInputDescription;
 import org.filteredpush.bdq_workbench.model.ExecutionSummary;
 import org.filteredpush.bdq_workbench.model.TestType;
@@ -636,25 +638,46 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 	}
 
 	/**
-	 * Appends the section comparing pre-amendment and post-amendment multi-record measures.
-	 *
-	 * <p>The comparison is drawn as a dumbbell chart: one row per measure on a shared 0–100% axis,
-	 * with the pre-amendment value as a hollow ring and the post-amendment value as a filled dot
-	 * joined by a bar, so an improvement reads as a dot to the right of its ring and the bar's
-	 * length is the size of the change. Measures that changed come first, largest improvement at
-	 * the top; unchanged measures follow, muted. The same numbers are in a table view below.
+	 * Appends the section comparing pre-amendment and post-amendment multi-record measures, with
+	 * COUNT and QA measures presented separately since their values mean different things.
 	 *
 	 * @param builder the report being built; appended to in place
 	 * @param summary the execution summary supplying measure responses
 	 */
 	private static void appendMeasureDifferenceVisualization(StringBuilder builder, ExecutionSummary summary) {
 		List<StructuredMeasureComparisons.MeasureComparison> comparisons = StructuredMeasureComparisons.summarize(summary);
+		builder.append("<section>\n")
+				.append("  <h2>Measure differences between pre-amendment and post-amendment phases</h2>\n");
 		if (comparisons.isEmpty()) {
-			builder.append("<section>\n")
-					.append("  <h2>Measure differences between pre-amendment and post-amendment phases</h2>\n")
-					.append("  <p class=\"muted\">No multi-record measures were produced in this run, so there is "
+			builder.append("  <p class=\"muted\">No multi-record measures were produced in this run, so there is "
 							+ "nothing to compare.</p>\n")
 					.append("</section>\n");
+			return;
+		}
+		appendCountMeasureChart(builder,
+				StructuredMeasureComparisons.ofKind(comparisons, BuiltInMeasureSpec.MeasureKind.COUNT));
+		appendQaMeasureTable(builder,
+				StructuredMeasureComparisons.ofKind(comparisons, BuiltInMeasureSpec.MeasureKind.QA));
+		builder.append("</section>\n");
+	}
+
+	/**
+	 * Appends the COUNT measures' comparison, drawn as a dumbbell chart: one row per measure on a
+	 * shared 0–100% axis, with the pre-amendment value as a hollow ring and the post-amendment value
+	 * as a filled dot joined by a bar, so an improvement reads as a dot to the right of its ring and
+	 * the bar's length is the size of the change. Measures that changed come first, largest
+	 * improvement at the top; unchanged measures follow, muted. The same numbers are in a table view
+	 * below.
+	 *
+	 * @param builder the report being built; appended to in place
+	 * @param comparisons the COUNT measure comparisons
+	 */
+	private static void appendCountMeasureChart(
+			StringBuilder builder,
+			List<StructuredMeasureComparisons.MeasureComparison> comparisons) {
+		builder.append("  <h3>COUNT measures</h3>\n");
+		if (comparisons.isEmpty()) {
+			builder.append("  <p class=\"muted\">No multi-record COUNT measures were produced in this run.</p>\n");
 			return;
 		}
 		List<StructuredMeasureComparisons.MeasureComparison> changed = comparisons.stream()
@@ -670,13 +693,11 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 				.toList();
 		long improved = changed.stream().filter(comparison -> deltaOf(comparison) > 0).count();
 		long declined = changed.stream().filter(comparison -> deltaOf(comparison) < 0).count();
-		builder.append("<section>\n")
-				.append("  <h2>Measure differences between pre-amendment and post-amendment phases</h2>\n")
-				.append("  <p class=\"mc-summary\">")
+		builder.append("  <p class=\"mc-summary\">")
 				.append(changed.size())
 				.append(" of ")
 				.append(comparisons.size())
-				.append(" measure(s) changed after amendment: ")
+				.append(" COUNT measure(s) changed after amendment: ")
 				.append(improved)
 				.append(" improved, ")
 				.append(declined)
@@ -694,8 +715,112 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 				.append("    <summary>Table view</summary>\n");
 		appendMeasureComparisonTable(builder, "Measures with differences", changed);
 		appendMeasureComparisonTable(builder, "Measures with no differences", unchanged);
-		builder.append("  </details>\n")
-				.append("</section>\n");
+		builder.append("  </details>\n");
+	}
+
+	/**
+	 * Appends the QA measures' comparison as a table of their results, COMPLETE or NOT_COMPLETE for
+	 * the dataset as a whole, with each phase's pass rate as a muted note beneath its result. QA
+	 * measures are not plotted: their value is a result, not a percentage. Measures whose result
+	 * changed come first.
+	 *
+	 * @param builder the report being built; appended to in place
+	 * @param comparisons the QA measure comparisons
+	 */
+	private static void appendQaMeasureTable(
+			StringBuilder builder,
+			List<StructuredMeasureComparisons.MeasureComparison> comparisons) {
+		builder.append("  <h3>QA measures</h3>\n");
+		if (comparisons.isEmpty()) {
+			builder.append("  <p class=\"muted\">No multi-record QA measures were produced in this run.</p>\n");
+			return;
+		}
+		List<StructuredMeasureComparisons.MeasureComparison> ordered = new ArrayList<>(comparisons);
+		ordered.sort(java.util.Comparator.comparing(
+				(StructuredMeasureComparisons.MeasureComparison comparison) -> !comparison.changed()));
+		long changed = comparisons.stream().filter(StructuredMeasureComparisons.MeasureComparison::changed).count();
+		long nowComplete = comparisons.stream()
+				.filter(comparison -> qaTransition(comparison) > 0)
+				.count();
+		long nowNotComplete = comparisons.stream()
+				.filter(comparison -> qaTransition(comparison) < 0)
+				.count();
+		builder.append("  <p class=\"mc-summary\">")
+				.append(changed)
+				.append(" of ")
+				.append(comparisons.size())
+				.append(" QA measure(s) changed result after amendment: ")
+				.append(nowComplete)
+				.append(" became COMPLETE, ")
+				.append(nowNotComplete)
+				.append(" became NOT_COMPLETE. A QA measure is COMPLETE only when every record meets its "
+						+ "criteria.</p>\n")
+				.append("  <table>\n")
+				.append("    <thead><tr><th>Measure</th><th>Pre-amendment</th><th>Post-amendment</th><th>Change</th></tr></thead>\n")
+				.append("    <tbody>\n");
+		for (StructuredMeasureComparisons.MeasureComparison comparison : ordered) {
+			builder.append("      <tr><td>")
+					.append(escapeHtml(comparison.label()))
+					.append("</td><td>")
+					.append(qaResultCell(comparison.preText(), comparison.prePassRate()))
+					.append("</td><td>")
+					.append(qaResultCell(comparison.postText(), comparison.postPassRate()))
+					.append("</td><td><span class=\"mc-delta ")
+					.append(qaTransition(comparison) > 0 ? "up" : qaTransition(comparison) < 0 ? "down" : "same")
+					.append("\">")
+					.append(escapeHtml(qaChangeLabel(comparison)))
+					.append("</span></td></tr>\n");
+		}
+		builder.append("    </tbody>\n")
+				.append("  </table>\n");
+	}
+
+	/**
+	 * Renders one QA phase cell: the result, with its pass rate as a muted note when known.
+	 *
+	 * @param result the phase's result text
+	 * @param passRate the phase's pass-rate note, or {@code null}
+	 * @return the cell's HTML
+	 */
+	private static String qaResultCell(String result, String passRate) {
+		String cell = "<strong>" + escapeHtml(result) + "</strong>";
+		return passRate == null ? cell : cell + "<br><span class=\"muted\">" + escapeHtml(passRate) + "</span>";
+	}
+
+	/**
+	 * Classifies a QA measure's change of result.
+	 *
+	 * @param comparison a QA measure comparison
+	 * @return {@code 1} if it became COMPLETE, {@code -1} if it went from COMPLETE to NOT_COMPLETE,
+	 *     otherwise {@code 0}
+	 */
+	private static int qaTransition(StructuredMeasureComparisons.MeasureComparison comparison) {
+		if (!comparison.changed()) {
+			return 0;
+		}
+		if (StructuredMeasureComparisons.COMPLETE.equals(comparison.postText())) {
+			return 1;
+		}
+		boolean lostCompleteness = StructuredMeasureComparisons.COMPLETE.equals(comparison.preText())
+				&& StructuredMeasureComparisons.NOT_COMPLETE.equals(comparison.postText());
+		return lostCompleteness ? -1 : 0;
+	}
+
+	/**
+	 * Labels a QA measure's change of result.
+	 *
+	 * @param comparison a QA measure comparison
+	 * @return the change label
+	 */
+	private static String qaChangeLabel(StructuredMeasureComparisons.MeasureComparison comparison) {
+		int transition = qaTransition(comparison);
+		if (transition > 0) {
+			return "▲ now COMPLETE";
+		}
+		if (transition < 0) {
+			return "▼ now NOT_COMPLETE";
+		}
+		return comparison.changed() ? comparison.changeText() : "no change";
 	}
 
 	/**
@@ -897,9 +1022,9 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 			StringBuilder builder,
 			String title,
 			List<StructuredMeasureComparisons.MeasureComparison> comparisons) {
-		builder.append("  <h3>")
+		builder.append("  <h4>")
 				.append(escapeHtml(title))
-				.append("</h3>\n");
+				.append("</h4>\n");
 		if (comparisons.isEmpty()) {
 			builder.append("  <p><em>None.</em></p>\n");
 			return;

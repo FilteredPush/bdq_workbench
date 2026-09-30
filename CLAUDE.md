@@ -163,7 +163,13 @@ understanding how the stages connect — read its class Javadoc first. The pipel
    `ExecutionPlan` (the ordered, phase-tagged list of tests the use case calls for), reading the
    use-case XML and the `bdqtest.ttl`/`bdqffdq.owl` RDF definitions via `BdqSpecificationIndex` and
    `RdfDefinitionsLoader`. Tests the resolver can't resolve land in
-   `ExecutionPlan.unresolvedTests()` rather than failing the run.
+   `ExecutionPlan.unresolvedTests()` rather than failing the run. A test's expected-response text
+   (`TestDefinition.metadata()` `expectedResponse`, which `BuiltInMeasureSpec` parses for a
+   multi-record measure's target and criteria) is read from the test itself if stated there, else,
+   as the ratified `bdqtest.ttl` publishes it, from the `bdqffdq:Specification` that the test's
+   `*Method` (`forMeasure` etc., following `dcterms:isVersionOf` variants) `hasSpecification`.
+   Without it, every QA measure fell back to accepting INTERNAL_PREREQUISITES_NOT_MET, which only
+   some QA specifications allow.
 3. **`test_discovery`** — `ClasspathAnnotationTestDiscoveryService` scans configured Java packages
    (`bdq.discovery.packages`, default `org.filteredpush.qc`) with ClassGraph for ffdq-style
    annotations (`@Provides`, `@Validation`, `@Issue`, `@Measure`, `@Amendment`, etc.), producing
@@ -300,12 +306,17 @@ understanding how the stages connect — read its class Javadoc first. The pipel
    tests read that are empty in 100% of records, amendments grouped by change and ranked by records
    affected, a capped list of records needing attention (with "k of n rows" for expanded tests),
    and tests that could not run. Headers of these reports and the text summary state external
-   prerequisites not met; the response list leads with `recordLabel`/`testLabel` columns. The
-   structured HTML report draws pre/post multi-record measures as a
+   prerequisites not met; the response list leads with `recordLabel`/`testLabel` columns. Both
+   reports split the pre/post measure differences by kind (`StructuredMeasureComparisons`): a COUNT
+   measure's value is a count of records, compared as a percentage, while a QA measure's value is
+   its `Response.result`, COMPLETE or NOT_COMPLETE for the whole dataset, compared by result, with
+   the share of records meeting its criteria only as a muted note ("87% of records were COMPLIANT
+   (870 of 1000)", rounded down so NOT_COMPLETE never reads 100%) — never plot a QA measure's pass
+   rate as its value. The structured HTML report draws the COUNT measures as a
    dumbbell chart (shared 0–100% axis; pre a hollow ring, post a filled dot, joined by a bar;
    changed measures first by improvement, unchanged ones muted; a collapsed table view keeps the
-   numbers). The flat XLSX exporter writes, per test/phase/record, only the derived
-   rollup where one exists (VALIDATION/ISSUE over expanded rows), since the spreadsheet has one place
+   numbers) and lists the QA measures in their own table, changed results first. The flat XLSX
+   exporter writes, per test/phase/record, only the derived rollup where one exists (VALIDATION/ISSUE over expanded rows), since the spreadsheet has one place
    per record for each test; AMENDMENT and MEASURE details, which have no rollups, are all written.
 
    Both structured reports open with an "Input data view" overview: the view mode (single table,

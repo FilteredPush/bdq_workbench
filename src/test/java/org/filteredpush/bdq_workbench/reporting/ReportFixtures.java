@@ -108,6 +108,35 @@ final class ReportFixtures {
 		return new ExecutionSummary(responses, metadata, dataset, bindings);
 	}
 
+	/**
+	 * Builds a built-in multi-record QA measure response as {@code synthesizeQaMeasure} emits it:
+	 * the dataset-level result, plus the matching record count, total and percentage.
+	 *
+	 * @param testId the measure's test ID
+	 * @param label the measure's label
+	 * @param phase the phase
+	 * @param result COMPLETE or NOT_COMPLETE
+	 * @param matchingCount records meeting the criteria
+	 * @param totalRecords records in the dataset
+	 * @param percentage the percentage of records meeting the criteria
+	 * @return the response
+	 */
+	static Response qaMeasureResponse(String testId, String label, Phase phase, String result,
+			String matchingCount, String totalRecords, String percentage) {
+		Map<String, String> parameters = new LinkedHashMap<>(new BuiltInMeasureSpec(
+				BuiltInMeasureSpec.MeasureKind.QA, "VALIDATION_" + label, "urn:test:target", null,
+				List.of("COMPLIANT"), List.of()).asBindingParameters());
+		parameters.put(BuiltInMeasureSpec.MEASURE_LABEL_KEY, label);
+		parameters.put(BuiltInMeasureSpec.MATCHING_COUNT_KEY, matchingCount);
+		parameters.put(BuiltInMeasureSpec.TOTAL_RECORDS_KEY, totalRecords);
+		parameters.put(BuiltInMeasureSpec.PERCENTAGE_KEY, percentage);
+		String message = result + " for VALIDATION_" + label;
+		return new Response("MULTIRECORD", testId, TestType.MEASURE, BuiltInMeasureSpec.IMPLEMENTATION_CLASS,
+				BuiltInMeasureSpec.IMPLEMENTATION_METHOD, phase, parameters,
+				"COMPLETE".equals(result) ? OutcomeStatus.PASSED : OutcomeStatus.FAILED, "RUN_HAS_RESULT", result,
+				message, message, Map.of(), Instant.EPOCH, Instant.EPOCH);
+	}
+
 	private static CanonicalRecord record(String id, int line, Map<String, String> terms) {
 		return new CanonicalRecord(id, terms, Map.of(), new SourceRow("occurrence.txt", line));
 	}

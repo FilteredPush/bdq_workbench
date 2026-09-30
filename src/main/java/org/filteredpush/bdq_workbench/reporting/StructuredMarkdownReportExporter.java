@@ -23,9 +23,11 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
+import org.filteredpush.bdq_workbench.model.BuiltInMeasureSpec;
 import org.filteredpush.bdq_workbench.model.DatasetInputDescription;
 import org.filteredpush.bdq_workbench.model.ExecutionSummary;
 import org.filteredpush.bdq_workbench.model.TestType;
@@ -443,7 +445,8 @@ public class StructuredMarkdownReportExporter implements ReportExporter {
 	}
 
 	/**
-	 * Appends a textual summary of measures whose pre- and post-amendment values changed.
+	 * Appends a textual summary of the pre- and post-amendment multi-record measures, with COUNT and
+	 * QA measures presented separately since their values mean different things.
 	 *
 	 * @param builder the report being built; appended to in place
 	 * @param summary the execution summary supplying multi-record measure responses
@@ -453,6 +456,26 @@ public class StructuredMarkdownReportExporter implements ReportExporter {
 		builder.append("## Measure differences between pre-amendment and post-amendment phases\n\n");
 		if (comparisons.isEmpty()) {
 			builder.append("No multi-record measures were produced in this run, so there is nothing to compare.\n\n");
+			return;
+		}
+		appendCountMeasureDifferences(builder,
+				StructuredMeasureComparisons.ofKind(comparisons, BuiltInMeasureSpec.MeasureKind.COUNT));
+		appendQaMeasureTable(builder,
+				StructuredMeasureComparisons.ofKind(comparisons, BuiltInMeasureSpec.MeasureKind.QA));
+	}
+
+	/**
+	 * Appends the COUNT measures, changed ones first by largest improvement.
+	 *
+	 * @param builder the report being built; appended to in place
+	 * @param comparisons the COUNT measure comparisons
+	 */
+	private static void appendCountMeasureDifferences(
+			StringBuilder builder,
+			List<StructuredMeasureComparisons.MeasureComparison> comparisons) {
+		builder.append("### COUNT measures\n\n");
+		if (comparisons.isEmpty()) {
+			builder.append("No multi-record COUNT measures were produced in this run.\n\n");
 			return;
 		}
 		List<StructuredMeasureComparisons.MeasureComparison> changed = comparisons.stream()
@@ -467,9 +490,9 @@ public class StructuredMarkdownReportExporter implements ReportExporter {
 				.filter(comparison -> !comparison.changed())
 				.toList();
 		builder.append(changed.size()).append(" of ").append(comparisons.size())
-				.append(" measure(s) changed after amendment.\n\n");
+				.append(" COUNT measure(s) changed after amendment.\n\n");
 		if (!changed.isEmpty()) {
-			builder.append("### Measures with pre/post differences\n\n");
+			builder.append("#### Measures with pre/post differences\n\n");
 			for (StructuredMeasureComparisons.MeasureComparison comparison : changed) {
 				builder.append("- ").append(escape(comparison.label())).append(": ")
 						.append(escape(comparison.preText())).append(" -> ").append(escape(comparison.postText()))
@@ -478,13 +501,60 @@ public class StructuredMarkdownReportExporter implements ReportExporter {
 			builder.append('\n');
 		}
 		if (!unchanged.isEmpty()) {
-			builder.append("### Measures with no differences\n\n");
+			builder.append("#### Measures with no differences\n\n");
 			for (StructuredMeasureComparisons.MeasureComparison comparison : unchanged) {
 				builder.append("- ").append(escape(comparison.label())).append(": ").append(escape(comparison.postText()))
 						.append('\n');
 			}
 			builder.append('\n');
 		}
+	}
+
+	/**
+	 * Appends the QA measures as a table of their results, COMPLETE or NOT_COMPLETE for the dataset
+	 * as a whole, each followed by its pass rate when known. Measures whose result changed come first.
+	 *
+	 * @param builder the report being built; appended to in place
+	 * @param comparisons the QA measure comparisons
+	 */
+	private static void appendQaMeasureTable(
+			StringBuilder builder,
+			List<StructuredMeasureComparisons.MeasureComparison> comparisons) {
+		builder.append("### QA measures\n\n");
+		if (comparisons.isEmpty()) {
+			builder.append("No multi-record QA measures were produced in this run.\n\n");
+			return;
+		}
+		List<StructuredMeasureComparisons.MeasureComparison> ordered = new ArrayList<>(comparisons);
+		ordered.sort(java.util.Comparator.comparing(
+				(StructuredMeasureComparisons.MeasureComparison comparison) -> !comparison.changed()));
+		long changed = comparisons.stream().filter(StructuredMeasureComparisons.MeasureComparison::changed).count();
+		builder.append(changed).append(" of ").append(comparisons.size())
+				.append(" QA measure(s) changed result after amendment. A QA measure is COMPLETE only when every "
+						+ "record meets its criteria.\n\n")
+				.append("| Measure | Pre-amendment | Post-amendment | Change |\n")
+				.append("| --- | --- | --- | --- |\n");
+		for (StructuredMeasureComparisons.MeasureComparison comparison : ordered) {
+			builder.append("| ").append(escapeCell(comparison.label()))
+					.append(" | ").append(qaResultCell(comparison.preText(), comparison.prePassRate()))
+					.append(" | ").append(qaResultCell(comparison.postText(), comparison.postPassRate()))
+					.append(" | ").append(escapeCell(comparison.changed() ? comparison.changeText() : "no change"))
+					.append(" |\n");
+		}
+		builder.append('\n');
+	}
+
+	/**
+	 * Renders one QA phase cell: the result, followed by its pass rate when known.
+	 *
+	 * @param result the phase's result text
+	 * @param passRate the phase's pass-rate note, or {@code null}
+	 * @return the escaped cell text
+	 */
+	private static String qaResultCell(String result, String passRate) {
+		return passRate == null
+				? "**" + escapeCell(result) + "**"
+				: "**" + escapeCell(result) + "** — " + escapeCell(passRate);
 	}
 
 	/**

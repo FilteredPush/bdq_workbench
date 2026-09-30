@@ -1239,19 +1239,12 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
         }
         boolean complete = eligibleCount == matchingCount;
         String responseResult = complete ? "COMPLETE" : "NOT_COMPLETE";
-        String message = complete
-                ? String.format(
-                        "%s for %s: %d/%d responses satisfied the QA criteria",
-                        responseResult,
-                        spec.targetTestLabel(),
-                        matchingCount,
-                        Math.max(totalRecords, (int) eligibleCount))
-                : String.format(
-                        "%s for %s: %d/%d responses satisfied the QA criteria",
-                        responseResult,
-                        spec.targetTestLabel(),
-                        matchingCount,
-                        Math.max(totalRecords, (int) eligibleCount));
+        String message = String.format(
+                "%s for %s: %d/%d records satisfied the QA criteria",
+                responseResult,
+                spec.targetTestLabel(),
+                matchingCount,
+                Math.max(totalRecords, (int) eligibleCount));
         Map<String, String> parameters = new LinkedHashMap<>(measureBinding.parameters());
         parameters.put(BuiltInMeasureSpec.MATCHING_COUNT_KEY, Long.toString(matchingCount));
         parameters.put(BuiltInMeasureSpec.TOTAL_RECORDS_KEY, Integer.toString(totalRecords));

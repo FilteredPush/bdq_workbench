@@ -126,13 +126,50 @@ class StructuredHtmlReportExporterTest {
 		String report = StructuredHtmlReportExporter.renderHtml(summary);
 
 		assertThat(report).contains("<h2>Measure differences between pre-amendment and post-amendment phases</h2>");
-		assertThat(report).contains("1 of 2 measure(s) changed after amendment: 1 improved, 0 declined.");
+		assertThat(report).contains("<h3>COUNT measures</h3>");
+		assertThat(report).contains("1 of 2 COUNT measure(s) changed after amendment: 1 improved, 0 declined.");
 		assertThat(report).contains("<line x1=\"25%\" x2=\"75%\" y1=\"13\" y2=\"13\" stroke=\"var(--mc-link)\"");
 		assertThat(report).contains("<circle cx=\"25%\" cy=\"13\" r=\"6\" fill=\"#fcfcfb\" stroke=\"var(--mc-pre)\"");
 		assertThat(report).contains("<circle cx=\"75%\" cy=\"13\" r=\"6\" fill=\"var(--mc-post)\"");
 		assertThat(report).contains("<span class=\"mc-delta up\">▲ +50 pts</span>");
-		assertThat(report).contains("<summary>Table view</summary>").contains("<h3>Measures with no differences</h3>");
+		assertThat(report).contains("<summary>Table view</summary>").contains("<h4>Measures with no differences</h4>");
 		assertThat(report.indexOf("Changed after amendment (1)")).isLessThan(report.indexOf("Unchanged (1)"));
+	}
+
+	@Test
+	void rendersQaMeasuresAsResultsInTheirOwnTableNotAsPercentages() {
+		ExecutionSummary summary = new ExecutionSummary(List.of(
+				measureResponse("urn:test:count-coordinates", "Count compliant coordinates", Phase.PRE_AMENDMENT, "1", "4", "25.0"),
+				measureResponse("urn:test:count-coordinates", "Count compliant coordinates", Phase.POST_AMENDMENT, "3", "4", "75.0"),
+				ReportFixtures.qaMeasureResponse("urn:test:qa-basis", "MULTIRECORD_MEASURE_QA_BASISOFRECORD_NOTEMPTY",
+						Phase.PRE_AMENDMENT, "NOT_COMPLETE", "870", "1000", "87.0"),
+				ReportFixtures.qaMeasureResponse("urn:test:qa-basis", "MULTIRECORD_MEASURE_QA_BASISOFRECORD_NOTEMPTY",
+						Phase.POST_AMENDMENT, "NOT_COMPLETE", "900", "1000", "90.0"),
+				ReportFixtures.qaMeasureResponse("urn:test:qa-date", "MULTIRECORD_MEASURE_QA_EVENTDATE_STANDARD",
+						Phase.PRE_AMENDMENT, "NOT_COMPLETE", "999", "1000", "99.9"),
+				ReportFixtures.qaMeasureResponse("urn:test:qa-date", "MULTIRECORD_MEASURE_QA_EVENTDATE_STANDARD",
+						Phase.POST_AMENDMENT, "COMPLETE", "1000", "1000", "100.0")));
+
+		String report = StructuredHtmlReportExporter.renderHtml(summary);
+
+		assertThat(report).contains("1 of 1 COUNT measure(s) changed after amendment");
+		assertThat(report).contains("<h3>QA measures</h3>");
+		assertThat(report).contains("1 of 2 QA measure(s) changed result after amendment: 1 became COMPLETE, "
+				+ "0 became NOT_COMPLETE.");
+		assertThat(report).contains("<tr><td>MULTIRECORD_MEASURE_QA_BASISOFRECORD_NOTEMPTY</td>"
+				+ "<td><strong>NOT_COMPLETE</strong><br><span class=\"muted\">87% of records were COMPLIANT "
+				+ "(870 of 1000)</span></td>"
+				+ "<td><strong>NOT_COMPLETE</strong><br><span class=\"muted\">90% of records were COMPLIANT "
+				+ "(900 of 1000)</span></td>"
+				+ "<td><span class=\"mc-delta same\">no change</span></td></tr>");
+		assertThat(report).contains("<span class=\"muted\">99% of records were COMPLIANT (999 of 1000)</span>");
+		assertThat(report).contains("<span class=\"mc-delta up\">▲ now COMPLETE</span>");
+		assertThat(report.indexOf("MULTIRECORD_MEASURE_QA_EVENTDATE_STANDARD"))
+				.isLessThan(report.indexOf("MULTIRECORD_MEASURE_QA_BASISOFRECORD_NOTEMPTY"));
+		assertThat(report.indexOf("<h3>COUNT measures</h3>")).isLessThan(report.indexOf("<h3>QA measures</h3>"));
+		// QA measures are neither plotted on the percentage chart nor valued as percentages.
+		assertThat(report.substring(report.indexOf("<h3>QA measures</h3>"))).doesNotContain("<svg class=\"mc-plot\"");
+		assertThat(report).doesNotContain("87% → 90%").doesNotContain("QA_BASISOFRECORD_NOTEMPTY</span><div");
 	}
 
 	@Test

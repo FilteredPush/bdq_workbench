@@ -81,10 +81,35 @@ class StructuredMarkdownReportExporterTest {
 
 		String report = StructuredMarkdownReportExporter.renderMarkdown(summary);
 
-		assertThat(report).contains("## Measure differences between pre-amendment and post-amendment phases\n\n1 of 1 "
-				+ "measure(s) changed after amendment.");
-		assertThat(report).contains("### Measures with pre/post differences");
+		assertThat(report).contains("## Measure differences between pre-amendment and post-amendment phases\n\n"
+				+ "### COUNT measures\n\n1 of 1 COUNT measure(s) changed after amendment.");
+		assertThat(report).contains("#### Measures with pre/post differences");
+		assertThat(report).contains("### QA measures\n\nNo multi-record QA measures were produced in this run.");
 		assertThat(report).contains("- Count compliant coordinates: 1/4 (25.0%) -> 3/4 (75.0%) (+50 percentage point(s))");
+	}
+
+	@Test
+	void listsQaMeasuresByResultWithPassRates() {
+		ExecutionSummary summary = new ExecutionSummary(List.of(
+				ReportFixtures.qaMeasureResponse("urn:test:qa-basis", "MULTIRECORD_MEASURE_QA_BASISOFRECORD_NOTEMPTY",
+						Phase.PRE_AMENDMENT, "NOT_COMPLETE", "870", "1000", "87.0"),
+				ReportFixtures.qaMeasureResponse("urn:test:qa-basis", "MULTIRECORD_MEASURE_QA_BASISOFRECORD_NOTEMPTY",
+						Phase.POST_AMENDMENT, "NOT_COMPLETE", "900", "1000", "90.0"),
+				ReportFixtures.qaMeasureResponse("urn:test:qa-date", "MULTIRECORD_MEASURE_QA_EVENTDATE_STANDARD",
+						Phase.PRE_AMENDMENT, "NOT_COMPLETE", "999", "1000", "99.9"),
+				ReportFixtures.qaMeasureResponse("urn:test:qa-date", "MULTIRECORD_MEASURE_QA_EVENTDATE_STANDARD",
+						Phase.POST_AMENDMENT, "COMPLETE", "1000", "1000", "100.0")));
+
+		String report = StructuredMarkdownReportExporter.renderMarkdown(summary);
+
+		assertThat(report).contains("### COUNT measures\n\nNo multi-record COUNT measures were produced in this run.");
+		assertThat(report).contains("### QA measures\n\n1 of 2 QA measure(s) changed result after amendment.");
+		assertThat(report).contains("| MULTIRECORD_MEASURE_QA_EVENTDATE_STANDARD | **NOT_COMPLETE** — 99% of records were "
+				+ "COMPLIANT (999 of 1000) | **COMPLETE** — 100% of records were COMPLIANT (1000 of 1000) | "
+				+ "NOT_COMPLETE → COMPLETE |\n| MULTIRECORD_MEASURE_QA_BASISOFRECORD_NOTEMPTY | **NOT_COMPLETE** — 87% of "
+				+ "records were COMPLIANT (870 of 1000) | **NOT_COMPLETE** — 90% of records were COMPLIANT (900 of "
+				+ "1000) | no change |\n");
+		assertThat(report).doesNotContain("percentage point");
 	}
 
 	@Test
