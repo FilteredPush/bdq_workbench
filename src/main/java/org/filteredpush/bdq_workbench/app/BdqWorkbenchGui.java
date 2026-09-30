@@ -1583,7 +1583,8 @@ final class BdqWorkbenchGui {
                 new RdfPolicyResolverService(config.useCaseXml(), config.rdfDefinitions()),
                 new ClasspathAnnotationTestDiscoveryService(config.implementationPackages()),
                 new DefaultTestBindingService(),
-                new ParallelPhaseExecutionService(config.threadCount(), new ReflectionExecutionAdapter(), progressListener, config.dedupEnabled()),
+                new ParallelPhaseExecutionService(config.threadCount(), new ReflectionExecutionAdapter(), progressListener,
+                        config.dedupEnabled(), config.executionPolicy()),
                 new ReportingService(List.of(
                         new SummaryReportExporter(),
                         new DetailedResponseStreamExporter(),
@@ -1615,7 +1616,8 @@ final class BdqWorkbenchGui {
      * @param threads thread count field value
      * @param dedupEnabled whether distinct-value execution is enabled for this run
      * @param resolver resolves and caches remote/local resource paths
-     * @param defaults fallback values used when a field is blank
+     * @param defaults fallback values used when a field is blank; also supplies the run's
+     *     execution policy (from {@code application.properties} and any {@code --gui} overrides)
      * @return the assembled configuration, ready for {@link WorkbenchFacade#prepare(AppConfig)}
      */
     private static AppConfig buildConfig(
@@ -1660,7 +1662,8 @@ final class BdqWorkbenchGui {
                 dedupEnabled,
                 RecordFilterSpec.parse(recordFilters),
                 datasetTable,
-                datasetView);
+                datasetView)
+                .withExecutionPolicy(defaults.executionPolicy());
     }
 
 	/**
