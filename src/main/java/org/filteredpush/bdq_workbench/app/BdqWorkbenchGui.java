@@ -105,6 +105,7 @@ import org.filteredpush.bdq_workbench.rdf_policy.UseCaseXmlParser;
 import org.filteredpush.bdq_workbench.reporting.DetailedResponseStreamExporter;
 import org.filteredpush.bdq_workbench.reporting.RdfResponseExporter;
 import org.filteredpush.bdq_workbench.reporting.ReportingService;
+import org.filteredpush.bdq_workbench.reporting.SingleRecordOutcomeHistograms;
 import org.filteredpush.bdq_workbench.reporting.StructuredHtmlReportExporter;
 import org.filteredpush.bdq_workbench.reporting.StructuredMarkdownReportExporter;
 import org.filteredpush.bdq_workbench.reporting.SummaryReportExporter;
@@ -4053,6 +4054,22 @@ final class BdqWorkbenchGui {
                         100,
                         measure.postText(),
                         Color.decode("#00897b")));
+            });
+        }
+
+        JLabel outcomeLabel = new JLabel("Single-record outcome measures: distribution over the records");
+        outcomeLabel.setBorder(BorderFactory.createEmptyBorder(12, 0, 4, 0));
+        panel.add(outcomeLabel);
+        List<SingleRecordOutcomeHistograms.Histogram> histograms =
+                SingleRecordOutcomeHistograms.build(summary.responses(), preparedRun.plan().tests());
+        if (histograms.isEmpty()) {
+            panel.add(new JLabel("No single-record outcome measures were produced."));
+        } else {
+            histograms.forEach(histogram -> {
+                JLabel label = new JLabel(histogram.title());
+                label.setBorder(BorderFactory.createEmptyBorder(6, 0, 2, 0));
+                panel.add(label);
+                panel.add(new OutcomeHistogramPanel(histogram));
             });
         }
         panel.revalidate();

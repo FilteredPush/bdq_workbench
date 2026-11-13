@@ -246,7 +246,11 @@ understanding how the stages connect — read its class Javadoc first. The pipel
    AMENDMENT) tests by their record-level response (the rollup for an expanded test): RUN_HAS_RESULT
    with the count, 0 for a record on which no such tests were run, as the specification says, and,
    beyond the specification, an ERROR response for a record on which any counted test errored or
-   was unable to run.
+   was unable to run. The GUI's Workflow Visualization shows their distribution over the records
+   (`SingleRecordOutcomeHistograms`, drawn by `OutcomeHistogramPanel`): a stacked histogram with x
+   the measure's value, 0 to the number of tests of the counted type in the use case, and y the
+   number of records, one segment per measure — VALIDATION pre- and post-amendment, and AMENDMENT in
+   the amendment phase; responses without an integer count (ERROR) are reported, not binned.
 
    **Scheduling and resilience** (README, "Execution scheduling and resilience"). Group
    invocations do not go straight to a thread pool: `ResourceLaneScheduler` (one per `execute`
