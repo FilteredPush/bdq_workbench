@@ -66,6 +66,10 @@ class SingleRecordOutcomeHistogramsTest {
 		assertThat(histograms.get(1).series().get(0).counts()).containsExactly(0, 0, 0, 3);
 		assertThat(histograms.get(2).series().get(0).counts()).containsExactly(1, 1, 1);
 		assertThat(histograms.get(2).title()).isEqualTo("AMENDMENT outcomes per record, amendment phase");
+		// pre and post share the y axis: their tallest bar (pre: 2 at value 2; post: 3 at value 3), rounded up to 5
+		assertThat(histograms.get(0).yMax()).isEqualTo(5);
+		assertThat(histograms.get(1).yMax()).isEqualTo(5);
+		assertThat(histograms.get(2).yMax()).isEqualTo(5);
 	}
 
 	/** Without any single-record outcome measure responses, there is no histogram. */
@@ -87,5 +91,27 @@ class SingleRecordOutcomeHistogramsTest {
 	private static Response error(String recordId, String testId, Phase phase) {
 		return new Response(recordId, testId, TestType.MEASURE, "impl", "method", phase, Map.of(), OutcomeStatus.ERROR,
 				"ERROR", null, "", "", Map.of(), Instant.EPOCH, Instant.EPOCH);
+	}
+
+	/**
+	 * The pre- and post-amendment VALIDATION histograms share their y axis, the tallest bar of
+	 * either rounded up to a multiple of 5, and their x axis, the larger of their largest values.
+	 */
+	@Test
+	void validationHistogramsShareTheirAxes() {
+		List<TestDefinition> tests = List.of(test("v1", TestType.VALIDATION), test(COMPLIANT, TestType.MEASURE));
+		List<Response> responses = new ArrayList<>();
+		for (int record = 0; record < 12; record++) {
+			responses.add(measure("p" + record, COMPLIANT, Phase.PRE_AMENDMENT, "0"));
+		}
+		for (int record = 0; record < 7; record++) {
+			responses.add(measure("q" + record, COMPLIANT, Phase.POST_AMENDMENT, record < 3 ? "1" : "3"));
+		}
+
+		List<Histogram> histograms = SingleRecordOutcomeHistograms.build(responses, tests);
+
+		assertThat(histograms).extracting(Histogram::yMax).containsExactly(15, 15);
+		assertThat(histograms).extracting(Histogram::maxValue).containsExactly(3, 3);
+		assertThat(histograms.get(0).series().get(0).counts()).containsExactly(12, 0, 0, 0);
 	}
 }

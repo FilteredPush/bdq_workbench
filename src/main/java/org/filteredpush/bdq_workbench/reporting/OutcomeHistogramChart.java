@@ -99,7 +99,7 @@ public final class OutcomeHistogramChart {
 			FontMetrics metrics = g.getFontMetrics();
 			int plotHeight = Math.max(1, chartHeight - TOP - BOTTOM);
 			int baseline = TOP + plotHeight;
-			int maxCount = Math.max(1, histogram.maxStackedCount());
+			int maxCount = Math.max(1, histogram.yMax() > 0 ? histogram.yMax() : histogram.maxStackedCount());
 			double binWidth = binWidth(chartWidth, histogram);
 
 			// Legend
@@ -130,7 +130,7 @@ public final class OutcomeHistogramChart {
 				}
 			}
 
-			// Axes
+			// Axes: the y axis is labelled at 0 and at its top (shared by histograms to be compared)
 			g.setColor(Color.DARK_GRAY);
 			g.drawLine(LEFT, baseline, chartWidth - RIGHT, baseline);
 			g.drawLine(LEFT, TOP, LEFT, baseline);

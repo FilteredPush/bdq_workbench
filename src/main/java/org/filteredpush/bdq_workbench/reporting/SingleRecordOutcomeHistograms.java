@@ -42,7 +42,10 @@ import org.filteredpush.bdq_workbench.model.TestType;
  * for each measure, the number of records for which that measure was {@code k}. There is one
  * histogram for the VALIDATION measures (MEASURE_VALIDATIONTESTS_COMPLIANT, _NOTCOMPLIANT and
  * _PREREQUISITESNOTMET) in each of the pre- and post-amendment phases, and one for
- * MEASURE_AMENDMENTS_PROPOSED in the amendment phase. Only RUN_HAS_RESULT responses with an
+ * MEASURE_AMENDMENTS_PROPOSED in the amendment phase. The pre- and post-amendment VALIDATION
+ * histograms share their axes, so they can be compared: the x axis runs to the larger of their
+ * largest values, and the y axis to their tallest bar, rounded up to a multiple of
+ * {@link #Y_AXIS_STEP}. Only RUN_HAS_RESULT responses with an
  * integer result are binned; the others (ERROR for a record on which a counted test failed) are
  * counted as not binned.
  *
@@ -51,6 +54,9 @@ import org.filteredpush.bdq_workbench.model.TestType;
  * built-in binding, so responses of discovered implementations of these measures are included too.
  */
 public final class SingleRecordOutcomeHistograms {
+
+	/** The top of a histogram's y axis is a multiple of this. */
+	public static final int Y_AXIS_STEP = 5;
 
 	/**
 	 * One measure's distribution within a histogram.
@@ -80,6 +86,8 @@ public final class SingleRecordOutcomeHistograms {
 	 * @param maxValue the largest value on the axis: {@code testsInUseCase}, or a larger observed value
 	 * @param series one series per measure present, in {@link Tally} order
 	 * @param notBinned the number of measure responses that had no integer result (e.g. ERROR)
+	 * @param yMax the top of the y axis: the tallest bar, rounded up to a multiple of
+	 *     {@link #Y_AXIS_STEP}; shared by the pre- and post-amendment VALIDATION histograms
 	 */
 	public record Histogram(
 			TestType countedType,
@@ -87,7 +95,8 @@ public final class SingleRecordOutcomeHistograms {
 			int testsInUseCase,
 			int maxValue,
 			List<Series> series,
-			int notBinned) {
+			int notBinned,
+			int yMax) {
 		/**
 		 * @param value a value on the axis
 		 * @return the bar height at {@code value}: the sum over the series
@@ -140,11 +149,43 @@ public final class SingleRecordOutcomeHistograms {
 		for (TestDefinition test : useCaseTests) {
 			SingleRecordOutcomeMeasureSpec.from(test).ifPresent(spec -> tallyByTestId.put(test.id(), spec.tally()));
 		}
-		List<Histogram> histograms = new ArrayList<>();
-		histogram(TestType.VALIDATION, Phase.PRE_AMENDMENT, responses, useCaseTests, tallyByTestId).ifPresent(histograms::add);
-		histogram(TestType.VALIDATION, Phase.POST_AMENDMENT, responses, useCaseTests, tallyByTestId).ifPresent(histograms::add);
-		histogram(TestType.AMENDMENT, Phase.AMENDMENT, responses, useCaseTests, tallyByTestId).ifPresent(histograms::add);
+		List<Histogram> validations = new ArrayList<>();
+		histogram(TestType.VALIDATION, Phase.PRE_AMENDMENT, responses, useCaseTests, tallyByTestId).ifPresent(validations::add);
+		histogram(TestType.VALIDATION, Phase.POST_AMENDMENT, responses, useCaseTests, tallyByTestId).ifPresent(validations::add);
+		List<Histogram> histograms = new ArrayList<>(withSharedAxes(validations));
+		histogram(TestType.AMENDMENT, Phase.AMENDMENT, responses, useCaseTests, tallyByTestId)
+				.map(amendments -> withSharedAxes(List.of(amendments)).get(0))
+				.ifPresent(histograms::add);
 		return List.copyOf(histograms);
+	}
+
+	/**
+	 * Gives histograms common axes: the x axis to the largest {@code maxValue} among them, and the
+	 * y axis to their tallest bar, rounded up to a multiple of {@link #Y_AXIS_STEP}.
+	 *
+	 * @param histograms histograms to compare, e.g. pre- and post-amendment
+	 * @return the same histograms with common axes
+	 */
+	static List<Histogram> withSharedAxes(List<Histogram> histograms) {
+		int maxValue = histograms.stream().mapToInt(Histogram::maxValue).max().orElse(0);
+		List<Histogram> widened = histograms.stream().map(histogram -> widen(histogram, maxValue)).toList();
+		int tallest = widened.stream().mapToInt(Histogram::maxStackedCount).max().orElse(0);
+		int yMax = Math.max(Y_AXIS_STEP, (tallest + Y_AXIS_STEP - 1) / Y_AXIS_STEP * Y_AXIS_STEP);
+		return widened.stream()
+				.map(histogram -> new Histogram(histogram.countedType(), histogram.phase(), histogram.testsInUseCase(),
+						histogram.maxValue(), histogram.series(), histogram.notBinned(), yMax))
+				.toList();
+	}
+
+	private static Histogram widen(Histogram histogram, int maxValue) {
+		if (histogram.maxValue() == maxValue) {
+			return histogram;
+		}
+		List<Series> series = histogram.series().stream()
+				.map(one -> new Series(one.tally(), java.util.Arrays.copyOf(one.counts(), maxValue + 1)))
+				.toList();
+		return new Histogram(histogram.countedType(), histogram.phase(), histogram.testsInUseCase(), maxValue, series,
+				histogram.notBinned(), histogram.yMax());
 	}
 
 	private static Optional<Histogram> histogram(
@@ -190,7 +231,7 @@ public final class SingleRecordOutcomeHistograms {
 			entry.getValue().forEach(value -> counts[value]++);
 			series.add(new Series(entry.getKey(), counts));
 		}
-		return Optional.of(new Histogram(countedType, phase, testsInUseCase, maxValue, List.copyOf(series), notBinned));
+		return Optional.of(new Histogram(countedType, phase, testsInUseCase, maxValue, List.copyOf(series), notBinned, 0));
 	}
 
 	private static Tally tallyOf(Response response, Map<String, Tally> tallyByTestId) {

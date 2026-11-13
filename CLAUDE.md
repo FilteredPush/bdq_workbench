@@ -250,7 +250,10 @@ understanding how the stages connect — read its class Javadoc first. The pipel
    (`SingleRecordOutcomeHistograms`, drawn by `OutcomeHistogramPanel`): a stacked histogram with x
    the measure's value, 0 to the number of tests of the counted type in the use case, and y the
    number of records, one segment per measure — VALIDATION pre- and post-amendment, and AMENDMENT in
-   the amendment phase; responses without an integer count (ERROR) are reported, not binned. Its multi-record section
+   the amendment phase; responses without an integer count (ERROR) are reported, not binned. The
+   pre- and post-amendment VALIDATION histograms share their axes so they can be compared: x to the
+   larger of their largest values, y to the tallest bar of either, rounded up to a multiple of 5
+   (`SingleRecordOutcomeHistograms.withSharedAxes`; the y axis is labelled at 0 and its top only). Its multi-record section
    (`MultiRecordMeasureSummaries`) opens with a caption counting the COUNT measures improved,
    unchanged, and worse after amendment with their median, a scatter of each COUNT measure's pre-
    against post-amendment percentage colored by data quality dimension (`MeasureScatterPanel`;
