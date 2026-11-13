@@ -104,6 +104,7 @@ import org.filteredpush.bdq_workbench.rdf_policy.RdfPolicyResolverService;
 import org.filteredpush.bdq_workbench.rdf_policy.UseCaseXmlParser;
 import org.filteredpush.bdq_workbench.reporting.DetailedResponseStreamExporter;
 import org.filteredpush.bdq_workbench.reporting.RdfResponseExporter;
+import org.filteredpush.bdq_workbench.reporting.MultiRecordMeasureSummaries;
 import org.filteredpush.bdq_workbench.reporting.ReportingService;
 import org.filteredpush.bdq_workbench.reporting.SingleRecordOutcomeHistograms;
 import org.filteredpush.bdq_workbench.reporting.StructuredHtmlReportExporter;
@@ -4031,30 +4032,51 @@ final class BdqWorkbenchGui {
                         stage.state() + " - " + stage.detail(),
                         colorForStageState(stage.state()))));
 
-        JLabel measureLabel = new JLabel("Multi-record COUNT measures");
+        JLabel measureLabel = new JLabel("Multi-record measures");
         measureLabel.setBorder(BorderFactory.createEmptyBorder(8, 0, 4, 0));
         panel.add(measureLabel);
-        List<CountMeasureSummary> countMeasures = summarizeCountMeasures(summary);
-        if (countMeasures.isEmpty()) {
-            panel.add(new JLabel("No multi-record COUNT measures were produced."));
+        MultiRecordMeasureSummaries.Summary multiRecord =
+                MultiRecordMeasureSummaries.build(summary.responses(), preparedRun.plan().tests());
+        if (multiRecord.isEmpty()) {
+            panel.add(new JLabel("No multi-record measures were produced."));
         } else {
+            addMultiRecordOverview(panel, multiRecord);
+        }
+        List<CountMeasureSummary> countMeasures = summarizeCountMeasures(summary);
+        if (!countMeasures.isEmpty()) {
+            JPanel details = new JPanel();
+            details.setLayout(new BoxLayout(details, BoxLayout.Y_AXIS));
+            details.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
             countMeasures.forEach(measure -> {
                 JLabel label = new JLabel(measure.label());
                 label.setBorder(BorderFactory.createEmptyBorder(6, 0, 2, 0));
-                panel.add(label);
-                panel.add(createVisualizationProgressRow(
+                details.add(label);
+                details.add(createVisualizationProgressRow(
                         "Pre-amendment",
                         measure.prePercent(),
                         100,
                         measure.preText(),
                         Color.decode("#6a1b9a")));
-                panel.add(createVisualizationProgressRow(
+                details.add(createVisualizationProgressRow(
                         "Post-amendment",
                         measure.postPercent(),
                         100,
                         measure.postText(),
                         Color.decode("#00897b")));
             });
+            details.setVisible(false);
+            JButton toggleDetails = new JButton("Show per-measure pre/post bars");
+            toggleDetails.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
+            toggleDetails.addActionListener(event -> {
+                details.setVisible(!details.isVisible());
+                toggleDetails.setText(details.isVisible()
+                        ? "Hide per-measure pre/post bars"
+                        : "Show per-measure pre/post bars");
+                panel.revalidate();
+                panel.repaint();
+            });
+            panel.add(toggleDetails);
+            panel.add(details);
         }
 
         JLabel outcomeLabel = new JLabel("Single-record outcome measures: distribution over the records");
@@ -4074,6 +4096,56 @@ final class BdqWorkbenchGui {
         }
         panel.revalidate();
         panel.repaint();
+    }
+
+    /**
+     * Adds the overview of the multi-record measures: a caption counting the COUNT measures that
+     * improved, did not change, or got worse after amendment; a scatter of each COUNT measure's
+     * pre- against post-amendment percentage; the number of QA measures COMPLETE before and after
+     * amendment; and one dumbbell row per COUNT measure, greatest improvement first.
+     *
+     * @param panel the workflow-visualization panel
+     * @param multiRecord the run's multi-record measure summary
+     */
+    private static void addMultiRecordOverview(JPanel panel, MultiRecordMeasureSummaries.Summary multiRecord) {
+        List<MultiRecordMeasureSummaries.Row> rows = multiRecord.rows();
+        if (!rows.isEmpty()) {
+            double medianPre = multiRecord.median(Phase.PRE_AMENDMENT);
+            double medianPost = multiRecord.median(Phase.POST_AMENDMENT);
+            JLabel caption = new JLabel(rows.size() + " COUNT measures: " + multiRecord.improved() + " improved, "
+                    + multiRecord.unchanged() + " unchanged, " + multiRecord.worse() + " worse after amendment"
+                    + (Double.isNaN(medianPre) || Double.isNaN(medianPost) ? ""
+                            : String.format("; median %.0f%% \u2192 %.0f%% of records", medianPre, medianPost)));
+            caption.setBorder(BorderFactory.createEmptyBorder(2, 0, 4, 0));
+            panel.add(caption);
+            if (rows.stream().anyMatch(MultiRecordMeasureSummaries.Row::hasBothPhases)) {
+                panel.add(new MeasureScatterPanel(rows));
+            }
+        }
+        if (multiRecord.qaMeasures() > 0) {
+            JLabel qaLabel = new JLabel("QA measures COMPLETE");
+            qaLabel.setBorder(BorderFactory.createEmptyBorder(8, 0, 2, 0));
+            panel.add(qaLabel);
+            panel.add(createVisualizationProgressRow(
+                    "Pre-amendment",
+                    multiRecord.qaCompletePre(),
+                    Math.max(1, multiRecord.qaWithPre()),
+                    multiRecord.qaCompletePre() + " of " + multiRecord.qaWithPre() + " COMPLETE",
+                    Color.decode("#6a1b9a")));
+            panel.add(createVisualizationProgressRow(
+                    "Post-amendment",
+                    multiRecord.qaCompletePost(),
+                    Math.max(1, multiRecord.qaWithPost()),
+                    multiRecord.qaCompletePost() + " of " + multiRecord.qaWithPost() + " COMPLETE",
+                    Color.decode("#00897b")));
+        }
+        if (!rows.isEmpty()) {
+            JLabel dumbbellLabel = new JLabel("COUNT measures, greatest improvement first"
+                    + " (pre-amendment \u25cb, post-amendment \u25cf)");
+            dumbbellLabel.setBorder(BorderFactory.createEmptyBorder(8, 0, 2, 0));
+            panel.add(dumbbellLabel);
+            panel.add(new MeasureDumbbellPanel(rows));
+        }
     }
 
     /**

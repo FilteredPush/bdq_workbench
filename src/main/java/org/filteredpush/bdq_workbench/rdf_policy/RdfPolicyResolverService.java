@@ -84,6 +84,11 @@ public class RdfPolicyResolverService implements PolicyResolverService {
     private static final String RDFS_RANGE_URI = "http://www.w3.org/2000/01/rdf-schema#range";
     private static final String TEST_METADATA_EXPECTED_RESPONSE = "expectedResponse";
     private static final String TEST_METADATA_NOTE = "note";
+    /**
+     * Test metadata key for the local name of the test's {@code bdqffdq:hasDataQualityDimension}
+     * (e.g. {@code Conformance}).
+     */
+    public static final String TEST_METADATA_DIMENSION = "dimension";
     private static final String DCTERMS_IS_VERSION_OF_URI = "http://purl.org/dc/terms/isVersionOf";
     private static final Set<String> EXPECTED_RESPONSE_LOCAL_NAMES = Set.of("hasExpectedResponse", "expectedResponse");
     private static final Set<String> METHOD_LINK_LOCAL_NAMES =
@@ -369,13 +374,13 @@ public class RdfPolicyResolverService implements PolicyResolverService {
     }
 
     /**
-     * Reads the metadata the binding layer needs from a test's definition: its expected-response
-     * text and its note.
+     * Reads the metadata the binding layer and reports need from a test's definition: its
+     * expected-response text, its note, and its data quality dimension.
      *
      * @param model the loaded RDF definitions
      * @param uri the test's IRI
-     * @return the metadata found, keyed by {@link #TEST_METADATA_EXPECTED_RESPONSE} and
-     *     {@link #TEST_METADATA_NOTE}
+     * @return the metadata found, keyed by {@link #TEST_METADATA_EXPECTED_RESPONSE},
+     *     {@link #TEST_METADATA_NOTE} and {@link #TEST_METADATA_DIMENSION}
      */
     private static Map<String, String> resolveTestMetadata(Model model, String uri) {
         Resource resource = model.getResource(uri);
@@ -386,7 +391,32 @@ public class RdfPolicyResolverService implements PolicyResolverService {
         putIfPresent(metadata, TEST_METADATA_EXPECTED_RESPONSE, resolveExpectedResponse(model, resource));
         putIfPresent(metadata, TEST_METADATA_NOTE,
                 resolveLiteralProperty(resource, Set.of("note")));
+        putIfPresent(metadata, TEST_METADATA_DIMENSION, resolveDimension(model, resource));
         return Map.copyOf(metadata);
+    }
+
+    /**
+     * Resolves the local name of a test's {@code bdqffdq:hasDataQualityDimension} (e.g.
+     * {@code Conformance} for {@code bdqdim:Conformance}), stated on the test or on a
+     * {@code dcterms:isVersionOf} variant of it.
+     *
+     * @param model the loaded RDF definitions
+     * @param test the test resource
+     * @return the dimension's local name, or null if none is stated
+     */
+    private static String resolveDimension(Model model, Resource test) {
+        for (Resource candidate : withVersionVariants(model, test)) {
+            var statements = candidate.listProperties();
+            while (statements.hasNext()) {
+                var statement = statements.nextStatement();
+                if ("hasDataQualityDimension".equals(statement.getPredicate().getLocalName())
+                        && statement.getObject().isURIResource()) {
+                    String iri = statement.getObject().asResource().getURI();
+                    return iri.substring(Math.max(iri.lastIndexOf('/'), iri.lastIndexOf('#')) + 1);
+                }
+            }
+        }
+        return null;
     }
 
     /**

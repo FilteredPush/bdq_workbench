@@ -282,7 +282,7 @@ class RdfPolicyResolverServiceTest {
     }
 
     @Test
-    void capturesExpectedResponseAndNoteMetadataForTests() throws Exception {
+    void capturesExpectedResponseNoteAndDimensionMetadataForTests() throws Exception {
         Path useCaseFile = tempDir.resolve("bdquc.xml");
         Files.writeString(useCaseFile, """
                 <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
@@ -311,7 +311,8 @@ class RdfPolicyResolverServiceTest {
                 ex:testMeasure a bdqffdq:Measure ;
                     rdfs:label "MULTIRECORD_MEASURE_QA_MINDEPTH_LESSTHAN_MAXDEPTH" ;
                     bdqffdq:hasExpectedResponse "COMPLETE if every VALIDATION_MINDEPTH_LESSTHAN_MAXDEPTH in the MultiRecord has Response.result=COMPLIANT or Response.status=INTERNAL_PREREQUISITES_NOT_MET, otherwise NOT_COMPLETE." ;
-                    skos:note "For Quality Assurance, filter record set until this measure is COMPLETE." .
+                    skos:note "For Quality Assurance, filter record set until this measure is COMPLETE." ;
+                    bdqffdq:hasDataQualityDimension <https://rs.tdwg.org/bdqdim/terms/Conformance> .
                 """, StandardCharsets.UTF_8);
 
         RdfPolicyResolverService service = new RdfPolicyResolverService(useCaseFile, List.of(definitions));
@@ -322,6 +323,7 @@ class RdfPolicyResolverServiceTest {
                     "COMPLETE if every VALIDATION_MINDEPTH_LESSTHAN_MAXDEPTH in the MultiRecord has Response.result=COMPLIANT or Response.status=INTERNAL_PREREQUISITES_NOT_MET, otherwise NOT_COMPLETE.");
             assertThat(test.metadata()).containsEntry("note",
                     "For Quality Assurance, filter record set until this measure is COMPLETE.");
+            assertThat(test.metadata()).containsEntry(RdfPolicyResolverService.TEST_METADATA_DIMENSION, "Conformance");
         });
     }
 

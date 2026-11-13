@@ -250,7 +250,14 @@ understanding how the stages connect — read its class Javadoc first. The pipel
    (`SingleRecordOutcomeHistograms`, drawn by `OutcomeHistogramPanel`): a stacked histogram with x
    the measure's value, 0 to the number of tests of the counted type in the use case, and y the
    number of records, one segment per measure — VALIDATION pre- and post-amendment, and AMENDMENT in
-   the amendment phase; responses without an integer count (ERROR) are reported, not binned.
+   the amendment phase; responses without an integer count (ERROR) are reported, not binned. Its multi-record section
+   (`MultiRecordMeasureSummaries`) opens with a caption counting the COUNT measures improved,
+   unchanged, and worse after amendment with their median, a scatter of each COUNT measure's pre-
+   against post-amendment percentage colored by data quality dimension (`MeasureScatterPanel`;
+   the dimension is the test's `bdqffdq:hasDataQualityDimension`, recorded by
+   `RdfPolicyResolverService` as test metadata), the number of QA measures COMPLETE pre and post, and
+   one dumbbell row per COUNT measure, greatest improvement first, with its paired QA measure's
+   result (`MeasureDumbbellPanel`); the former three lines per COUNT measure are behind a toggle.
 
    **Scheduling and resilience** (README, "Execution scheduling and resilience"). Group
    invocations do not go straight to a thread pool: `ResourceLaneScheduler` (one per `execute`
