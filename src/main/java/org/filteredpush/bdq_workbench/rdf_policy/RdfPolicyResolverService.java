@@ -89,6 +89,12 @@ public class RdfPolicyResolverService implements PolicyResolverService {
      * (e.g. {@code Conformance}).
      */
     public static final String TEST_METADATA_DIMENSION = "dimension";
+    /**
+     * Test metadata key for the test's {@code bdqffdq:hasDateLastUpdated} (e.g. {@code 2024-08-19}):
+     * the date of its last substantive change, whose version implementations cite in
+     * {@code @ProvidesVersion}. Stated in the graphs served by rs.tdwg.org.
+     */
+    public static final String TEST_METADATA_DATE_LAST_UPDATED = "dateLastUpdated";
     private static final String DCTERMS_IS_VERSION_OF_URI = "http://purl.org/dc/terms/isVersionOf";
     private static final Set<String> EXPECTED_RESPONSE_LOCAL_NAMES = Set.of("hasExpectedResponse", "expectedResponse");
     private static final Set<String> METHOD_LINK_LOCAL_NAMES =
@@ -380,7 +386,8 @@ public class RdfPolicyResolverService implements PolicyResolverService {
      * @param model the loaded RDF definitions
      * @param uri the test's IRI
      * @return the metadata found, keyed by {@link #TEST_METADATA_EXPECTED_RESPONSE},
-     *     {@link #TEST_METADATA_NOTE} and {@link #TEST_METADATA_DIMENSION}
+     *     {@link #TEST_METADATA_NOTE}, {@link #TEST_METADATA_DIMENSION} and
+     *     {@link #TEST_METADATA_DATE_LAST_UPDATED}
      */
     private static Map<String, String> resolveTestMetadata(Model model, String uri) {
         Resource resource = model.getResource(uri);
@@ -392,7 +399,30 @@ public class RdfPolicyResolverService implements PolicyResolverService {
         putIfPresent(metadata, TEST_METADATA_NOTE,
                 resolveLiteralProperty(resource, Set.of("note")));
         putIfPresent(metadata, TEST_METADATA_DIMENSION, resolveDimension(model, resource));
+        putIfPresent(metadata, TEST_METADATA_DATE_LAST_UPDATED, resolveDateLastUpdated(model, resource));
         return Map.copyOf(metadata);
+    }
+
+    /**
+     * Resolves a test's {@code bdqffdq:hasDateLastUpdated}, stated on the test or on a
+     * {@code dcterms:isVersionOf} variant of it (the test itself first).
+     *
+     * @param model the loaded RDF definitions
+     * @param test the test resource
+     * @return the date's lexical form, or null if none is stated
+     */
+    private static String resolveDateLastUpdated(Model model, Resource test) {
+        for (Resource candidate : withVersionVariants(model, test)) {
+            var statements = candidate.listProperties();
+            while (statements.hasNext()) {
+                var statement = statements.nextStatement();
+                if ("hasDateLastUpdated".equals(statement.getPredicate().getLocalName())
+                        && statement.getObject().isLiteral()) {
+                    return statement.getObject().asLiteral().getLexicalForm().trim();
+                }
+            }
+        }
+        return null;
     }
 
     /**

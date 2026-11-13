@@ -15,6 +15,7 @@ import org.filteredpush.bdq_workbench.model.Phase;
 import org.filteredpush.bdq_workbench.model.SingleRecordOutcomeMeasureSpec;
 import org.filteredpush.bdq_workbench.model.TestDefinition;
 import org.filteredpush.bdq_workbench.model.TestType;
+import org.filteredpush.bdq_workbench.rdf_policy.RdfPolicyResolverService;
 import org.junit.jupiter.api.Test;
 
 class DefaultTestBindingServiceTest {
@@ -102,6 +103,98 @@ class DefaultTestBindingServiceTest {
         assertThat(result.bindings()).hasSize(1);
         assertThat(result.bindings().get(0).implementationMethod()).isEqualTo("validate");
         assertThat(result.unresolved()).isEmpty();
+    }
+
+    @Test
+    void matchesCanonicalVersionIriToTheSameVersionInAnotherForm() throws Exception {
+        DefaultTestBindingService service = new DefaultTestBindingService();
+        DiscoveredImplementation canonical = implementation(
+                "https://rs.tdwg.org/bdqtest/terms/version/3cff4dc4-72e9-4abe-9bf3-8a30f1618432-2025-03-06", "validate");
+        DiscoveredImplementation otherVersion = implementation(
+                "https://rs.tdwg.org/bdqtest/terms/version/3cff4dc4-72e9-4abe-9bf3-8a30f1618432-2025-01-01", "post");
+
+        TestBindingResult result = service.bind(
+                List.of(new TestDefinition(
+                        "https://rs.tdwg.org/bdqtest/terms/3cff4dc4-72e9-4abe-9bf3-8a30f1618432-2025-03-06",
+                        "VALIDATION_EVENTTEMPORAL_NOTEMPTY", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of())),
+                List.of(canonical, otherVersion),
+                Map.of());
+
+        assertThat(result.bindings()).hasSize(1);
+        assertThat(result.bindings().get(0).implementationMethod()).isEqualTo("validate");
+        assertThat(result.reviews().get(0).diagnostics())
+                .contains("Matched @ProvidesVersion to the test's version 2025-03-06");
+    }
+
+    @Test
+    void matchesTheVersionOnTheTestsDateLastUpdated() throws Exception {
+        DefaultTestBindingService service = new DefaultTestBindingService();
+        DiscoveredImplementation behavioral = implementation(
+                "https://rs.tdwg.org/bdqtest/terms/version/3cff4dc4-72e9-4abe-9bf3-8a30f1618432-2023-09-17", "validate");
+        DiscoveredImplementation older = implementation(
+                "https://rs.tdwg.org/bdqtest/terms/3cff4dc4-72e9-4abe-9bf3-8a30f1618432/2023-06-01", "post");
+
+        TestBindingResult result = service.bind(
+                List.of(new TestDefinition(
+                        "https://rs.tdwg.org/bdqtest/terms/version/3cff4dc4-72e9-4abe-9bf3-8a30f1618432-2025-03-06",
+                        "VALIDATION_EVENTTEMPORAL_NOTEMPTY", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of(),
+                        Map.of(RdfPolicyResolverService.TEST_METADATA_DATE_LAST_UPDATED, "2023-09-17"))),
+                List.of(behavioral, older),
+                Map.of());
+
+        assertThat(result.bindings()).hasSize(1);
+        assertThat(result.bindings().get(0).implementationMethod()).isEqualTo("validate");
+        assertThat(result.reviews().get(0).diagnostics())
+                .contains("Matched @ProvidesVersion to the test's version on its DateLastUpdated, 2023-09-17");
+    }
+
+    @Test
+    void reportsTheCitedVersionWhenFallingBackToProvides() throws Exception {
+        DefaultTestBindingService service = new DefaultTestBindingService();
+        DiscoveredImplementation older = implementation(
+                "https://rs.tdwg.org/bdqtest/terms/3cff4dc4-72e9-4abe-9bf3-8a30f1618432/2023-06-01", "validate");
+
+        TestBindingResult result = service.bind(
+                List.of(new TestDefinition(
+                        "https://rs.tdwg.org/bdqtest/terms/3cff4dc4-72e9-4abe-9bf3-8a30f1618432-2025-03-06",
+                        "VALIDATION_EVENTTEMPORAL_NOTEMPTY", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of())),
+                List.of(older),
+                Map.of());
+
+        assertThat(result.bindings()).hasSize(1);
+        assertThat(result.reviews().get(0).diagnostics())
+                .contains("Matched by @Provides fallback after no exact @ProvidesVersion match")
+                .anyMatch(d -> d.contains("cites version 2023-06-01 of the test; the test's version is 2025-03-06"
+                        + " (its DateLastUpdated is not stated in the RDF)"));
+    }
+
+    @Test
+    void versionKeyReadsEveryVersionForm() {
+        String key = "3cff4dc4-72e9-4abe-9bf3-8a30f1618432|2023-09-17";
+        assertThat(DefaultTestBindingService.versionKey(
+                "https://rs.tdwg.org/bdqtest/terms/version/3cff4dc4-72e9-4abe-9bf3-8a30f1618432-2023-09-17")).isEqualTo(key);
+        assertThat(DefaultTestBindingService.versionKey(
+                "https://rs.tdwg.org/bdqtest/terms/3cff4dc4-72e9-4abe-9bf3-8a30f1618432-2023-09-17")).isEqualTo(key);
+        assertThat(DefaultTestBindingService.versionKey(
+                "https://rs.tdwg.org/bdq/terms/3cff4dc4-72e9-4abe-9bf3-8a30f1618432/2023-09-17")).isEqualTo(key);
+        assertThat(DefaultTestBindingService.versionKey("3CFF4DC4-72E9-4ABE-9BF3-8A30F1618432-2023-09-17")).isEqualTo(key);
+        assertThat(DefaultTestBindingService.versionKey(
+                "https://rs.tdwg.org/bdqtest/terms/3cff4dc4-72e9-4abe-9bf3-8a30f1618432")).isNull();
+        assertThat(DefaultTestBindingService.versionKey(null)).isNull();
+    }
+
+    private static DiscoveredImplementation implementation(String providedVersion, String method) throws Exception {
+        return new DiscoveredImplementation(
+                "3cff4dc4-72e9-4abe-9bf3-8a30f1618432",
+                providedVersion,
+                TestType.VALIDATION,
+                Phase.PRE_AMENDMENT,
+                Dummy.class.getName(),
+                method,
+                null,
+                List.of(),
+                new Dummy(),
+                Dummy.class.getMethod(method));
     }
 
     @Test

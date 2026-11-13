@@ -43,6 +43,7 @@ import org.filteredpush.bdq_workbench.model.ParameterRole;
 import org.filteredpush.bdq_workbench.model.ParameterizationCapability;
 import org.filteredpush.bdq_workbench.model.SingleRecordOutcomeMeasureSpec;
 import org.filteredpush.bdq_workbench.model.TestDefinition;
+import org.filteredpush.bdq_workbench.rdf_policy.RdfPolicyResolverService;
 import org.filteredpush.bdq_workbench.model.TestType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -92,8 +93,18 @@ import org.slf4j.LoggerFactory;
  */
 public class DefaultTestBindingService implements TestBindingService {
     private static final Logger LOG = LoggerFactory.getLogger(DefaultTestBindingService.class);
+    /** Prefix of the {@code byVersion} keys that are (UUID, date) pairs rather than IRIs. */
+    private static final String VERSION_KEY_PREFIX = "version-key:";
     private static final Pattern UUID_PATTERN = Pattern.compile(
             "([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})");
+    /**
+     * A test version reference ending in a UUID and a date, in any of the forms in use: the
+     * canonical rs.tdwg.org version IRI {@code https://rs.tdwg.org/bdqtest/terms/version/<uuid>-<date>},
+     * the SDS 2.3.2 form {@code .../terms/<uuid>-<date>}, the older {@code .../terms/<uuid>/<date>}
+     * (also under {@code /bdq/terms/}), and a bare {@code <uuid>-<date>}.
+     */
+    private static final Pattern VERSION_PATTERN = Pattern.compile(
+            "([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})[-/](\\d{4}-\\d{2}-\\d{2})/?$");
 
     /**
      * Binds each policy test to a discovered implementation without regard to which terms are
@@ -151,6 +162,14 @@ public class DefaultTestBindingService implements TestBindingService {
         Map<String, List<DiscoveredImplementation>> byVersion = discovered.stream()
                 .filter(d -> d.providedVersion() != null && !d.providedVersion().isBlank())
                 .collect(Collectors.groupingBy(d -> normalize(d.providedVersion())));
+        // Also indexed by (UUID, date), so that a version cited in any IRI form matches.
+        Map<String, List<DiscoveredImplementation>> byVersionKey = discovered.stream()
+                .filter(d -> versionKey(d.providedVersion()) != null)
+                .collect(Collectors.groupingBy(d -> versionKey(d.providedVersion())));
+        byVersion = new LinkedHashMap<>(byVersion);
+        for (Map.Entry<String, List<DiscoveredImplementation>> entry : byVersionKey.entrySet()) {
+            byVersion.putIfAbsent(VERSION_KEY_PREFIX + entry.getKey(), entry.getValue());
+        }
         Map<String, List<DiscoveredImplementation>> byMethodKey = indexByMethodKey(discovered);
 
         Map<String, List<String>> availableTermsByAlias = DarwinCoreTermResolver.indexAvailableTerms(availableTerms);
@@ -642,6 +661,9 @@ public class DefaultTestBindingService implements TestBindingService {
         String normalizedTestId = normalize(test.id());
         List<DiscoveredImplementation> direct = byVersion.get(normalizedTestId);
         if (direct == null || direct.isEmpty()) {
+            direct = lookupByVersionKey(test, byVersion, diagnostics);
+        }
+        if (direct == null || direct.isEmpty()) {
             direct = byProvided.get(normalizedTestId);
         }
         if (direct == null || direct.isEmpty()) {
@@ -650,6 +672,13 @@ public class DefaultTestBindingService implements TestBindingService {
                 direct = byProvided.get(providedFallbackKey);
                 if (direct != null && !direct.isEmpty()) {
                     diagnostics.add("Matched by @Provides fallback after no exact @ProvidesVersion match");
+                    for (DiscoveredImplementation candidate : direct) {
+                        String cited = versionDate(candidate.providedVersion());
+                        if (cited != null) {
+                            diagnostics.add(candidate.fullImplementationSignature() + " cites version " + cited
+                                    + " of the test; " + describeTestVersions(test));
+                        }
+                    }
                 }
             }
         }
@@ -1204,6 +1233,69 @@ public class DefaultTestBindingService implements TestBindingService {
      * @return the embedded UUID if present, otherwise {@code testId}, or {@code null} if
      *     {@code testId} is null or blank
      */
+    private static List<DiscoveredImplementation> lookupByVersionKey(
+            TestDefinition test,
+            Map<String, List<DiscoveredImplementation>> byVersion,
+            List<String> diagnostics) {
+        String testKey = versionKey(test.id());
+        if (testKey != null) {
+            List<DiscoveredImplementation> matched = byVersion.get(VERSION_KEY_PREFIX + testKey);
+            if (matched != null && !matched.isEmpty()) {
+                diagnostics.add("Matched @ProvidesVersion to the test's version " + versionDate(test.id()));
+                return matched;
+            }
+        }
+        String dateLastUpdated = dateLastUpdated(test);
+        Matcher uuid = UUID_PATTERN.matcher(test.id() == null ? "" : test.id());
+        if (dateLastUpdated != null && uuid.find()) {
+            List<DiscoveredImplementation> matched =
+                    byVersion.get(VERSION_KEY_PREFIX + uuid.group(1).toLowerCase() + "|" + dateLastUpdated);
+            if (matched != null && !matched.isEmpty()) {
+                diagnostics.add("Matched @ProvidesVersion to the test's version on its DateLastUpdated, " + dateLastUpdated);
+                return matched;
+            }
+        }
+        return List.of();
+    }
+
+    /**
+     * Describes the versions of a test that an implementation could cite, for diagnostics.
+     *
+     * @param test the policy test
+     * @return e.g. "the test's version is 2025-03-07, its DateLastUpdated 2024-08-19"
+     */
+    private static String describeTestVersions(TestDefinition test) {
+        String version = versionDate(test.id());
+        String dateLastUpdated = dateLastUpdated(test);
+        String text = version == null ? "the test's IRI names no version" : "the test's version is " + version;
+        return dateLastUpdated == null ? text + " (its DateLastUpdated is not stated in the RDF)"
+                : text + ", its DateLastUpdated " + dateLastUpdated;
+    }
+
+    private static String dateLastUpdated(TestDefinition test) {
+        String value = test.metadata().get(RdfPolicyResolverService.TEST_METADATA_DATE_LAST_UPDATED);
+        return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    /**
+     * Reduces a test version reference to {@code <uuid>|<date>} (UUID lower-cased).
+     *
+     * @param reference a version IRI or identifier in any of the forms of {@link #VERSION_PATTERN}
+     * @return the key, or null if the reference does not end in a UUID and a date
+     */
+    static String versionKey(String reference) {
+        if (reference == null) {
+            return null;
+        }
+        Matcher matcher = VERSION_PATTERN.matcher(reference.trim());
+        return matcher.find() ? matcher.group(1).toLowerCase() + "|" + matcher.group(2) : null;
+    }
+
+    private static String versionDate(String reference) {
+        String key = versionKey(reference);
+        return key == null ? null : key.substring(key.indexOf('|') + 1);
+    }
+
     private static String toProvidesKey(String testId) {
         if (testId == null || testId.isBlank()) {
             return null;

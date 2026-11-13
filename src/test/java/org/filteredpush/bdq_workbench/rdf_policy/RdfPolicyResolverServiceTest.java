@@ -312,7 +312,8 @@ class RdfPolicyResolverServiceTest {
                     rdfs:label "MULTIRECORD_MEASURE_QA_MINDEPTH_LESSTHAN_MAXDEPTH" ;
                     bdqffdq:hasExpectedResponse "COMPLETE if every VALIDATION_MINDEPTH_LESSTHAN_MAXDEPTH in the MultiRecord has Response.result=COMPLIANT or Response.status=INTERNAL_PREREQUISITES_NOT_MET, otherwise NOT_COMPLETE." ;
                     skos:note "For Quality Assurance, filter record set until this measure is COMPLETE." ;
-                    bdqffdq:hasDataQualityDimension <https://rs.tdwg.org/bdqdim/terms/Conformance> .
+                    bdqffdq:hasDataQualityDimension <https://rs.tdwg.org/bdqdim/terms/Conformance> ;
+                    bdqffdq:hasDateLastUpdated "2024-08-19"^^<http://www.w3.org/2001/XMLSchema#date> .
                 """, StandardCharsets.UTF_8);
 
         RdfPolicyResolverService service = new RdfPolicyResolverService(useCaseFile, List.of(definitions));
@@ -324,6 +325,7 @@ class RdfPolicyResolverServiceTest {
             assertThat(test.metadata()).containsEntry("note",
                     "For Quality Assurance, filter record set until this measure is COMPLETE.");
             assertThat(test.metadata()).containsEntry(RdfPolicyResolverService.TEST_METADATA_DIMENSION, "Conformance");
+            assertThat(test.metadata()).containsEntry(RdfPolicyResolverService.TEST_METADATA_DATE_LAST_UPDATED, "2024-08-19");
         });
     }
 
