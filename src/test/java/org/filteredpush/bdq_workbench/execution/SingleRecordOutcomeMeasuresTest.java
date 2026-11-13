@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.groups.Tuple.tuple;
 
 import java.lang.reflect.Method;
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -20,18 +21,18 @@ import org.filteredpush.bdq_workbench.model.Phase;
 import org.filteredpush.bdq_workbench.model.RecordDataset;
 import org.filteredpush.bdq_workbench.model.RecordGraph;
 import org.filteredpush.bdq_workbench.model.Response;
-import org.filteredpush.bdq_workbench.model.SingleRecordValidationMeasureSpec;
-import org.filteredpush.bdq_workbench.model.SingleRecordValidationMeasureSpec.Tally;
+import org.filteredpush.bdq_workbench.model.SingleRecordOutcomeMeasureSpec;
+import org.filteredpush.bdq_workbench.model.SingleRecordOutcomeMeasureSpec.Tally;
 import org.filteredpush.bdq_workbench.model.SourceCell;
 import org.filteredpush.bdq_workbench.model.TestType;
 import org.filteredpush.bdq_workbench.test_discovery.DiscoveredImplementation;
 import org.junit.jupiter.api.Test;
 
 /**
- * Tests the built-in SingleRecord measures counting each record's VALIDATION outcomes, run through
- * {@link ParallelPhaseExecutionService}.
+ * Tests the built-in SingleRecord measures counting each record's VALIDATION or AMENDMENT outcomes,
+ * run through {@link ParallelPhaseExecutionService}.
  */
-class SingleRecordValidationMeasuresTest {
+class SingleRecordOutcomeMeasuresTest {
 	private static final String EVENT_DATE_TEST = "urn:test:eventDate";
 	private static final String COUNTRY_TEST = "urn:test:countryCode";
 
@@ -80,11 +81,11 @@ class SingleRecordValidationMeasuresTest {
 	}
 
 	/**
-	 * A record on which no VALIDATION tests were attempted is INTERNAL_PREREQUISITES_NOT_MET, as
-	 * the specification requires.
+	 * A record on which no VALIDATION tests were run gets RUN_HAS_RESULT with result 0, as the
+	 * specification says.
 	 */
 	@Test
-	void reportsInternalPrerequisitesNotMetWhenNoValidationsWereAttempted() throws Exception {
+	void reportsZeroWhenNoValidationsWereRun() throws Exception {
 		ParallelPhaseExecutionService service = new ParallelPhaseExecutionService(1, new ReflectionExecutionAdapter());
 		RecordDataset dataset = new RecordDataset(List.of(new CanonicalRecord("r1", Map.of("dwc:eventDate", "ok"))));
 
@@ -95,10 +96,69 @@ class SingleRecordValidationMeasuresTest {
 
 		assertThat(responses)
 				.extracting(Response::phase, Response::recordId, Response::status, Response::responseStatus,
-						Response::responseResult)
+						Response::responseResult, Response::comment)
 				.containsExactly(
-						tuple(Phase.PRE_AMENDMENT, "r1", OutcomeStatus.FAILED, "INTERNAL_PREREQUISITES_NOT_MET", null),
-						tuple(Phase.POST_AMENDMENT, "r1", OutcomeStatus.FAILED, "INTERNAL_PREREQUISITES_NOT_MET", null));
+						tuple(Phase.PRE_AMENDMENT, "r1", OutcomeStatus.PASSED, "RUN_HAS_RESULT", "0",
+								"No VALIDATION Tests were run on this record"),
+						tuple(Phase.POST_AMENDMENT, "r1", OutcomeStatus.PASSED, "RUN_HAS_RESULT", "0",
+								"No VALIDATION Tests were run on this record"));
+	}
+
+	/**
+	 * MEASURE_AMENDMENTS_PROPOSED is computed in the amendment phase only, counting each record's
+	 * distinct AMENDMENT tests with Response.status AMENDED or FILLED_IN; 0 when none proposed a
+	 * change or none were run, and ERROR when one of the record's amendments errored.
+	 */
+	@Test
+	void countsProposedAmendmentsInTheAmendmentPhase() throws Exception {
+		ParallelPhaseExecutionService service = new ParallelPhaseExecutionService(1, (subject, binding, implementation) -> {
+			String value = subject.terms().getOrDefault(binding.testId(), "");
+			return switch (value) {
+				case "amend" -> response(subject.id(), binding, OutcomeStatus.AMENDED, "AMENDED",
+						Map.of("dwc:x", "new"));
+				case "fill" -> response(subject.id(), binding, OutcomeStatus.AMENDED, "FILLED_IN",
+						Map.of("dwc:x", "new"));
+				case "boom" -> response(subject.id(), binding, OutcomeStatus.ERROR, "ERROR", Map.of());
+				default -> response(subject.id(), binding, OutcomeStatus.PASSED, "NOT_AMENDED", Map.of());
+			};
+		}, false);
+		RecordDataset dataset = new RecordDataset(List.of(
+				new CanonicalRecord("r1", Map.of("a1", "amend", "a2", "fill")),
+				new CanonicalRecord("r2", Map.of("a1", "keep", "a2", "keep")),
+				new CanonicalRecord("r3", Map.of("a1", "amend", "a2", "boom"))));
+
+		List<Response> responses = service.execute(
+				dataset,
+				List.of(
+						amendmentBinding("a1"),
+						amendmentBinding("a2"),
+						measureBinding("urn:test:amendmentsProposed", Tally.AMENDMENTS_PROPOSED)),
+				List.of(discoveredAmendment("a1"), discoveredAmendment("a2")));
+
+		assertThat(responses).filteredOn(response -> response.testId().equals("urn:test:amendmentsProposed"))
+				.extracting(Response::phase, Response::recordId, Response::responseStatus, Response::responseResult)
+				.containsExactly(
+						tuple(Phase.AMENDMENT, "r1", "RUN_HAS_RESULT", "2"),
+						tuple(Phase.AMENDMENT, "r2", "RUN_HAS_RESULT", "0"),
+						tuple(Phase.AMENDMENT, "r3", "ERROR", null));
+		assertThat(measureResponses(responses, Phase.AMENDMENT, "urn:test:amendmentsProposed").get(0).comment())
+				.isEqualTo("2 of 2 AMENDMENT Tests had Response.status=AMENDED or FILLED_IN");
+	}
+
+	/** MEASURE_AMENDMENTS_PROPOSED on a record with no AMENDMENT tests run is 0. */
+	@Test
+	void reportsZeroWhenNoAmendmentsWereRun() throws Exception {
+		ParallelPhaseExecutionService service = new ParallelPhaseExecutionService(1, new ReflectionExecutionAdapter());
+		RecordDataset dataset = new RecordDataset(List.of(new CanonicalRecord("r1", Map.of("dwc:eventDate", "ok"))));
+
+		List<Response> responses = service.execute(
+				dataset,
+				List.of(measureBinding("urn:test:amendmentsProposed", Tally.AMENDMENTS_PROPOSED)),
+				List.of());
+
+		assertThat(responses)
+				.extracting(Response::phase, Response::responseStatus, Response::responseResult, Response::comment)
+				.containsExactly(tuple(Phase.AMENDMENT, "RUN_HAS_RESULT", "0", "No AMENDMENT Tests were run on this record"));
 	}
 
 	/**
@@ -133,23 +193,28 @@ class SingleRecordValidationMeasuresTest {
 	 */
 	@Test
 	void recognizesRatifiedMeasuresByIdOrLabel() {
-		assertThat(SingleRecordValidationMeasureSpec.from(new org.filteredpush.bdq_workbench.model.TestDefinition(
+		assertThat(SingleRecordOutcomeMeasureSpec.from(new org.filteredpush.bdq_workbench.model.TestDefinition(
 				"https://rs.tdwg.org/bdqtest/terms/453844ae-9df4-439f-8e24-c52498eca84a-2024-09-24",
 				null, TestType.MEASURE, Phase.PRE_AMENDMENT, Map.of())))
-				.map(SingleRecordValidationMeasureSpec::tally)
+				.map(SingleRecordOutcomeMeasureSpec::tally)
 				.contains(Tally.NOT_COMPLIANT);
-		assertThat(SingleRecordValidationMeasureSpec.from(new org.filteredpush.bdq_workbench.model.TestDefinition(
+		assertThat(SingleRecordOutcomeMeasureSpec.from(new org.filteredpush.bdq_workbench.model.TestDefinition(
 				"urn:local:measure", "MEASURE_VALIDATIONTESTS_PREREQUISITESNOTMET",
 				TestType.MEASURE, Phase.PRE_AMENDMENT, Map.of())))
-				.map(SingleRecordValidationMeasureSpec::tally)
+				.map(SingleRecordOutcomeMeasureSpec::tally)
 				.contains(Tally.PREREQUISITES_NOT_MET);
-		assertThat(SingleRecordValidationMeasureSpec.from(new org.filteredpush.bdq_workbench.model.TestDefinition(
+		assertThat(SingleRecordOutcomeMeasureSpec.from(new org.filteredpush.bdq_workbench.model.TestDefinition(
 				"https://rs.tdwg.org/bdqtest/terms/45fb49eb-4a1b-4b49-876f-15d5034dfc73-2024-09-25",
 				"MEASURE_VALIDATIONTESTS_COMPLIANT", TestType.VALIDATION, Phase.PRE_AMENDMENT, Map.of())))
 				.isEmpty();
+		assertThat(SingleRecordOutcomeMeasureSpec.from(new org.filteredpush.bdq_workbench.model.TestDefinition(
+				"https://rs.tdwg.org/bdqtest/terms/03049fe5-a575-404f-b564-ae63f5a1cf8b-2026-11-12",
+				null, TestType.MEASURE, Phase.PRE_AMENDMENT, Map.of())))
+				.map(SingleRecordOutcomeMeasureSpec::tally)
+				.contains(Tally.AMENDMENTS_PROPOSED);
 		ImplementationBinding binding = measureBinding("urn:test:compliant", Tally.COMPLIANT);
-		assertThat(SingleRecordValidationMeasureSpec.from(binding))
-				.map(SingleRecordValidationMeasureSpec::tally)
+		assertThat(SingleRecordOutcomeMeasureSpec.from(binding))
+				.map(SingleRecordOutcomeMeasureSpec::tally)
 				.contains(Tally.COMPLIANT);
 	}
 
@@ -195,16 +260,37 @@ class SingleRecordValidationMeasuresTest {
 		return new ImplementationBinding(
 				testId,
 				TestType.MEASURE,
-				SingleRecordValidationMeasureSpec.IMPLEMENTATION_CLASS,
-				SingleRecordValidationMeasureSpec.IMPLEMENTATION_METHOD,
-				Phase.PRE_AMENDMENT,
-				new SingleRecordValidationMeasureSpec(tally).asBindingParameters(tally.testLabel()),
+				SingleRecordOutcomeMeasureSpec.IMPLEMENTATION_CLASS,
+				SingleRecordOutcomeMeasureSpec.IMPLEMENTATION_METHOD,
+				tally.phase(Phase.PRE_AMENDMENT),
+				new SingleRecordOutcomeMeasureSpec(tally).asBindingParameters(tally.testLabel()),
 				BindingStatus.BOUND,
 				ParameterizationCapability.DEFAULT_ONLY,
-				"built-in single-record validation measure",
+				"built-in single-record outcome measure",
 				true,
 				List.of(),
 				List.of());
+	}
+
+	private static ImplementationBinding amendmentBinding(String testId) {
+		MethodParameter parameter = new MethodParameter(0, "p0", ParameterRole.ACTED_UPON, testId, String.class.getName(), true);
+		return new ImplementationBinding(testId, TestType.AMENDMENT, AmendImpl.class.getName(), "amend", Phase.AMENDMENT,
+				Map.of(), BindingStatus.BOUND, ParameterizationCapability.DEFAULT_ONLY, "test", true,
+				List.of(new BoundMethodParameter(parameter, testId, null, true, "Mapped")), List.of());
+	}
+
+	private static DiscoveredImplementation discoveredAmendment(String testId) throws NoSuchMethodException {
+		return new DiscoveredImplementation(testId, null, TestType.AMENDMENT, Phase.AMENDMENT, AmendImpl.class.getName(),
+				"amend", null,
+				List.of(new MethodParameter(0, "p0", ParameterRole.ACTED_UPON, testId, String.class.getName(), true)),
+				new AmendImpl(), AmendImpl.class.getMethod("amend", String.class));
+	}
+
+	private static Response response(String recordId, ImplementationBinding binding, OutcomeStatus status,
+			String responseStatus, Map<String, String> amendments) {
+		return new Response(recordId, binding.testId(), binding.testType(), binding.implementationClass(),
+				binding.implementationMethod(), binding.phase(), binding.parameters(), status, responseStatus, null,
+				"", "", amendments, Instant.now(), Instant.now());
 	}
 
 	private static CanonicalRecord provenancedRecord(String id, String table, Map<String, String> terms) {
@@ -228,6 +314,17 @@ class SingleRecordValidationMeasuresTest {
 				return new StubDQResponse("INTERNAL_PREREQUISITES_NOT_MET", null, "empty", Map.of());
 			}
 			return new StubDQResponse("RUN_HAS_RESULT", "ok".equals(value) ? "COMPLIANT" : "NOT_COMPLIANT", value, Map.of());
+		}
+	}
+
+	/** Stand-in amendment class; the amendment tests' execution adapter never invokes it. */
+	public static class AmendImpl {
+		/**
+		 * @param value ignored
+		 * @return {@code null}
+		 */
+		public Object amend(String value) {
+			return null;
 		}
 	}
 }

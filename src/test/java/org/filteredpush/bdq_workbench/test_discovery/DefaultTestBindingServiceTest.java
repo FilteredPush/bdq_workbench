@@ -12,7 +12,7 @@ import org.filteredpush.bdq_workbench.model.MethodParameter;
 import org.filteredpush.bdq_workbench.model.ParameterRole;
 import org.filteredpush.bdq_workbench.model.ParameterizationCapability;
 import org.filteredpush.bdq_workbench.model.Phase;
-import org.filteredpush.bdq_workbench.model.SingleRecordValidationMeasureSpec;
+import org.filteredpush.bdq_workbench.model.SingleRecordOutcomeMeasureSpec;
 import org.filteredpush.bdq_workbench.model.TestDefinition;
 import org.filteredpush.bdq_workbench.model.TestType;
 import org.junit.jupiter.api.Test;
@@ -290,7 +290,7 @@ class DefaultTestBindingServiceTest {
     }
 
     @Test
-    void bindsSingleRecordValidationMeasuresAsBuiltInsWithoutDiscoveredImplementations() {
+    void bindsSingleRecordOutcomeMeasuresAsBuiltInsWithoutDiscoveredImplementations() {
         DefaultTestBindingService service = new DefaultTestBindingService();
         TestDefinition compliant = new TestDefinition(
                 "https://rs.tdwg.org/bdqtest/terms/45fb49eb-4a1b-4b49-876f-15d5034dfc73-2024-09-25",
@@ -304,21 +304,31 @@ class DefaultTestBindingServiceTest {
                 TestType.MEASURE,
                 Phase.PRE_AMENDMENT,
                 Map.of());
+        TestDefinition amendmentsProposed = new TestDefinition(
+                "https://rs.tdwg.org/bdqtest/terms/03049fe5-a575-404f-b564-ae63f5a1cf8b-2026-11-12",
+                "MEASURE_AMENDMENTS_PROPOSED",
+                TestType.MEASURE,
+                Phase.PRE_AMENDMENT,
+                Map.of());
 
-        TestBindingResult result = service.bind(List.of(compliant, prerequisites), List.of(), Map.of(), Set.of());
+        TestBindingResult result = service.bind(List.of(compliant, prerequisites, amendmentsProposed), List.of(), Map.of(),
+                Set.of());
 
         assertThat(result.unresolved()).isEmpty();
         assertThat(result.bindings())
                 .extracting(
                         binding -> binding.implementationClass(),
                         binding -> binding.bindingStatus(),
-                        binding -> binding.parameters().get(SingleRecordValidationMeasureSpec.TALLY_KEY))
+                        binding -> binding.parameters().get(SingleRecordOutcomeMeasureSpec.TALLY_KEY),
+                        binding -> binding.phase())
                 .containsExactly(
-                        org.assertj.core.groups.Tuple.tuple(SingleRecordValidationMeasureSpec.IMPLEMENTATION_CLASS,
-                                BindingStatus.BOUND, "COMPLIANT"),
-                        org.assertj.core.groups.Tuple.tuple(SingleRecordValidationMeasureSpec.IMPLEMENTATION_CLASS,
-                                BindingStatus.BOUND, "PREREQUISITES_NOT_MET"));
-        assertThat(result.bindings()).allMatch(SingleRecordValidationMeasureSpec::isBuiltIn);
+                        org.assertj.core.groups.Tuple.tuple(SingleRecordOutcomeMeasureSpec.IMPLEMENTATION_CLASS,
+                                BindingStatus.BOUND, "COMPLIANT", Phase.PRE_AMENDMENT),
+                        org.assertj.core.groups.Tuple.tuple(SingleRecordOutcomeMeasureSpec.IMPLEMENTATION_CLASS,
+                                BindingStatus.BOUND, "PREREQUISITES_NOT_MET", Phase.PRE_AMENDMENT),
+                        org.assertj.core.groups.Tuple.tuple(SingleRecordOutcomeMeasureSpec.IMPLEMENTATION_CLASS,
+                                BindingStatus.BOUND, "AMENDMENTS_PROPOSED", Phase.AMENDMENT));
+        assertThat(result.bindings()).allMatch(SingleRecordOutcomeMeasureSpec::isBuiltIn);
         assertThat(result.reviews()).allSatisfy(review ->
                 assertThat(review.implementationStatus()).isEqualTo(ImplementationStatus.FOUND));
     }

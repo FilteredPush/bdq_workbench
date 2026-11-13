@@ -1,7 +1,7 @@
-/** SingleRecordValidationMeasureSpec.java
+/** SingleRecordOutcomeMeasureSpec.java
  *
  * Identifies and represents the built-in SingleRecord MEASURE tests that count, for each record,
- * how many VALIDATION tests produced a given response.
+ * how many VALIDATION or AMENDMENT tests produced a given response.
  *
  * Copyright 2026 President and Fellows of Harvard College
  *
@@ -26,58 +26,75 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * A built-in SingleRecord measure over the VALIDATION responses of one record.
+ * A built-in SingleRecord measure over the VALIDATION or AMENDMENT responses of one record.
  *
- * <p>The ratified BDQ tests include three measures whose information element is
- * {@code bdqval:AllValidationTestsRunOnSingleRecord}: MEASURE_VALIDATIONTESTS_COMPLIANT,
- * MEASURE_VALIDATIONTESTS_NOTCOMPLIANT and MEASURE_VALIDATIONTESTS_PREREQUISITESNOTMET. Each
- * reports, for a single record, the number of distinct VALIDATION tests whose response matched
- * one outcome, and is INTERNAL_PREREQUISITES_NOT_MET when no VALIDATION tests were attempted on
- * the record. No implementation library can provide them, since their input is the other tests'
- * responses rather than record terms, so the workbench computes them itself once a phase's
- * validations have run.
+ * <p>The BDQ tests include four SingleRecord measures whose ActedUpon information element is the
+ * set of responses of other tests run on the same record:
+ * <ul>
+ *   <li>MEASURE_VALIDATIONTESTS_COMPLIANT, MEASURE_VALIDATIONTESTS_NOTCOMPLIANT and
+ *       MEASURE_VALIDATIONTESTS_PREREQUISITESNOTMET, acting upon
+ *       {@code bdqval:AllValidationTestsRunOnSingleRecord}, the ValidationResponses of the
+ *       VALIDATION tests run on the record;
+ *   <li>MEASURE_AMENDMENTS_PROPOSED, acting upon {@code bdqval:AllAmendmentTestsRunOnSingleRecord},
+ *       the AmendmentResponses of the AMENDMENT tests run on the record.
+ * </ul>
+ * Each reports RUN_HAS_RESULT with the number of distinct tests of its {@link Tally#countedType()}
+ * run on the record whose response has one outcome (see {@link #counts(Response)}); if no such
+ * tests were run on the record, the result is 0.
+ *
+ * <p>An implementation of these measures takes, as its input, the set of responses that the
+ * implementation framework has produced for one record, and returns a response like any other
+ * test. Part of the responsibility for implementing them therefore lies with the framework, which
+ * must present that set of responses for a single record. The workbench is such a framework, and
+ * computes these measures itself once the counted tests of a phase have run: the VALIDATION
+ * measures in the pre- and post-amendment phases, and the AMENDMENT measure in the amendment
+ * phase (see {@link Tally#phase(Phase)}).
  *
  * <p>A {@link TestDefinition} is recognized by the test's UUID (so any version of the test
  * matches) or, failing that, by its label (see {@link #from(TestDefinition)}). A bound measure
  * carries its {@link Tally} as a binding parameter, from which {@link #from(ImplementationBinding)}
  * recovers the spec at execution time.
  *
- * @param tally which validation outcome this measure counts
+ * @param tally which outcome of which type of test this measure counts
  */
-public record SingleRecordValidationMeasureSpec(Tally tally) {
+public record SingleRecordOutcomeMeasureSpec(Tally tally) {
 	/** Fully-qualified class name used as the synthetic implementation class for these measures. */
-	public static final String IMPLEMENTATION_CLASS = SingleRecordValidationMeasureSpec.class.getName();
+	public static final String IMPLEMENTATION_CLASS = SingleRecordOutcomeMeasureSpec.class.getName();
 	/** Synthetic implementation method name recorded on bindings for these measures. */
-	public static final String IMPLEMENTATION_METHOD = "countValidationResponses";
+	public static final String IMPLEMENTATION_METHOD = "countResponses";
 	/** Binding parameter key holding the {@link Tally} name. */
 	public static final String TALLY_KEY = "_builtin.singleRecordMeasure.tally";
 	/** Binding parameter key holding the measure's own label. */
 	public static final String MEASURE_LABEL_KEY = "_builtin.singleRecordMeasure.label";
 
-	/** Response status of a validation that could not run because an internal prerequisite was not met. */
+	/** Response status of a test that could not run because an internal prerequisite was not met. */
 	private static final String INTERNAL_PREREQUISITES_NOT_MET = "INTERNAL_PREREQUISITES_NOT_MET";
-	/** Response status of a validation that could not run because an external prerequisite was not met. */
+	/** Response status of a test that could not run because an external prerequisite was not met. */
 	private static final String EXTERNAL_PREREQUISITES_NOT_MET = "EXTERNAL_PREREQUISITES_NOT_MET";
+	/** Response status of an amendment that proposed a change to a value. */
+	private static final String AMENDED = "AMENDED";
+	/** Response status of an amendment that proposed a value for an empty term. */
+	private static final String FILLED_IN = "FILLED_IN";
 
 	/**
 	 * Canonical constructor.
 	 *
 	 * @throws IllegalArgumentException if {@code tally} is null
 	 */
-	public SingleRecordValidationMeasureSpec {
+	public SingleRecordOutcomeMeasureSpec {
 		if (tally == null) {
 			throw new IllegalArgumentException("tally is required");
 		}
 	}
 
 	/**
-	 * Recognizes a test definition as one of the built-in single-record validation measures.
+	 * Recognizes a test definition as one of the built-in single-record outcome measures.
 	 *
 	 * @param test the test definition to inspect, possibly null
 	 * @return the spec, or {@link Optional#empty()} if {@code test} is null, not a MEASURE, or
 	 *     neither its ID nor its label names one of the {@link Tally} measures
 	 */
-	public static Optional<SingleRecordValidationMeasureSpec> from(TestDefinition test) {
+	public static Optional<SingleRecordOutcomeMeasureSpec> from(TestDefinition test) {
 		if (test == null || test.type() != TestType.MEASURE) {
 			return Optional.empty();
 		}
@@ -85,25 +102,25 @@ public record SingleRecordValidationMeasureSpec(Tally tally) {
 		String label = test.label() == null ? "" : test.label().trim();
 		for (Tally tally : Tally.values()) {
 			if (id.contains(tally.testUuid()) || tally.testLabel().equals(label)) {
-				return Optional.of(new SingleRecordValidationMeasureSpec(tally));
+				return Optional.of(new SingleRecordOutcomeMeasureSpec(tally));
 			}
 		}
 		return Optional.empty();
 	}
 
 	/**
-	 * Recovers the spec recorded on a binding by {@link #asBindingParameters()}.
+	 * Recovers the spec recorded on a binding by {@link #asBindingParameters(String)}.
 	 *
 	 * @param binding the binding to inspect, possibly null
 	 * @return the spec, or {@link Optional#empty()} if {@code binding} is not a built-in
-	 *     single-record validation measure binding
+	 *     single-record outcome measure binding
 	 */
-	public static Optional<SingleRecordValidationMeasureSpec> from(ImplementationBinding binding) {
+	public static Optional<SingleRecordOutcomeMeasureSpec> from(ImplementationBinding binding) {
 		if (!isBuiltIn(binding)) {
 			return Optional.empty();
 		}
 		try {
-			return Optional.of(new SingleRecordValidationMeasureSpec(
+			return Optional.of(new SingleRecordOutcomeMeasureSpec(
 					Tally.valueOf(binding.parameters().get(TALLY_KEY))));
 		} catch (IllegalArgumentException e) {
 			return Optional.empty();
@@ -145,14 +162,14 @@ public record SingleRecordValidationMeasureSpec(Tally tally) {
 	 * @return a one-line description
 	 */
 	public String description() {
-		return "Built-in SingleRecord measure counting, for each record, the distinct VALIDATION tests with "
-				+ tally.criterion();
+		return "Built-in SingleRecord measure counting, for each record, the distinct " + tally.countedType()
+				+ " tests run on the record that have " + tally.criterion();
 	}
 
 	/**
-	 * Checks whether one validation response counts toward this measure.
+	 * Checks whether one response of a counted test counts toward this measure.
 	 *
-	 * @param response a VALIDATION response for the record, possibly null
+	 * @param response a response of a {@link Tally#countedType()} test for the record, possibly null
 	 * @return {@code true} if the response has the outcome this measure counts
 	 */
 	public boolean counts(Response response) {
@@ -164,24 +181,28 @@ public record SingleRecordValidationMeasureSpec(Tally tally) {
 			case NOT_COMPLIANT -> "NOT_COMPLIANT".equals(response.responseResult());
 			case PREREQUISITES_NOT_MET -> INTERNAL_PREREQUISITES_NOT_MET.equals(response.responseStatus())
 					|| EXTERNAL_PREREQUISITES_NOT_MET.equals(response.responseStatus());
+			case AMENDMENTS_PROPOSED -> AMENDED.equals(response.responseStatus())
+					|| FILLED_IN.equals(response.responseStatus());
 		};
 	}
 
 	/**
-	 * The validation outcome each built-in single-record measure counts, with the identity of the
-	 * ratified test it implements.
+	 * The outcome each built-in single-record measure counts, with the identity of the BDQ test it
+	 * implements and the type of test whose responses it counts.
 	 */
 	public enum Tally {
 		/** MEASURE_VALIDATIONTESTS_COMPLIANT: validations with {@code Response.result=COMPLIANT}. */
 		COMPLIANT(
 				"45fb49eb-4a1b-4b49-876f-15d5034dfc73",
 				"MEASURE_VALIDATIONTESTS_COMPLIANT",
-				"Response.result=COMPLIANT"),
+				"Response.result=COMPLIANT",
+				TestType.VALIDATION),
 		/** MEASURE_VALIDATIONTESTS_NOTCOMPLIANT: validations with {@code Response.result=NOT_COMPLIANT}. */
 		NOT_COMPLIANT(
 				"453844ae-9df4-439f-8e24-c52498eca84a",
 				"MEASURE_VALIDATIONTESTS_NOTCOMPLIANT",
-				"Response.result=NOT_COMPLIANT"),
+				"Response.result=NOT_COMPLIANT",
+				TestType.VALIDATION),
 		/**
 		 * MEASURE_VALIDATIONTESTS_PREREQUISITESNOTMET: validations with
 		 * {@code Response.status} INTERNAL_PREREQUISITES_NOT_MET or EXTERNAL_PREREQUISITES_NOT_MET.
@@ -189,32 +210,42 @@ public record SingleRecordValidationMeasureSpec(Tally tally) {
 		PREREQUISITES_NOT_MET(
 				"49a94636-a562-4e6b-803c-665c80628a3d",
 				"MEASURE_VALIDATIONTESTS_PREREQUISITESNOTMET",
-				"Response.status=INTERNAL_PREREQUISITES_NOT_MET or EXTERNAL_PREREQUISITES_NOT_MET");
+				"Response.status=INTERNAL_PREREQUISITES_NOT_MET or EXTERNAL_PREREQUISITES_NOT_MET",
+				TestType.VALIDATION),
+		/** MEASURE_AMENDMENTS_PROPOSED: amendments with {@code Response.status} AMENDED or FILLED_IN. */
+		AMENDMENTS_PROPOSED(
+				"03049fe5-a575-404f-b564-ae63f5a1cf8b",
+				"MEASURE_AMENDMENTS_PROPOSED",
+				"Response.status=AMENDED or FILLED_IN",
+				TestType.AMENDMENT);
 
 		private final String testUuid;
 		private final String testLabel;
 		private final String criterion;
+		private final TestType countedType;
 
 		/**
-		 * @param testUuid the version-independent UUID of the ratified test
-		 * @param testLabel the ratified test's label
+		 * @param testUuid the version-independent UUID of the BDQ test
+		 * @param testLabel the BDQ test's label
 		 * @param criterion the counted outcome, as the specification states it
+		 * @param countedType the type of test whose responses are counted
 		 */
-		Tally(String testUuid, String testLabel, String criterion) {
+		Tally(String testUuid, String testLabel, String criterion, TestType countedType) {
 			this.testUuid = testUuid;
 			this.testLabel = testLabel;
 			this.criterion = criterion;
+			this.countedType = countedType;
 		}
 
 		/**
-		 * @return the version-independent UUID of the ratified test, lower case
+		 * @return the version-independent UUID of the BDQ test, lower case
 		 */
 		public String testUuid() {
 			return testUuid;
 		}
 
 		/**
-		 * @return the ratified test's label
+		 * @return the BDQ test's label
 		 */
 		public String testLabel() {
 			return testLabel;
@@ -225,6 +256,25 @@ public record SingleRecordValidationMeasureSpec(Tally tally) {
 		 */
 		public String criterion() {
 			return criterion;
+		}
+
+		/**
+		 * @return the type of test whose responses this measure counts: VALIDATION or AMENDMENT
+		 */
+		public TestType countedType() {
+			return countedType;
+		}
+
+		/**
+		 * The phase in which the measure is computed: the amendment phase for a measure counting
+		 * AMENDMENT responses, which only that phase produces; otherwise the test's own phase
+		 * (pre-amendment, and again post-amendment).
+		 *
+		 * @param testPhase the phase of the measure's test definition
+		 * @return the phase to bind the measure to
+		 */
+		public Phase phase(Phase testPhase) {
+			return countedType == TestType.AMENDMENT ? Phase.AMENDMENT : testPhase;
 		}
 	}
 }

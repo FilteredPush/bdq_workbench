@@ -232,16 +232,21 @@ understanding how the stages connect — read its class Javadoc first. The pipel
    pairing) maps each amendment key onto the record's own term via
    `DarwinCoreTermResolver.recordTermFor`; `Response.amendments()` keeps the implementation's keys.
    Built-in multi-record measures count *records*, not evaluations: a record's derived rollup stands
-   for its per-row evaluations, so an expanded test cannot exceed 100% of the records. The three
-   SingleRecord measures over `bdqval:AllValidationTestsRunOnSingleRecord`
-   (MEASURE_VALIDATIONTESTS_COMPLIANT, _NOTCOMPLIANT, _PREREQUISITESNOTMET) are also built in, since
-   no implementation library can supply them: `SingleRecordValidationMeasureSpec` recognizes them by
-   test UUID (any version) or label and binds them to a synthetic handle, and
-   `SingleRecordValidationMeasures` computes one response per record after a phase's direct bindings
-   (before the multi-record measures), counting distinct VALIDATION tests by their record-level
-   response (the rollup for an expanded test), with INTERNAL_PREREQUISITES_NOT_MET for a record on
-   which no validation was attempted and an ERROR response for a record on which any validation
-   errored or was unable to run.
+   for its per-row evaluations, so an expanded test cannot exceed 100% of the records. The four
+   SingleRecord measures over other tests' responses on the same record
+   (MEASURE_VALIDATIONTESTS_COMPLIANT, _NOTCOMPLIANT, _PREREQUISITESNOTMET, ActedUpon
+   `bdqval:AllValidationTestsRunOnSingleRecord`; MEASURE_AMENDMENTS_PROPOSED, ActedUpon
+   `bdqval:AllAmendmentTestsRunOnSingleRecord`) are also built in: an implementation of them takes
+   the set of responses for one record, and presenting that set is the implementation framework's
+   part, which the workbench does itself. `SingleRecordOutcomeMeasureSpec` recognizes them by test
+   UUID (any version) or label and binds them to a synthetic handle, the amendment measure in the
+   amendment phase (the only phase that produces AMENDMENT responses), the others in the pre- and
+   post-amendment phases; `SingleRecordOutcomeMeasures` computes one response per record after a
+   phase's direct bindings (before the multi-record measures), counting distinct VALIDATION (or
+   AMENDMENT) tests by their record-level response (the rollup for an expanded test): RUN_HAS_RESULT
+   with the count, 0 for a record on which no such tests were run, as the specification says, and,
+   beyond the specification, an ERROR response for a record on which any counted test errored or
+   was unable to run.
 
    **Scheduling and resilience** (README, "Execution scheduling and resilience"). Group
    invocations do not go straight to a thread pool: `ResourceLaneScheduler` (one per `execute`

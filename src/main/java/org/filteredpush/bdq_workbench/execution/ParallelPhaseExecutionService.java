@@ -36,7 +36,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import org.filteredpush.bdq_workbench.model.BoundMethodParameter;
 import org.filteredpush.bdq_workbench.model.BuiltInMeasureSpec;
-import org.filteredpush.bdq_workbench.model.SingleRecordValidationMeasureSpec;
+import org.filteredpush.bdq_workbench.model.SingleRecordOutcomeMeasureSpec;
 import org.filteredpush.bdq_workbench.model.CanonicalRecord;
 import org.filteredpush.bdq_workbench.model.EvaluationSubject;
 import org.filteredpush.bdq_workbench.model.ImplementationBinding;
@@ -108,10 +108,13 @@ import org.slf4j.LoggerFactory;
  * or otherwise); instead {@link #synthesizeBuiltInMeasure} computes their result directly from the
  * other responses already produced in the same phase, once their target test's direct bindings
  * have also run in that phase. Likewise, bindings identified by
- * {@link SingleRecordValidationMeasureSpec#isBuiltIn} (the SingleRecord measures counting each
- * record's COMPLIANT, NOT_COMPLIANT and prerequisites-not-met validations) are computed by
- * {@link SingleRecordValidationMeasures} from the phase's VALIDATION responses, one response per
- * record, after every direct binding in the phase has run and before the multi-record measures.
+ * {@link SingleRecordOutcomeMeasureSpec#isBuiltIn} (the SingleRecord measures counting each
+ * record's COMPLIANT, NOT_COMPLIANT and prerequisites-not-met validations, and its proposed
+ * amendments) are computed by {@link SingleRecordOutcomeMeasures} from the phase's VALIDATION or
+ * AMENDMENT responses, one response per record, after every direct binding in the phase has run
+ * and before the multi-record measures. The amendment-counting measure is bound to the amendment
+ * phase, the only phase that produces AMENDMENT responses; the others to the pre- and
+ * post-amendment phases.
  *
  * <p>Execution progress is reported via the configured {@link ExecutionProgressListener}:
  * {@link ExecutionProgressListener#onTaskStarted}/{@link ExecutionProgressListener#onTaskFinished}
@@ -385,7 +388,7 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
      * per group to a fresh fixed-size thread pool, then fans each group's resulting response out to
      * every record in the group. For the AMENDMENT phase, bindings are processed one at a time (see
      * the class Javadoc); for PRE_AMENDMENT/POST_AMENDMENT, every binding's groups are submitted
-     * together. Then computes each record's single-record validation measures, and finally
+     * together. Then computes each record's single-record outcome measures, and finally
      * synthesizes responses for any built-in multi-record measure bindings whose target test
      * also ran directly in this phase.
      *
@@ -412,15 +415,15 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
         throwIfCancellationRequested("before phase " + phase);
         List<ImplementationBinding> phaseBindings = bindings.stream()
                 .filter(binding -> !BuiltInMeasureSpec.isBuiltIn(binding))
-                .filter(binding -> !SingleRecordValidationMeasureSpec.isBuiltIn(binding))
+                .filter(binding -> !SingleRecordOutcomeMeasureSpec.isBuiltIn(binding))
                 .filter(ImplementationBinding::isRunnable)
                 .toList();
-        List<ImplementationBinding> singleRecordMeasures = phase == Phase.AMENDMENT
-                ? List.of()
-                : bindings.stream()
-                        .filter(SingleRecordValidationMeasureSpec::isBuiltIn)
-                        .filter(ImplementationBinding::isRunnable)
-                        .toList();
+        // Routed to their phase by bindingsForPhase: the amendment-counting measure is bound to the
+        // amendment phase, the validation-counting measures to the pre- (and post-) amendment phase.
+        List<ImplementationBinding> singleRecordMeasures = bindings.stream()
+                .filter(SingleRecordOutcomeMeasureSpec::isBuiltIn)
+                .filter(ImplementationBinding::isRunnable)
+                .toList();
         List<ImplementationBinding> builtInMeasures = phase == Phase.AMENDMENT
                 ? List.of()
                 : bindings.stream()
@@ -518,14 +521,14 @@ public class ParallelPhaseExecutionService implements TestExecutionService {
                 }
             }
             /*
-             * Single-record validation measures read every VALIDATION response of the phase, rollups
-             * included, so they run once all direct bindings have been collected.
+             * Single-record outcome measures read every VALIDATION (or AMENDMENT) response of the
+             * phase, rollups included, so they run once all direct bindings have been collected.
              */
-            List<Response> validationResponses = List.copyOf(responses);
+            List<Response> countedResponses = List.copyOf(responses);
             for (ImplementationBinding measureBinding : singleRecordMeasures) {
                 throwIfCancellationRequested("during phase " + phase);
-                for (Response response : SingleRecordValidationMeasures.synthesize(
-                        phase, dataset, measureBinding, validationResponses)) {
+                for (Response response : SingleRecordOutcomeMeasures.synthesize(
+                        phase, dataset, measureBinding, countedResponses)) {
                     responses.add(response);
                     completed++;
                     progressListener.onResponse(phase, response, completed, total);

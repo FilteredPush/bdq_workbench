@@ -1,6 +1,6 @@
-/** SingleRecordValidationMeasures.java
+/** SingleRecordOutcomeMeasures.java
  *
- * Computes the built-in SingleRecord measures that count each record's VALIDATION responses.
+ * Computes the built-in SingleRecord measures that count each record's VALIDATION or AMENDMENT responses.
  *
  * Copyright 2026 President and Fellows of Harvard College
  *
@@ -30,33 +30,35 @@ import org.filteredpush.bdq_workbench.model.OutcomeStatus;
 import org.filteredpush.bdq_workbench.model.Phase;
 import org.filteredpush.bdq_workbench.model.RecordDataset;
 import org.filteredpush.bdq_workbench.model.Response;
-import org.filteredpush.bdq_workbench.model.SingleRecordValidationMeasureSpec;
+import org.filteredpush.bdq_workbench.model.SingleRecordOutcomeMeasureSpec;
 import org.filteredpush.bdq_workbench.model.TestType;
 
 /**
- * Synthesizes the responses of {@link SingleRecordValidationMeasureSpec} measures from the
- * VALIDATION responses already produced for each record in a phase.
+ * Synthesizes the responses of {@link SingleRecordOutcomeMeasureSpec} measures from the VALIDATION
+ * or AMENDMENT responses already produced for each record in a phase.
  *
- * <p>For each record of the phase's dataset, every VALIDATION test with a response for that record
- * is reduced to its record-level response(s) — the derived rollup where the test ran over expanded
- * related rows, otherwise the record's own response — and the distinct tests whose record-level
- * response has the measure's outcome are counted. Following the specification, a record with no
- * VALIDATION responses at all gets INTERNAL_PREREQUISITES_NOT_MET; otherwise the measure reports
- * RUN_HAS_RESULT with the count as its result. If any of the record's VALIDATION tests errored or
- * was unable to run, its outcome is unknown and no count would be accurate, so the measure is
- * reported as {@link OutcomeStatus#ERROR} naming those tests, as the built-in multi-record measures
- * do for failed target responses.
+ * <p>This is the implementation framework's part of these measures: presenting, for each record of
+ * the phase's dataset, the set of responses of the counted tests run on that record. Every test of
+ * the measure's {@link SingleRecordOutcomeMeasureSpec.Tally#countedType()} with a response for the
+ * record is reduced to its record-level response(s) — the derived rollup where the test ran over
+ * expanded related rows, otherwise the record's own response — and the distinct tests whose
+ * record-level response has the measure's outcome are counted. Following the specification, the
+ * measure reports RUN_HAS_RESULT with the count as its result, which is 0 when no tests of that
+ * type were run on the record.
+ *
+ * <p>If any of the record's counted tests errored or was unable to run, its outcome is unknown and
+ * no count would be accurate, so the measure is reported as {@link OutcomeStatus#ERROR} naming those
+ * tests, as the built-in multi-record measures do for failed target responses. This goes beyond the
+ * specification, which does not address it.
  */
-final class SingleRecordValidationMeasures {
+final class SingleRecordOutcomeMeasures {
 	/** Response status for a measure that ran and has a result. */
 	private static final String RUN_HAS_RESULT = "RUN_HAS_RESULT";
-	/** Response status for a record on which no VALIDATION tests were attempted. */
-	private static final String INTERNAL_PREREQUISITES_NOT_MET = "INTERNAL_PREREQUISITES_NOT_MET";
-	/** Response status for a record on which a VALIDATION test failed to evaluate. */
+	/** Response status for a record on which a counted test failed to evaluate. */
 	private static final String ERROR = "ERROR";
 
 	/** Not instantiable: a holder for static synthesis logic. */
-	private SingleRecordValidationMeasures() {
+	private SingleRecordOutcomeMeasures() {
 	}
 
 	/**
@@ -65,7 +67,7 @@ final class SingleRecordValidationMeasures {
 	 * @param phase the phase being executed
 	 * @param dataset the phase's dataset, whose records each receive one response
 	 * @param measureBinding the measure's binding, as recognized by
-	 *     {@link SingleRecordValidationMeasureSpec#isBuiltIn}
+	 *     {@link SingleRecordOutcomeMeasureSpec#isBuiltIn}
 	 * @param phaseResponses the responses already produced in this phase, derived rollups included
 	 * @return one response per record, in dataset order
 	 * @throws IllegalArgumentException if {@code measureBinding} is not such a measure binding
@@ -75,29 +77,32 @@ final class SingleRecordValidationMeasures {
 			RecordDataset dataset,
 			ImplementationBinding measureBinding,
 			List<Response> phaseResponses) {
-		SingleRecordValidationMeasureSpec spec = SingleRecordValidationMeasureSpec.from(measureBinding)
+		SingleRecordOutcomeMeasureSpec spec = SingleRecordOutcomeMeasureSpec.from(measureBinding)
 				.orElseThrow(() -> new IllegalArgumentException(
-						"Not a built-in single-record validation measure binding: " + measureBinding.testId()));
-		Map<String, Map<String, List<Response>>> validationsByRecord = validationsByRecordAndTest(phaseResponses);
+						"Not a built-in single-record outcome measure binding: " + measureBinding.testId()));
+		Map<String, Map<String, List<Response>>> countedByRecord =
+				responsesByRecordAndTest(phaseResponses, spec.tally().countedType());
 		Instant finishedAt = Instant.now();
 		List<Response> responses = new ArrayList<>();
 		for (CanonicalRecord record : dataset.records()) {
-			Map<String, List<Response>> byTest = validationsByRecord.getOrDefault(record.id(), Map.of());
+			Map<String, List<Response>> byTest = countedByRecord.getOrDefault(record.id(), Map.of());
 			responses.add(measureResponse(phase, record.id(), measureBinding, spec, byTest, finishedAt));
 		}
 		return responses;
 	}
 
 	/**
-	 * Indexes a phase's VALIDATION responses by record ID and then by test ID.
+	 * Indexes a phase's responses of one type of test by record ID and then by test ID.
 	 *
 	 * @param phaseResponses the phase's responses
+	 * @param countedType the type of test whose responses are indexed
 	 * @return record ID to test ID to that test's responses for the record, in encounter order
 	 */
-	private static Map<String, Map<String, List<Response>>> validationsByRecordAndTest(List<Response> phaseResponses) {
+	private static Map<String, Map<String, List<Response>>> responsesByRecordAndTest(
+			List<Response> phaseResponses, TestType countedType) {
 		Map<String, Map<String, List<Response>>> index = new LinkedHashMap<>();
 		for (Response response : phaseResponses) {
-			if (response.testType() != TestType.VALIDATION || response.recordId() == null) {
+			if (response.testType() != countedType || response.recordId() == null) {
 				continue;
 			}
 			index.computeIfAbsent(response.recordId(), ignored -> new LinkedHashMap<>())
@@ -108,13 +113,13 @@ final class SingleRecordValidationMeasures {
 	}
 
 	/**
-	 * Builds one record's measure response from its VALIDATION responses.
+	 * Builds one record's measure response from the responses of its counted tests.
 	 *
 	 * @param phase the phase being executed
 	 * @param recordId the record's ID
 	 * @param binding the measure's binding
 	 * @param spec the measure's spec
-	 * @param byTest the record's VALIDATION responses, keyed by test ID
+	 * @param byTest the record's responses of the counted type of test, keyed by test ID
 	 * @param finishedAt the instant to record as both start and finish
 	 * @return the record's measure response
 	 */
@@ -122,30 +127,27 @@ final class SingleRecordValidationMeasures {
 			Phase phase,
 			String recordId,
 			ImplementationBinding binding,
-			SingleRecordValidationMeasureSpec spec,
+			SingleRecordOutcomeMeasureSpec spec,
 			Map<String, List<Response>> byTest,
 			Instant finishedAt) {
-		if (byTest.isEmpty()) {
-			String comment = "No VALIDATION Tests were attempted on this record";
-			return response(phase, recordId, binding, OutcomeStatus.FAILED, INTERNAL_PREREQUISITES_NOT_MET, null,
-					comment, finishedAt);
-		}
+		TestType countedType = spec.tally().countedType();
 		List<String> failedTestIds = failedTestIds(byTest);
 		if (!failedTestIds.isEmpty()) {
 			/*
-			 * A validation that errored or could not run has no outcome, so any count would silently
-			 * leave it out; report the measure as an error instead, as the multi-record measures do.
+			 * A test that errored or could not run has no outcome, so any count would silently leave
+			 * it out; report the measure as an error instead, as the multi-record measures do.
 			 */
-			String comment = "Cannot count VALIDATION Tests with " + spec.tally().criterion() + " because "
-					+ failedTestIds.size() + " of " + byTest.size()
-					+ " VALIDATION Tests failed or were unable to run on this record: "
-					+ String.join(", ", failedTestIds);
+			String comment = "Cannot count " + countedType + " Tests with " + spec.tally().criterion() + " because "
+					+ failedTestIds.size() + " of " + byTest.size() + " " + countedType
+					+ " Tests failed or were unable to run on this record: " + String.join(", ", failedTestIds);
 			return response(phase, recordId, binding, OutcomeStatus.ERROR, ERROR, null, comment, finishedAt);
 		}
 		long matching = byTest.values().stream()
 				.filter(testResponses -> recordLevel(testResponses).stream().anyMatch(spec::counts))
 				.count();
-		String comment = matching + " of " + byTest.size() + " VALIDATION Tests had " + spec.tally().criterion();
+		String comment = byTest.isEmpty()
+				? "No " + countedType + " Tests were run on this record"
+				: matching + " of " + byTest.size() + " " + countedType + " Tests had " + spec.tally().criterion();
 		return response(phase, recordId, binding, OutcomeStatus.PASSED, RUN_HAS_RESULT, Long.toString(matching),
 				comment, finishedAt);
 	}
@@ -153,14 +155,14 @@ final class SingleRecordValidationMeasures {
 	/**
 	 * Lists the tests whose record-level response for a record failed to evaluate.
 	 *
-	 * @param byTest the record's VALIDATION responses, keyed by test ID
+	 * @param byTest the record's responses of the counted type of test, keyed by test ID
 	 * @return the IDs of the tests with a record-level {@link OutcomeStatus#ERROR} or
 	 *     {@link OutcomeStatus#UNABLE_TO_RUN} response, in encounter order
 	 */
 	private static List<String> failedTestIds(Map<String, List<Response>> byTest) {
 		return byTest.entrySet().stream()
 				.filter(entry -> recordLevel(entry.getValue()).stream()
-						.anyMatch(SingleRecordValidationMeasures::failedToEvaluate))
+						.anyMatch(SingleRecordOutcomeMeasures::failedToEvaluate))
 				.map(Map.Entry::getKey)
 				.toList();
 	}
@@ -178,7 +180,7 @@ final class SingleRecordValidationMeasures {
 	}
 
 	/**
-	 * Reports whether a validation response carries no BDQ outcome because its execution failed.
+	 * Reports whether a response carries no BDQ outcome because its execution failed.
 	 *
 	 * @param response the response to inspect
 	 * @return {@code true} for {@link OutcomeStatus#ERROR} and {@link OutcomeStatus#UNABLE_TO_RUN}
