@@ -6,6 +6,58 @@ BDQ Workbench takes DarwinCore Archive files or Darwin Core Data Package files a
 
 See: https://bdq.tdwg.org/
 
+## Example report graphics
+
+The images below come from the structured HTML report of one run on synthetic data: the bird
+tracking example Darwin Core Data Package from [gbif/dwc-dp-examples](https://github.com/gbif/dwc-dp-examples/tree/da4df57cd34a0698839508f9711bdba956c23305/observation/bird-tracking/output_data),
+with synthetic modifications (deliberate data quality problems, identification histories, and the
+marking described in the BDQ Guide to Marking and Identifying Synthetic and Modified Data). The run
+used the `bdquc:Spatial-Temporal_Patterns` use case and a record filter
+(`coordinateUncertaintyInMeters=5.1|5.5`) that selects the 132 most heavily modified occurrence
+records. Because the problems are deliberate, the results illustrate the reports, not the quality
+of the source data.
+
+**Input data view.** BDQ Tests are specified against a SingleRecord: one flat set of Darwin Core
+terms (an occurrence with its event, location, identification, and so on). A Darwin Core Archive with
+a single core table already has that shape, but a Darwin Core Data Package is relational: an
+occurrence's event, identifications, material, and other related information are rows in separate
+tables, and some relations are one-to-many (an occurrence can have a history of several
+identifications). To run the Tests, the workbench builds a view: it picks a grain table, whose
+rows become the SingleRecords, and decides for each related table how its rows reach the record:
+`FIRST_ROW` or `AGGREGATE` flatten them into it, `REJECT` leaves the terms empty when there is more
+than one row, and `EXPAND` keeps every row and runs the Tests that read that table once per row,
+rolling the results up to the record. This example data set was chosen because it exercises that:
+its identification table has 1 to 7 rows per occurrence. The diagram shows how the input tables were
+turned into the execution view in this run: the `occurrence` grain table, with the `event` table and
+the first row of each record's `identification` history flattened into it; the `material` table used
+only to name records; and the tables not used.
+
+![Input data view: input tables and the execution view built from them](docs/input-data-view.svg)
+
+**Multi-record COUNT measures, before and after amendment.** Each point is one COUNT measure: the
+percentage of records COMPLIANT with a validation before amendment (x) and after (y), colored by
+data quality dimension. Points above the diagonal improved when the proposed amendments were
+applied; here 35 of 51 measures improved, 15 were unchanged, and 1 got worse.
+
+![Scatter of COUNT measures, pre-amendment against post-amendment percentage](docs/count-measures-scatter.png)
+
+The top of the report's COUNT measure chart gives the same measures one row each, largest
+improvement first: the pre-amendment value as a ring, the post-amendment value as a dot.
+
+![COUNT measures as rows, pre-amendment ring and post-amendment dot](docs/count-measures-dumbbell.png)
+
+**Validation outcomes per record.** The single-record measures MEASURE_VALIDATIONTESTS_COMPLIANT,
+_NOTCOMPLIANT and _PREREQUISITESNOTMET count, for each record, the validations run on it with each
+outcome. These histograms show how those counts are distributed over the 132 records, before and
+after amendment, on the same axes: x is the number of validations (of 51 in the use case) with the
+outcome, y the number of records. After amendment, most records have fewer NOT_COMPLIANT validations
+(about 5 to 10 rather than 6 to 13), and their COMPLIANT counts cluster at 36 to 42 rather than
+spreading from about 18 to 40.
+
+![Validation outcomes per record, pre-amendment](docs/validation-outcomes-pre-amendment.png)
+
+![Validation outcomes per record, post-amendment](docs/validation-outcomes-post-amendment.png)
+
 ## Build and test
 
 ```bash
