@@ -1,6 +1,6 @@
 /** DimensionColors.java
  *
- * Colors for data quality dimensions in the workflow visualization charts.
+ * Colors for data quality dimensions in the overview charts of the GUI and the reports.
  *
  * Copyright 2026 President and Fellows of Harvard College
  *
@@ -17,15 +17,15 @@
  * limitations under the License.
  *
  */
-package org.filteredpush.bdq_workbench.app;
+package org.filteredpush.bdq_workbench.reporting;
 
 import java.awt.Color;
 import java.util.List;
 
 /** Colors that identify a measure's data quality dimension, shared by the overview charts. */
-final class DimensionColors {
+public final class DimensionColors {
 	/** Dimensions in legend order. */
-	static final List<String> KNOWN = List.of("Completeness", "Conformance", "Consistency", "Likeliness");
+	public static final List<String> KNOWN = List.of("Completeness", "Conformance", "Consistency", "Likeliness");
 
 	private DimensionColors() {
 	}
@@ -34,7 +34,7 @@ final class DimensionColors {
 	 * @param dimension a dimension's local name, possibly empty
 	 * @return its color; gray when unknown
 	 */
-	static Color colorFor(String dimension) {
+	public static Color colorFor(String dimension) {
 		return switch (dimension == null ? "" : dimension) {
 			case "Completeness" -> Color.decode("#1565c0");
 			case "Conformance" -> Color.decode("#6a1b9a");
@@ -48,7 +48,7 @@ final class DimensionColors {
 	 * @param dimension a dimension's local name, possibly empty
 	 * @return its legend label
 	 */
-	static String labelFor(String dimension) {
+	public static String labelFor(String dimension) {
 		return dimension == null || dimension.isBlank() ? "No dimension" : dimension;
 	}
 }

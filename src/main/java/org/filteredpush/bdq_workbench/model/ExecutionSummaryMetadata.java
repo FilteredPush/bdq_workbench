@@ -43,6 +43,8 @@ import java.util.Collections;
  *     {@link org.filteredpush.bdq_workbench.app.WorkbenchFacade}
  * @param amendedValuePairCounts tallies of {@code term: oldValue -> newValue} transitions
  *     produced by amendments that changed an existing term value
+ * @param useCaseTests the tests of the use case's policy, with their metadata (e.g. dimension),
+ *     for reports that need the use case's composition; empty if unknown
  */
 public record ExecutionSummaryMetadata(
         String useCaseId,
@@ -55,7 +57,8 @@ public record ExecutionSummaryMetadata(
         Map<String, List<String>> recordFilters,
         Map<String, String> testLabelsById,
         Map<String, Long> filledInValueCounts,
-        Map<String, Long> amendedValuePairCounts) {
+        Map<String, Long> amendedValuePairCounts,
+        List<TestDefinition> useCaseTests) {
 
 	/**
 	 * Creates metadata with matching input and filtered counts and no record filters.
@@ -81,9 +84,42 @@ public record ExecutionSummaryMetadata(
 	}
 
 	/**
+	 * Creates metadata without the use case's test definitions.
+	 *
+	 * @param useCaseId the identifier of the use case the run was executed for
+	 * @param useCaseLabel the use case label
+	 * @param inputFile the path of the ingested dataset file
+	 * @param inputDarwinCoreTermCount the number of distinct Darwin Core terms in the input
+	 * @param inputSingleRecordCount the number of records in the input
+	 * @param filteredDarwinCoreTermCount the number of distinct Darwin Core terms after filtering
+	 * @param filteredSingleRecordCount the number of records after filtering
+	 * @param recordFilters the record filters applied
+	 * @param testLabelsById test labels keyed by test ID
+	 * @param filledInValueCounts amendment tallies for filled-in values
+	 * @param amendedValuePairCounts amendment tallies for changed values
+	 */
+	public ExecutionSummaryMetadata(
+			String useCaseId,
+			String useCaseLabel,
+			String inputFile,
+			int inputDarwinCoreTermCount,
+			int inputSingleRecordCount,
+			int filteredDarwinCoreTermCount,
+			int filteredSingleRecordCount,
+			Map<String, List<String>> recordFilters,
+			Map<String, String> testLabelsById,
+			Map<String, Long> filledInValueCounts,
+			Map<String, Long> amendedValuePairCounts) {
+		this(useCaseId, useCaseLabel, inputFile, inputDarwinCoreTermCount, inputSingleRecordCount,
+				filteredDarwinCoreTermCount, filteredSingleRecordCount, recordFilters, testLabelsById,
+				filledInValueCounts, amendedValuePairCounts, List.of());
+	}
+
+	/**
 	 * Canonical constructor; copies maps defensively and substitutes empty defaults.
 	 */
 	public ExecutionSummaryMetadata {
+		useCaseTests = List.copyOf(useCaseTests == null ? List.of() : useCaseTests);
 		Map<String, List<String>> copiedFilters = new LinkedHashMap<>();
 		(recordFilters == null ? Map.<String, List<String>>of() : recordFilters)
 				.forEach((field, values) -> copiedFilters.put(field, List.copyOf(values == null ? List.of() : values)));

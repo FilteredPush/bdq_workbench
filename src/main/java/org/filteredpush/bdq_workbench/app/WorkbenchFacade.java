@@ -563,7 +563,8 @@ public class WorkbenchFacade {
                 preparedRun.filterSummary().resolvedCriteria(),
                 testLabelsById,
                 summarizeFilledInValues(responses),
-                summarizeAmendedValuePairs(responses, sourceTermsByRecordId));
+                summarizeAmendedValuePairs(responses, sourceTermsByRecordId),
+                preparedRun.plan().tests());
     }
 
     /**

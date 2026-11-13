@@ -154,6 +154,9 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 				.append("    td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }\n")
 				.append("    .data-warning { border: 2px solid #b42318; background: #fef3f2; color: #1f2328; padding: 0.75rem 1rem;"
 						+ " border-radius: 6px; margin: 1rem 0; }\n")
+				.append("    figure.overview-chart { margin: 0.75rem 0 1rem; }\n")
+				.append("    figure.overview-chart img { max-width: 100%; height: auto; border: 1px solid #d0d7de; }\n")
+				.append("    figure.overview-chart figcaption { color: #57606a; font-size: 0.92em; }\n")
 				.append(InputViewDiagram.CSS)
 				.append("  </style>\n")
 				.append("</head>\n")
@@ -165,6 +168,7 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 		appendInputView(builder, summary, InputViewOverview.from(summary), digest);
 		appendHighImpactActionItems(builder, digest);
 		appendMeasureDifferenceVisualization(builder, summary);
+		appendSingleRecordOutcomeHistograms(builder, summary);
 		appendQualitySection(builder, digest);
 		appendTestFindings(builder, digest);
 		appendEmptyTerms(builder, digest);
@@ -747,10 +751,81 @@ public class StructuredHtmlReportExporter implements ReportExporter {
 					.append("</section>\n");
 			return;
 		}
+		appendMeasureScatter(builder, summary);
 		appendCountMeasureChart(builder,
 				StructuredMeasureComparisons.ofKind(comparisons, BuiltInMeasureSpec.MeasureKind.COUNT));
 		appendQaMeasureTable(builder,
 				StructuredMeasureComparisons.ofKind(comparisons, BuiltInMeasureSpec.MeasureKind.QA));
+		builder.append("</section>\n");
+	}
+
+	/**
+	 * Appends an overview of the COUNT measures above their dumbbell chart: a scatter of each
+	 * measure's pre- against post-amendment percentage (points above the diagonal improved after
+	 * amendment), colored by data quality dimension, with a caption counting the measures improved,
+	 * unchanged, and worse. Drawn as an embedded PNG by {@link MeasureScatterChart}, as in the GUI.
+	 *
+	 * @param builder the report being built; appended to in place
+	 * @param summary the execution summary
+	 */
+	private static void appendMeasureScatter(StringBuilder builder, ExecutionSummary summary) {
+		MultiRecordMeasureSummaries.Summary multiRecord =
+				MultiRecordMeasureSummaries.build(summary.responses(), summary.metadata().useCaseTests());
+		if (multiRecord.rows().stream().noneMatch(MultiRecordMeasureSummaries.Row::hasBothPhases)) {
+			return;
+		}
+		String image = ChartImages.pngDataUri(MeasureScatterChart.WIDTH, MeasureScatterChart.HEIGHT,
+				g -> MeasureScatterChart.paint(g, multiRecord.rows()));
+		builder.append("  <figure class=\"overview-chart\">\n")
+				.append("    <img src=\"").append(image).append("\" width=\"").append(MeasureScatterChart.WIDTH)
+				.append("\" height=\"").append(MeasureScatterChart.HEIGHT)
+				.append("\" alt=\"Scatter of each COUNT measure's percentage of records before against after amendment\">\n")
+				.append("    <figcaption>").append(escapeHtml(multiRecord.caption()))
+				.append(". Each point is a COUNT measure; points above the diagonal improved after amendment.")
+				.append("</figcaption>\n")
+				.append("  </figure>\n");
+	}
+
+	/**
+	 * Appends the distributions of the single-record measures that count each record's VALIDATION
+	 * or AMENDMENT outcomes over the records assessed: one stacked histogram per phase, x the
+	 * measure's value from 0 to the number of tests of that type in the use case, y the number of
+	 * records, one segment per measure. Drawn as embedded PNGs by {@link OutcomeHistogramChart}, as
+	 * in the GUI. Nothing is appended if the run produced none of these measures.
+	 *
+	 * @param builder the report being built; appended to in place
+	 * @param summary the execution summary
+	 */
+	private static void appendSingleRecordOutcomeHistograms(StringBuilder builder, ExecutionSummary summary) {
+		List<SingleRecordOutcomeHistograms.Histogram> histograms =
+				SingleRecordOutcomeHistograms.build(summary.responses(), summary.metadata().useCaseTests());
+		if (histograms.isEmpty()) {
+			return;
+		}
+		builder.append("<section>\n")
+				.append("  <h2>Single-record outcome measures</h2>\n")
+				.append("  <p>For each record, MEASURE_VALIDATIONTESTS_COMPLIANT, _NOTCOMPLIANT and _PREREQUISITESNOTMET")
+				.append(" count the VALIDATION tests run on it with each outcome, and MEASURE_AMENDMENTS_PROPOSED the")
+				.append(" AMENDMENT tests that proposed a change. Each chart shows how these counts are distributed over")
+				.append(" the records: the bar at a value stacks, for each measure, the number of records for which the")
+				.append(" measure had that value.</p>\n");
+		for (SingleRecordOutcomeHistograms.Histogram histogram : histograms) {
+			String image = ChartImages.pngDataUri(OutcomeHistogramChart.WIDTH, OutcomeHistogramChart.HEIGHT,
+					g -> OutcomeHistogramChart.paint(g, OutcomeHistogramChart.WIDTH, OutcomeHistogramChart.HEIGHT, histogram));
+			builder.append("  <figure class=\"overview-chart\">\n")
+					.append("    <img src=\"").append(image).append("\" width=\"").append(OutcomeHistogramChart.WIDTH)
+					.append("\" height=\"").append(OutcomeHistogramChart.HEIGHT).append("\" alt=\"")
+					.append(escapeHtml(histogram.title())).append("\">\n")
+					.append("    <figcaption>").append(escapeHtml(histogram.title()));
+			for (SingleRecordOutcomeHistograms.Series series : histogram.series()) {
+				builder.append("; ").append(escapeHtml(OutcomeHistogramChart.legendLabel(series.tally())))
+						.append(": ").append(series.total()).append(" records");
+			}
+			if (histogram.notBinned() > 0) {
+				builder.append("; ").append(histogram.notBinned()).append(" without a count (ERROR)");
+			}
+			builder.append("</figcaption>\n  </figure>\n");
+		}
 		builder.append("</section>\n");
 	}
 

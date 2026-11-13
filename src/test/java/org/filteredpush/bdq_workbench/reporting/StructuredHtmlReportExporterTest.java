@@ -147,6 +147,33 @@ class StructuredHtmlReportExporterTest {
 	}
 
 	@Test
+	void embedsTheOverviewChartsAsImages() {
+		List<Response> responses = new java.util.ArrayList<>(List.of(
+				measureResponse("urn:test:count-coordinates", "Count compliant coordinates", Phase.PRE_AMENDMENT, "1", "4", "25.0"),
+				measureResponse("urn:test:count-coordinates", "Count compliant coordinates", Phase.POST_AMENDMENT, "3", "4", "75.0"),
+				measureResponse("urn:test:count-dates", "Count complete dates", Phase.PRE_AMENDMENT, "2", "4", "50.0"),
+				measureResponse("urn:test:count-dates", "Count complete dates", Phase.POST_AMENDMENT, "2", "4", "50.0")));
+		for (Phase phase : List.of(Phase.PRE_AMENDMENT, Phase.POST_AMENDMENT)) {
+			for (String record : List.of("r1", "r2")) {
+				responses.add(new Response(record, "urn:test:validations-compliant", TestType.MEASURE,
+						org.filteredpush.bdq_workbench.model.SingleRecordOutcomeMeasureSpec.IMPLEMENTATION_CLASS,
+						org.filteredpush.bdq_workbench.model.SingleRecordOutcomeMeasureSpec.IMPLEMENTATION_METHOD, phase,
+						Map.of(org.filteredpush.bdq_workbench.model.SingleRecordOutcomeMeasureSpec.TALLY_KEY, "COMPLIANT"),
+						OutcomeStatus.PASSED, "RUN_HAS_RESULT", "1", "", "", Map.of(), Instant.EPOCH, Instant.EPOCH));
+			}
+		}
+
+		String report = StructuredHtmlReportExporter.renderHtml(new ExecutionSummary(responses));
+
+		assertThat(report).contains("2 COUNT measures: 1 improved, 1 unchanged, 0 worse after amendment");
+		assertThat(report).contains("<h2>Single-record outcome measures</h2>");
+		assertThat(report).contains("VALIDATION outcomes per record, pre-amendment; COMPLIANT: 2 records");
+		assertThat(report.split("<figure class=\"overview-chart\">", -1)).hasSize(4);
+		assertThat(report.split("<img src=\"data:image/png;base64,", -1)).hasSize(4);
+		assertThat(report.indexOf("Scatter of each COUNT measure")).isLessThan(report.indexOf("<h3>COUNT measures</h3>"));
+	}
+
+	@Test
 	void rendersQaMeasuresAsResultsInTheirOwnTableNotAsPercentages() {
 		ExecutionSummary summary = new ExecutionSummary(List.of(
 				measureResponse("urn:test:count-coordinates", "Count compliant coordinates", Phase.PRE_AMENDMENT, "1", "4", "25.0"),

@@ -257,7 +257,13 @@ understanding how the stages connect — read its class Javadoc first. The pipel
    the dimension is the test's `bdqffdq:hasDataQualityDimension`, recorded by
    `RdfPolicyResolverService` as test metadata), the number of QA measures COMPLETE pre and post, and
    one dumbbell row per COUNT measure, greatest improvement first, with its paired QA measure's
-   result (`MeasureDumbbellPanel`); the former three lines per COUNT measure are behind a toggle.
+   result (`MeasureDumbbellPanel`); the former three lines per COUNT measure are behind a toggle. The charts are drawn by
+   `OutcomeHistogramChart` and `MeasureScatterChart` in `reporting` (Java2D only, so headless-safe;
+   the GUI panels delegate to them, with `DimensionColors` shared), and the structured HTML report
+   embeds them as PNG `data:` URIs drawn at twice their display size (`ChartImages`): the scatter
+   with its caption above the COUNT measures' dumbbell chart, and the histograms in their own
+   "Single-record outcome measures" section, omitted when the run has none. They need the use
+   case's tests (for N and the dimensions), which `ExecutionSummaryMetadata.useCaseTests` carries.
 
    **Scheduling and resilience** (README, "Execution scheduling and resilience"). Group
    invocations do not go straight to a thread pool: `ResourceLaneScheduler` (one per `execute`

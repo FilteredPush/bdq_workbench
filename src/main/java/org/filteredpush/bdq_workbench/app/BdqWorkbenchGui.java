@@ -4110,12 +4110,7 @@ final class BdqWorkbenchGui {
     private static void addMultiRecordOverview(JPanel panel, MultiRecordMeasureSummaries.Summary multiRecord) {
         List<MultiRecordMeasureSummaries.Row> rows = multiRecord.rows();
         if (!rows.isEmpty()) {
-            double medianPre = multiRecord.median(Phase.PRE_AMENDMENT);
-            double medianPost = multiRecord.median(Phase.POST_AMENDMENT);
-            JLabel caption = new JLabel(rows.size() + " COUNT measures: " + multiRecord.improved() + " improved, "
-                    + multiRecord.unchanged() + " unchanged, " + multiRecord.worse() + " worse after amendment"
-                    + (Double.isNaN(medianPre) || Double.isNaN(medianPost) ? ""
-                            : String.format("; median %.0f%% \u2192 %.0f%% of records", medianPre, medianPost)));
+            JLabel caption = new JLabel(multiRecord.caption());
             caption.setBorder(BorderFactory.createEmptyBorder(2, 0, 4, 0));
             panel.add(caption);
             if (rows.stream().anyMatch(MultiRecordMeasureSummaries.Row::hasBothPhases)) {

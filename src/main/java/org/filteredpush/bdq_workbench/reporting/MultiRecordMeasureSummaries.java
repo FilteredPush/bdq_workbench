@@ -154,6 +154,20 @@ public final class MultiRecordMeasureSummaries {
 		}
 
 		/**
+		 * @return e.g. "51 COUNT measures: 30 improved, 18 unchanged, 3 worse after amendment;
+		 *     median 81% \u2192 97% of records"
+		 */
+		public String caption() {
+			double medianPre = median(Phase.PRE_AMENDMENT);
+			double medianPost = median(Phase.POST_AMENDMENT);
+			return rows.size() + " COUNT measures: " + improved() + " improved, " + unchanged() + " unchanged, "
+					+ worse() + " worse after amendment"
+					+ (Double.isNaN(medianPre) || Double.isNaN(medianPost) ? ""
+							: String.format(java.util.Locale.ROOT, "; median %.0f%% \u2192 %.0f%% of records",
+									medianPre, medianPost));
+		}
+
+		/**
 		 * @return true if there is nothing to show
 		 */
 		public boolean isEmpty() {

@@ -30,6 +30,7 @@ import java.awt.event.MouseEvent;
 import java.util.List;
 import javax.swing.JPanel;
 import javax.swing.ToolTipManager;
+import org.filteredpush.bdq_workbench.reporting.DimensionColors;
 import org.filteredpush.bdq_workbench.reporting.MultiRecordMeasureSummaries.Row;
 
 /**
