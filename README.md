@@ -86,7 +86,7 @@ The startup screen includes a dataset file picker, use-case selection, and advan
 
 - `https://bdq.tdwg.org/draft/dist/bdquc.xml` (use cases)
 - `https://bdq.tdwg.org/draft/dist/bdqtest.ttl` (test definitions)
-- `https://bdq.tdwg.org/draft/vocabulary/bdqffdq.ttl` (ontology)
+- `https://bdq.tdwg.org/draft/dist/bdqffdq.ttl` (ontology)
 
 Use-case and RDF definition inputs support RDF/XML, Turtle, and JSON-LD serializations.
 Logging is configured to the console with a default `DEBUG` root level in `src/main/resources/logback.xml`.

@@ -40,7 +40,7 @@ public final class WorkbenchDefaults {
 	public static final String TEST_DEFINITIONS_SOURCE = "https://bdq.tdwg.org/draft/dist/bdqtest.ttl";
 
 	/** Default source for the bdqffdq ontology. */
-	public static final String ONTOLOGY_SOURCE = "https://bdq.tdwg.org/draft/vocabulary/bdqffdq.ttl";
+	public static final String ONTOLOGY_SOURCE = "https://bdq.tdwg.org/draft/dist/bdqffdq.ttl";
 
 	/** Label of the use case preselected when nothing else picks one. */
 	private static final String PREFERRED_USE_CASE_LABEL = "Spatial-Temporal Patterns";
