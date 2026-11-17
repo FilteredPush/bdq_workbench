@@ -64,10 +64,7 @@
         <dependency>
             <groupId>org.datakurator</groupId>
             <artifactId>kurator-ffdq</artifactId>
-            <!-- TODO: pin to a released 3.3.0 once cut; the productized XLSXPostProcessor
-                 (used by XlsxReportExporter) only exists in this SNAPSHOT today. Building this
-                 project currently requires installing kurator-ffdq 3.3.0-SNAPSHOT locally. -->
-            <version>3.3.0-SNAPSHOT</version>
+            <version>3.4.0</version>
         </dependency>
 
                 <dependency>

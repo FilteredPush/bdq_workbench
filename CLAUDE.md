@@ -31,9 +31,8 @@ mvn -q test -Dtest=ReflectionExecutionAdapterTest#someMethodName
 Integration tests (`*IT.java`, e.g. `WorkbenchFacadeIT`) are skipped by default (`dev` profile,
 `skipITs=true`); the `release` profile flips `skipITs` to `false` and runs them via failsafe.
 
-`kurator-ffdq` is currently pinned to a `3.3.0-SNAPSHOT` (see the dependency's comment in
-`pom.xml`), so building this project requires that SNAPSHOT installed in the local Maven
-repository first: `cd path/to/kurator-ffdq && mvn -q -DskipTests install`.
+`kurator-ffdq` is the released `3.4.0`, the first release with the "restored and productized"
+`XLSXPostProcessor` that `XlsxReportExporter` depends on.
 
 Run the application:
 
@@ -430,10 +429,9 @@ run.
    declared input values, not once per record, with the result copied back to every record sharing
    that combination. Controlled by `bdq.execution.dedup` (default `true`).
 2. ~~Integration of the workbench with the kurator-ffdq spreadsheet exporter~~ — done via
-   `XlsxReportExporter` (see the `reporting` section above). Follow-up: the `kurator-ffdq`
-   dependency in `pom.xml` is currently pinned to a `3.3.0-SNAPSHOT` build, since the "restored and
-   productized" `XLSXPostProcessor` this exporter depends on only exists there; move this to a
-   released `3.3.0` once kurator-ffdq cuts one. Also worth reporting upstream: kurator-ffdq's
+   `XlsxReportExporter` (see the `reporting` section above). The `kurator-ffdq`
+   dependency is the released `3.4.0`, which has the "restored and productized" `XLSXPostProcessor`
+   this exporter depends on. Also worth reporting upstream: kurator-ffdq's
    `Issue` context class is missing the no-arg constructor its sibling context classes
    (`Measure`/`Validation`/`Amendment`) have, which breaks RDFBeans deserialization if it's ever
    attached to a saved `IssueResponse`.

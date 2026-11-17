@@ -480,9 +480,7 @@ A few behaviors worth knowing about:
   responses still get their row and every field column, just without per-cell acted-upon/consulted
   coloring.
 - **Build dependency:** this depends on kurator-ffdq's "restored and productized"
-  `XLSXPostProcessor`, which as of this writing only exists in a `3.3.0-SNAPSHOT` build (the
-  `pom.xml` dependency is pinned there, with a comment to move it to a released `3.3.0` once one is
-  cut). Building this project currently requires that SNAPSHOT installed locally.
+  `XLSXPostProcessor`, released in kurator-ffdq `3.4.0`.
 
 ## Multi-record measure preparation
 
