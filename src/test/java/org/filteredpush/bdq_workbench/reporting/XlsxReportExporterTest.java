@@ -159,6 +159,34 @@ class XlsxReportExporterTest {
     }
 
     @Test
+    void showsTheProposedValuesOfAnAmendmentOnTheAmendmentsSheet() throws Exception {
+        CanonicalRecord record1 = new CanonicalRecord(
+                "REC1", new LinkedHashMap<>(Map.of("occurrenceID", "REC1", "eventDate", "2023-06-15")));
+        ExecutionSummary summary = new ExecutionSummary(
+                List.of(amendmentResponse("REC1")), null, new RecordDataset(List.of(record1)),
+                List.of(actedUponBinding(AMENDMENT_TEST, TestType.AMENDMENT, "eventDate")));
+
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        new XlsxReportExporter().export(summary, output);
+
+        try (XSSFWorkbook workbook = new XSSFWorkbook(new ByteArrayInputStream(output.toByteArray()))) {
+            Sheet amendments = workbook.getSheet("Amendments");
+            int eventDateColumn = columnIndexOf(amendments.getRow(0), "eventDate");
+            assertThat(eventDateColumn).isGreaterThanOrEqualTo(0);
+            boolean found = false;
+            for (int r = 1; r <= amendments.getLastRowNum(); r++) {
+                Row row = amendments.getRow(r);
+                if (row != null && "REC1".equals(cellString(row, 0))) {
+                    assertThat(cellString(row, eventDateColumn)).as("the proposed value of the Amendment")
+                            .contains("changed to: 2023-06-15T00:00");
+                    found = true;
+                }
+            }
+            assertThat(found).as("an Amendments row for REC1").isTrue();
+        }
+    }
+
+    @Test
     void excludesSentinelResponsesFromThePerRecordWorkbook() throws Exception {
         CanonicalRecord record1 = new CanonicalRecord("REC1", Map.of("occurrenceID", "REC1"));
         List<ImplementationBinding> bindings = List.of(actedUponBinding(MEASURE_TEST, TestType.MEASURE, "occurrenceID"));

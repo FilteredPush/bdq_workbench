@@ -43,7 +43,7 @@ import org.datakurator.ffdq.model.context.Measure;
 import org.datakurator.ffdq.model.context.Validation;
 import org.datakurator.ffdq.model.report.AmendmentResponse;
 import org.datakurator.ffdq.model.report.IssueResponse;
-import org.datakurator.ffdq.model.report.MeasureResponse;
+import org.datakurator.ffdq.model.report.MeasurementResponse;
 import org.datakurator.ffdq.model.report.Result;
 import org.datakurator.ffdq.model.report.ValidationResponse;
 import org.datakurator.ffdq.rdf.FFDQModel;
@@ -301,7 +301,7 @@ public class XlsxReportExporter implements ReportExporter {
                     dimension.setInformationElements(informationElement);
                     model.save(dimension);
                 }
-                MeasureResponse measureResponse = new MeasureResponse();
+                MeasurementResponse measureResponse = new MeasurementResponse();
                 measureResponse.setDataResource(dataResource.getURI());
                 measureResponse.setSpecification(specification);
                 measureResponse.setResult(result);
@@ -359,11 +359,10 @@ public class XlsxReportExporter implements ReportExporter {
         if (value != null && !value.isBlank()) {
             Entity entity = new Entity();
             entity.setValue(value);
-            model.save(entity);
             result.setEntity(entity);
         }
         result.setComment(comment);
-        model.save(result);
+        // a Result is written as part of its Response (kurator-ffdq 4), not saved on its own
         return result;
     }
 
@@ -386,15 +385,14 @@ public class XlsxReportExporter implements ReportExporter {
         result.setState(state);
         result.setComment(response.comment());
 		if (response.amendments() != null && !response.amendments().isEmpty()) {
+			// the proposed changes, keyed by term: kurator-ffdq writes them as the Response's JSON
+			// bdqffdq:hasResponseResultValue, and the XLSX postprocessor reads them back as a map
 			Map<String, String> normalizedAmendments = new LinkedHashMap<>();
 			response.amendments().forEach((term, value) -> normalizedAmendments.put(stripDwcPrefix(term), value == null ? "" : value));
-			DataResource amendedResource = new DataResource(model.getVocab(), normalizedAmendments);
             Entity entity = new Entity();
-            entity.setValue(amendedResource.getURI());
-            model.save(entity);
+            entity.setValue(normalizedAmendments);
             result.setEntity(entity);
         }
-        model.save(result);
         return result;
     }
 

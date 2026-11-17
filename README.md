@@ -477,8 +477,9 @@ A few behaviors worth knowing about:
 - **Issues sheet coloring:** ISSUE-type responses carry their `Issue` and its information
   elements, so the Issues sheet colors the fields each Issue acts upon, like the other sheets.
 - **Build dependency:** this depends on kurator-ffdq's "restored and productized"
-  `XLSXPostProcessor`, released in kurator-ffdq `3.4.0`, and on the public no-arg constructor of
-  its `Issue` class, added after `3.4.0` (the workbench currently uses `3.4.1-SNAPSHOT`).
+  `XLSXPostProcessor`, released in kurator-ffdq `3.4.0`, and on kurator-ffdq `4.0.0` (the workbench
+  currently uses `4.0.0-SNAPSHOT`) for the public no-arg constructor of its `Issue` class and for
+  Amendment values passed as maps, which the Amendments sheet shows as the proposed changes.
 
 ## Multi-record measure preparation
 

@@ -31,11 +31,15 @@ mvn -q test -Dtest=ReflectionExecutionAdapterTest#someMethodName
 Integration tests (`*IT.java`, e.g. `WorkbenchFacadeIT`) are skipped by default (`dev` profile,
 `skipITs=true`); the `release` profile flips `skipITs` to `false` and runs them via failsafe.
 
-`kurator-ffdq` is `3.4.1-SNAPSHOT`: `3.4.0` is the first release with the "restored and
-productized" `XLSXPostProcessor` that `XlsxReportExporter` depends on, and the public no-arg
-constructor of `Issue` (for Issues sheet coloring) was added after it. `ffdq-api` is
-`2.1.0-SNAPSHOT`, the first version without RDFBeans. Both need releasing before the next
-workbench release.
+`kurator-ffdq` is `4.0.0-SNAPSHOT`: report RDF aligned with bdqffdq, Amendment values passed as maps
+(written as JSON), the public no-arg constructor of `Issue` (for Issues sheet coloring), and a thin
+library jar whose dependencies come through Maven. `ffdq-api` is `2.1.0-SNAPSHOT`, the first version
+without RDFBeans. The FilteredPush libraries are their current SNAPSHOTs (Java 17). All need releasing
+before the next workbench release: ffdq-api, then the libraries and kurator-ffdq.
+
+The pom declares the GBIF and OSGeo repositories (the libraries use GBIF APIs and GeoTools, which are
+not on Maven Central), and pins the Jackson 2 BOM, `dwc-api`, and `slf4j-api` in `dependencyManagement`:
+the libraries' own pins are not passed on to applications.
 
 Run the application:
 
