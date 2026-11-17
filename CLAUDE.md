@@ -31,8 +31,11 @@ mvn -q test -Dtest=ReflectionExecutionAdapterTest#someMethodName
 Integration tests (`*IT.java`, e.g. `WorkbenchFacadeIT`) are skipped by default (`dev` profile,
 `skipITs=true`); the `release` profile flips `skipITs` to `false` and runs them via failsafe.
 
-`kurator-ffdq` is the released `3.4.0`, the first release with the "restored and productized"
-`XLSXPostProcessor` that `XlsxReportExporter` depends on.
+`kurator-ffdq` is `3.4.1-SNAPSHOT`: `3.4.0` is the first release with the "restored and
+productized" `XLSXPostProcessor` that `XlsxReportExporter` depends on, and the public no-arg
+constructor of `Issue` (for Issues sheet coloring) was added after it. `ffdq-api` is
+`2.1.0-SNAPSHOT`, the first version without RDFBeans. Both need releasing before the next
+workbench release.
 
 Run the application:
 
@@ -314,11 +317,9 @@ understanding how the stages connect — read its class Javadoc first. The pipel
    in its own small workbook instead — a separate file rather than an extra sheet appended to the
    main one, since appending would mean reopening the (potentially very large) written workbook as
    a plain `XSSFWorkbook`, which for a large enough dataset can exceed Apache POI's single-zip-entry
-   read cap (`RecordFormatException: ... maximum length for this record type`). Note:
-   kurator-ffdq's `Issue` context class has no no-arg constructor (unlike `Measure`/`Validation`/
-   `Amendment`), so RDFBeans cannot deserialize an `IssueResponse` that carries one —
-   `XlsxReportExporter` leaves it unset, so ISSUE-type responses round-trip correctly but without
-   per-field coloring on the Issues sheet. Structured-response metadata (`subjectRef`, derived
+   read cap (`RecordFormatException: ... maximum length for this record type`). ISSUE-type
+   responses carry their `Issue` (with its information elements), so the Issues sheet colors the
+   fields each Issue acts upon, as the other sheets do. Structured-response metadata (`subjectRef`, derived
    rollups, contributing subjects) now flows through the normalized response stream, the
    tab-delimited detailed export, the RDF/Turtle exporter (which emits OA-style row selectors for
    structured subject targets and explicit rollup→detail links), and the standalone structured
@@ -430,11 +431,8 @@ run.
    that combination. Controlled by `bdq.execution.dedup` (default `true`).
 2. ~~Integration of the workbench with the kurator-ffdq spreadsheet exporter~~ — done via
    `XlsxReportExporter` (see the `reporting` section above). The `kurator-ffdq`
-   dependency is the released `3.4.0`, which has the "restored and productized" `XLSXPostProcessor`
-   this exporter depends on. Also worth reporting upstream: kurator-ffdq's
-   `Issue` context class is missing the no-arg constructor its sibling context classes
-   (`Measure`/`Validation`/`Amendment`) have, which breaks RDFBeans deserialization if it's ever
-   attached to a saved `IssueResponse`.
+   dependency needs `3.4.0` or later, which has the "restored and productized" `XLSXPostProcessor`
+   this exporter depends on (see the dependency note near the top for the current version).
 3. Deeper relational modelling beyond the current reporting boundary. The workbench now ingests
    direct child relations into `RecordGraph`, can flatten them through reusable
    provenance-tracked dataset views, can execute bindings over structured `EvaluationSubject`s

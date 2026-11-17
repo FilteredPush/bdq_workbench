@@ -38,6 +38,7 @@ import org.datakurator.ffdq.model.InformationElement;
 import org.datakurator.ffdq.model.ResultState;
 import org.datakurator.ffdq.model.Specification;
 import org.datakurator.ffdq.model.context.Amendment;
+import org.datakurator.ffdq.model.context.Issue;
 import org.datakurator.ffdq.model.context.Measure;
 import org.datakurator.ffdq.model.context.Validation;
 import org.datakurator.ffdq.model.report.AmendmentResponse;
@@ -64,7 +65,7 @@ import org.slf4j.LoggerFactory;
  * {@link Response}) rather than round-tripping through {@link RdfResponseExporter}'s Turtle output
  * — that output deliberately omits the dimension/criterion/information-element chain this
  * exporter needs for per-field cell coloring, and uses a different RDF framework (Jena) than
- * kurator-ffdq's RDF4J/RDFBeans-backed model.
+ * kurator-ffdq's RDF4J-backed model.
  *
  * <p>Each test's Darwin Core information elements (the fields it acts upon or consults, used both
  * for cell coloring and for padding every record with empty-valued columns for fields the use
@@ -83,14 +84,6 @@ import org.slf4j.LoggerFactory;
  * {@link XLSXPostProcessor} streams its output directly to {@code outputStream} via {@code
  * SXSSFWorkbook}, and reopening a large one to append a sheet has previously hit Apache POI's
  * ~100MB single-zip-entry read cap on real, large datasets.
- *
- * <p>ISSUE-type responses are a known exception to the per-field coloring above: kurator-ffdq's
- * {@code Issue} context class (unlike {@code Measure}/{@code Validation}/{@code Amendment}) has no
- * no-arg constructor, so RDFBeans cannot deserialize an {@code IssueResponse} that carries one —
- * the whole response would silently fail to round-trip through {@link XLSXPostProcessor}'s
- * re-query of the model. This exporter leaves {@code issueInContext} unset entirely so the
- * response itself is preserved; the Issues sheet still gets its row and every field column, just
- * without acted-upon/consulted coloring.
  *
  * <p>Registered under format {@code "xls"}, written as an Office Open XML workbook to
  * {@code bdq-report-xls.xlsx} (see {@link #fileExtension()}).
@@ -316,17 +309,18 @@ public class XlsxReportExporter implements ReportExporter {
                 model.save(measureResponse);
             }
             case ISSUE -> {
-                // kurator-ffdq's Issue context class (unlike Measure/Validation/Amendment) has no
-                // no-arg constructor, so RDFBeans cannot deserialize an IssueResponse that carries
-                // one — attaching it here would silently drop the whole response when
-                // XLSXPostProcessor re-reads it from the model. Leave issueInContext unset: the
-                // Issues sheet still gets its row and every field column, just without per-cell
-                // acted-upon/consulted coloring for this test type.
                 Result result = buildResult(model, state, response.responseResult(), response.comment());
+                Issue issue = null;
+                if (informationElement != null) {
+                    issue = new Issue();
+                    issue.setInformationElements(informationElement);
+                    model.save(issue);
+                }
                 IssueResponse issueResponse = new IssueResponse();
                 issueResponse.setDataResource(dataResource.getURI());
                 issueResponse.setSpecification(specification);
                 issueResponse.setResult(result);
+                issueResponse.setIssueInContext(issue);
                 model.save(issueResponse);
             }
             case AMENDMENT -> {

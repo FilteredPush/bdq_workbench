@@ -474,13 +474,11 @@ A few behaviors worth knowing about:
   large dataset can exceed Apache POI's single-zip-entry read cap and fail with a
   `RecordFormatException`. Keeping the two files separate means the main export is a pure,
   one-pass stream straight to disk regardless of dataset size.
-- **Issues sheet coloring is a known gap.** kurator-ffdq's `Issue` context class lacks a no-arg
-  constructor (unlike `Measure`/`Validation`/`Amendment`), which breaks RDFBeans deserialization if
-  one is attached to a saved response. `XlsxReportExporter` leaves it unset, so ISSUE-type
-  responses still get their row and every field column, just without per-cell acted-upon/consulted
-  coloring.
+- **Issues sheet coloring:** ISSUE-type responses carry their `Issue` and its information
+  elements, so the Issues sheet colors the fields each Issue acts upon, like the other sheets.
 - **Build dependency:** this depends on kurator-ffdq's "restored and productized"
-  `XLSXPostProcessor`, released in kurator-ffdq `3.4.0`.
+  `XLSXPostProcessor`, released in kurator-ffdq `3.4.0`, and on the public no-arg constructor of
+  its `Issue` class, added after `3.4.0` (the workbench currently uses `3.4.1-SNAPSHOT`).
 
 ## Multi-record measure preparation
 

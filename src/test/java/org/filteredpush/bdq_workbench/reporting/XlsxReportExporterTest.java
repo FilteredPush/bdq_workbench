@@ -25,6 +25,7 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.apache.poi.ss.usermodel.FillPatternType;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
@@ -116,6 +117,44 @@ class XlsxReportExporterTest {
                 }
             }
             assertThat(foundBlankCountryForRecord2).as("found a REC2 validation row with a padded blank country cell").isTrue();
+        }
+    }
+
+    @Test
+    void colorsTheFieldsAnIssueActsUponOnTheIssuesSheet() throws Exception {
+        CanonicalRecord record1 = new CanonicalRecord(
+                "REC1", new LinkedHashMap<>(Map.of("occurrenceID", "REC1", "eventDate", "2023-06-15", "country", "Greenland")));
+        List<ImplementationBinding> bindings = List.of(
+                actedUponBinding(ISSUE_TEST, TestType.ISSUE, "country"),
+                actedUponBinding(AMENDMENT_TEST, TestType.AMENDMENT, "eventDate"));
+        ExecutionSummary summary = new ExecutionSummary(
+                List.of(issueResponse("REC1"), amendmentResponse("REC1")), null,
+                new RecordDataset(List.of(record1)), bindings);
+
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        new XlsxReportExporter().export(summary, output);
+
+        try (XSSFWorkbook workbook = new XSSFWorkbook(new ByteArrayInputStream(output.toByteArray()))) {
+            Sheet issues = workbook.getSheet("Issues");
+            Row header = issues.getRow(0);
+            int countryColumn = columnIndexOf(header, "country");
+            int eventDateColumn = columnIndexOf(header, "eventDate");
+            assertThat(countryColumn).isGreaterThanOrEqualTo(0);
+            assertThat(eventDateColumn).isGreaterThanOrEqualTo(0);
+
+            Row row = null;
+            for (int r = 1; r <= issues.getLastRowNum(); r++) {
+                if (issues.getRow(r) != null && "REC1".equals(cellString(issues.getRow(r), 0))) {
+                    row = issues.getRow(r);
+                }
+            }
+            assertThat(row).as("REC1 row on the Issues sheet").isNotNull();
+            assertThat(row.getCell(countryColumn).getCellStyle().getFillPattern())
+                    .as("the field the Issue acts upon is colored")
+                    .isEqualTo(FillPatternType.SOLID_FOREGROUND);
+            assertThat(row.getCell(eventDateColumn).getCellStyle().getFillPattern())
+                    .as("a field the Issue does not act upon is not colored")
+                    .isEqualTo(FillPatternType.NO_FILL);
         }
     }
 
