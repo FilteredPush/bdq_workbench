@@ -37,10 +37,10 @@ Integration tests (`*IT.java`, e.g. `WorkbenchFacadeIT`) are skipped by default 
 Run the application:
 
 ```bash
-java -jar target/bdq_workbench-0.1.0.jar            # no options: opens the desktop GUI
-java -jar target/bdq_workbench-0.1.0.jar --dataset path/to/dataset.zip   # headless run
-java -jar target/bdq_workbench-0.1.0.jar --gui --dataset path/to/dataset.zip
-java -jar target/bdq_workbench-0.1.0.jar --help
+java -jar target/bdq_workbench-0.1.1-SNAPSHOT.jar            # no options: opens the desktop GUI
+java -jar target/bdq_workbench-0.1.1-SNAPSHOT.jar --dataset path/to/dataset.zip   # headless run
+java -jar target/bdq_workbench-0.1.1-SNAPSHOT.jar --gui --dataset path/to/dataset.zip
+java -jar target/bdq_workbench-0.1.1-SNAPSHOT.jar --help
 ```
 
 Launch modes (`BdqWorkbenchApplication.run`): no options opens the GUI; options without `--gui`

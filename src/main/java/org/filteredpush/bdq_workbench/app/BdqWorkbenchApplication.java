@@ -284,7 +284,7 @@ public final class BdqWorkbenchApplication {
      * @param out stream to write the usage text to
      */
     private static void renderUsage(PrintStream out) {
-        out.println("Usage: java -jar target/bdq_workbench-0.1.0.jar [options]");
+        out.println("Usage: java -jar target/bdq_workbench-0.1.1-SNAPSHOT.jar [options]");
         out.println();
         out.println("With no options on a desktop environment, the GUI launcher opens.");
         out.println();

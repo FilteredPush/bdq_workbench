@@ -5,7 +5,7 @@
 
     <groupId>org.filteredpush</groupId>
     <artifactId>bdq_workbench</artifactId>
-    <version>0.1.0</version>
+    <version>0.1.1-SNAPSHOT</version>
     <name>BDQ Workbench</name>
     <description>Desktop-oriented BDQ Workbench for policy-driven test execution</description>
 
