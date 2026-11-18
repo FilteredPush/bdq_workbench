@@ -1,0 +1,65 @@
+name: Release
+
+# On a version tag (e.g. v1.1.0), build and test the tagged commit and attach
+# the executable jar, with SHA-256 and SHA-512 checksums, to the GitHub release
+# for the tag (creating the release if it does not exist yet).
+# The pom version must already be the release version: the tag must be on the
+# release commit, and every dependency must be a released (non-SNAPSHOT) version.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: Check that the pom version matches the tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          POM_VERSION=$(mvn -B -q help:evaluate -Dexpression=project.version -DforceStdout)
+          if [ "$POM_VERSION" != "$VERSION" ]; then
+            echo "::error::pom version $POM_VERSION does not match tag $GITHUB_REF_NAME"
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Build and test
+        run: mvn -B clean verify
+
+      - name: Collect the executable jar and checksums
+        run: |
+          mkdir dist
+          cp target/bdq_workbench-${VERSION}.jar dist/
+          cd dist
+          for f in *.jar; do
+            sha256sum "$f" > "$f.sha256"
+            sha512sum "$f" > "$f.sha512"
+          done
+          ls -l
+
+      - name: Attach to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* --verify-tag \
+              --title "bdq_workbench $GITHUB_REF_NAME" --generate-notes
+          fi

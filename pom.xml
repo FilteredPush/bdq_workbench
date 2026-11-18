@@ -5,7 +5,7 @@
 
     <groupId>org.filteredpush</groupId>
     <artifactId>bdq_workbench</artifactId>
-    <version>0.1.1-SNAPSHOT</version>
+    <version>0.2.0-SNAPSHOT</version>
     <name>BDQ Workbench</name>
     <description>Desktop-oriented BDQ Workbench for policy-driven test execution</description>
 
@@ -59,7 +59,7 @@
         <dependency>
             <groupId>org.datakurator</groupId>
             <artifactId>ffdq-api</artifactId>
-            <version>2.1.0-SNAPSHOT</version>
+            <version>3.0.0-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.apache.jena</groupId>
@@ -102,12 +102,12 @@
                 <dependency>
                     <groupId>org.filteredpush</groupId>
                     <artifactId>event_date_qc</artifactId>
-                    <version>3.1.3-SNAPSHOT</version>
+                    <version>3.2.0-SNAPSHOT</version>
                 </dependency>
                 <dependency>
                     <groupId>org.filteredpush</groupId>
                     <artifactId>sci_name_qc</artifactId>
-                    <version>1.2.3-SNAPSHOT</version>
+                    <version>1.3.0-SNAPSHOT</version>
                 </dependency>
                 <dependency>
                     <groupId>org.filteredpush</groupId>
@@ -117,7 +117,7 @@
                 <dependency>
                     <groupId>org.filteredpush</groupId>
                     <artifactId>rec_occur_qc</artifactId>
-                    <version>1.1.3-SNAPSHOT</version>
+                    <version>1.2.0-SNAPSHOT</version>
                 </dependency>
 
 

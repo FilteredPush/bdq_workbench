@@ -78,7 +78,7 @@ mvn -q verify -Prelease
 
 ```bash
 mvn -q package
-java -jar target/bdq_workbench-0.1.1-SNAPSHOT.jar
+java -jar target/bdq_workbench-0.2.0-SNAPSHOT.jar
 ```
 
 Launching the jar without options opens a desktop GUI for entering parameters and monitoring execution.
@@ -94,13 +94,13 @@ Logging is configured to the console with a default `DEBUG` root level in `src/m
 Show command-line help:
 
 ```bash
-java -jar target/bdq_workbench-0.1.1-SNAPSHOT.jar --help
+java -jar target/bdq_workbench-0.2.0-SNAPSHOT.jar --help
 ```
 
 Configuration defaults are in `src/main/resources/application.properties` and can be overridden with CLI options, for example:
 
 ```bash
-java -jar target/bdq_workbench-0.1.1-SNAPSHOT.jar --dataset path/to/dataset.zip
+java -jar target/bdq_workbench-0.2.0-SNAPSHOT.jar --dataset path/to/dataset.zip
 ```
 
 A dataset with more than one table (a Darwin Core Archive with extensions, a data package with
@@ -108,7 +108,7 @@ several resources) always runs through a *dataset view*. You can supply one with
 (`bdq.dataset.view` in config), or build it interactively in the GUI with `Build Dataset View...`:
 
 ```bash
-java -jar target/bdq_workbench-0.1.1-SNAPSHOT.jar \
+java -jar target/bdq_workbench-0.2.0-SNAPSHOT.jar \
   --dataset path/to/datapackage.json \
   --dataset-view path/to/bdq-dataset-view.json
 ```
@@ -149,7 +149,7 @@ occurrence) are joined `FIRST_ROW`. For each related table that has more than on
 record, you decide how to handle it:
 
 ```bash
-java -jar target/bdq_workbench-0.1.1-SNAPSHOT.jar \
+java -jar target/bdq_workbench-0.2.0-SNAPSHOT.jar \
   --dataset path/to/dataset.zip \
   --join-policy identification=EXPAND --join-policy multimedia.txt=FIRST_ROW
 ```
@@ -169,7 +169,7 @@ Configuration precedence is:
 Pre-execution record filtering can be configured from the CLI with repeatable `--record-filter` flags, or in the GUI with the `Build Record Filters...` dialog after selecting a dataset. Filter syntax is:
 
 ```bash
-java -jar target/bdq_workbench-0.1.1-SNAPSHOT.jar \
+java -jar target/bdq_workbench-0.2.0-SNAPSHOT.jar \
   --record-filter 'dwc:genus=Abies|Pinus' \
   --record-filter dwc:country=Canada
 ```
@@ -435,7 +435,7 @@ Every limit is capped at the worker count. For example, to put every test of the
 library that consults WoRMS into one lane that makes one call at a time:
 
 ```bash
-java -jar target/bdq_workbench-0.1.1-SNAPSHOT.jar --dataset occurrences.zip \
+java -jar target/bdq_workbench-0.2.0-SNAPSHOT.jar --dataset occurrences.zip \
   --execution-override 'org.filteredpush.qc.georeference.DwCGeoRefDQDefaults#validationCoordinatesTerrestrialmarine=external,lane:worms' \
   --lane-limit lane:worms=1
 ```
