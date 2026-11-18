@@ -31,11 +31,11 @@ mvn -q test -Dtest=ReflectionExecutionAdapterTest#someMethodName
 Integration tests (`*IT.java`, e.g. `WorkbenchFacadeIT`) are skipped by default (`dev` profile,
 `skipITs=true`); the `release` profile flips `skipITs` to `false` and runs them via failsafe.
 
-`kurator-ffdq` is `4.0.0-SNAPSHOT`: report RDF aligned with bdqffdq, Amendment values passed as maps
+`kurator-ffdq` is `4.0.0`: report RDF aligned with bdqffdq, Amendment values passed as maps
 (written as JSON), the public no-arg constructor of `Issue` (for Issues sheet coloring), and a thin
-library jar whose dependencies come through Maven. `ffdq-api` is `3.0.0-SNAPSHOT`, the first version
-without RDFBeans. The FilteredPush libraries are their current SNAPSHOTs (Java 17). All need releasing
-before the next workbench release: ffdq-api, then the libraries and kurator-ffdq.
+library jar whose dependencies come through Maven. `ffdq-api` is `3.0.0`, the first version
+without RDFBeans. The FilteredPush libraries are their Java 17 releases: event_date_qc 3.2.0,
+sci_name_qc 1.3.0, geo_ref_qc 2.2.0, rec_occur_qc 1.2.0.
 
 The pom declares the GBIF and OSGeo repositories (the libraries use GBIF APIs and GeoTools, which are
 not on Maven Central), and pins the Jackson 2 BOM, `dwc-api`, and `slf4j-api` in `dependencyManagement`:
@@ -44,10 +44,10 @@ the libraries' own pins are not passed on to applications.
 Run the application:
 
 ```bash
-java -jar target/bdq_workbench-0.2.0-SNAPSHOT.jar            # no options: opens the desktop GUI
-java -jar target/bdq_workbench-0.2.0-SNAPSHOT.jar --dataset path/to/dataset.zip   # headless run
-java -jar target/bdq_workbench-0.2.0-SNAPSHOT.jar --gui --dataset path/to/dataset.zip
-java -jar target/bdq_workbench-0.2.0-SNAPSHOT.jar --help
+java -jar target/bdq_workbench-0.2.0.jar            # no options: opens the desktop GUI
+java -jar target/bdq_workbench-0.2.0.jar --dataset path/to/dataset.zip   # headless run
+java -jar target/bdq_workbench-0.2.0.jar --gui --dataset path/to/dataset.zip
+java -jar target/bdq_workbench-0.2.0.jar --help
 ```
 
 Launch modes (`BdqWorkbenchApplication.run`): no options opens the GUI; options without `--gui`
