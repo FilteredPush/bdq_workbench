@@ -122,6 +122,8 @@ BDQ Workbench startup failed: No use case given; name one with --usecase-id. Kno
   https://rs.tdwg.org/bdquc/terms/Taxon-Management  (Taxon-Management)
 ```
 
+### Datasets with more than one table
+
 A dataset with more than one table (a Darwin Core Archive with extensions, a data package with
 several resources) always runs through a *dataset view*. You can supply one with `--dataset-view`
 (`bdq.dataset.view` in config), or build it interactively in the GUI with `Build Dataset View...`:
@@ -180,6 +182,8 @@ in config). Any table still undecided is asked about on the console when running
 a script or CI the run stops before testing and lists each such table with its observed rows per
 record. In the GUI, the dataset view builder opens with those tables highlighted, and `Use View`
 saves the view to `reports/bdq-dataset-view.json` and continues the run.
+
+### Configuration precedence and record filters
 
 Configuration precedence is:
 
