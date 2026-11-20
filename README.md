@@ -2,7 +2,7 @@
 
 BDQ Workbench is a Java 17 application for policy-driven Biodiversity Data Quality (BDQ) execution over Darwin Core Archives (DwC-A) and Darwin Core Data Packages.
 
-BDQ Workbench takes DarwinCore Archive files or Darwin Core Data Package files as input, identifies tests that apply to a bdqffdq:UseCase (purpose to which data are to be put and need to have fitness for) that are available in the implemntation, then runs those tests on the data (in pre-amendment, amendment, and post-amendment phases) and produces a data quality report (in several formats).  It also evaluates the binding of information elements in the input data with the test implementations, can provide parameters to parameterized tests, and can run tests from a use case individually.
+BDQ Workbench takes DarwinCore Archive files or Darwin Core Data Package files as input, identifies tests that apply to a bdqffdq:UseCase (purpose to which data are to be put and need to have fitness for) that are available in the implementation, allows construction of a view on the data across multiple tables in the input file if necessary, including rules for handling multiplicity, then runs those tests on the data (in pre-amendment, amendment, and post-amendment phases) and produces a data quality report (in several formats).  It also evaluates the binding of information elements in the input data with the test implementations, can provide parameters to parameterized tests, and can run tests from a use case individually.
 
 See: https://bdq.tdwg.org/
 
