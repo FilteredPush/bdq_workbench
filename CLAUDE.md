@@ -34,8 +34,10 @@ Integration tests (`*IT.java`, e.g. `WorkbenchFacadeIT`) are skipped by default 
 `kurator-ffdq` is `4.0.0`: report RDF aligned with bdqffdq, Amendment values passed as maps
 (written as JSON), the public no-arg constructor of `Issue` (for Issues sheet coloring), and a thin
 library jar whose dependencies come through Maven. `ffdq-api` is `3.0.0`, the first version
-without RDFBeans. The FilteredPush libraries are their Java 17 releases: event_date_qc 3.2.0,
-sci_name_qc 1.3.0, geo_ref_qc 2.2.0, rec_occur_qc 1.2.0.
+without RDFBeans. The FilteredPush libraries are the SNAPSHOTs after their Java 17 releases (event_date_qc 3.2.0,
+sci_name_qc 1.3.0, geo_ref_qc 2.2.0, rec_occur_qc 1.2.0, on Maven Central): event_date_qc 3.2.1-SNAPSHOT,
+sci_name_qc 1.3.1-SNAPSHOT, geo_ref_qc 2.2.1-SNAPSHOT, rec_occur_qc 1.2.1-SNAPSHOT. Build them with
+`mvn install` first.
 
 The pom declares the GBIF and OSGeo repositories (the libraries use GBIF APIs and GeoTools, which are
 not on Maven Central), and pins the Jackson 2 BOM, `dwc-api`, and `slf4j-api` in `dependencyManagement`:
