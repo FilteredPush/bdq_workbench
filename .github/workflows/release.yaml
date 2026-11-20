@@ -1,15 +1,14 @@
 name: Release
 
-# On a version tag (e.g. v1.1.0), build and test the tagged commit and attach
-# the executable jar, with SHA-256 and SHA-512 checksums, to the GitHub release
-# for the tag (creating the release if it does not exist yet).
-# The pom version must already be the release version: the tag must be on the
-# release commit, and every dependency must be a released (non-SNAPSHOT) version.
+# When a release is published (e.g. v0.2.1), build and test the tagged commit and attach
+# the executable jar, with SHA-256 and SHA-512 checksums, to that release.
+# The release is created by hand, with its notes, from a tag on the release commit; the pom
+# version must be the release version, and every dependency a released (non-SNAPSHOT) version. Publishing the release (not pushing the tag)
+# triggers this workflow, so the release notes, which Zenodo archives, are written first.
 
 on:
-  push:
-    tags:
-      - 'v*'
+  release:
+    types: [published]
 
 permissions:
   contents: write
@@ -56,10 +55,4 @@ jobs:
       - name: Attach to the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
-          else
-            gh release create "$GITHUB_REF_NAME" dist/* --verify-tag \
-              --title "bdq_workbench $GITHUB_REF_NAME" --generate-notes
-          fi
+        run: gh release upload "$GITHUB_REF_NAME" dist/* --clobber
