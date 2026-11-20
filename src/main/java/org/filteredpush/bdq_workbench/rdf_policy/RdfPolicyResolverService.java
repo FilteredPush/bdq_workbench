@@ -30,6 +30,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import org.apache.jena.rdf.model.Model;
 import org.apache.jena.rdf.model.ModelFactory;
@@ -588,16 +589,45 @@ public class RdfPolicyResolverService implements PolicyResolverService {
     }
 
     private static UseCase selectUseCase(Map<String, UseCase> useCases, String selectedUseCaseId) {
-        if (selectedUseCaseId != null && !selectedUseCaseId.isBlank() && useCases.containsKey(selectedUseCaseId)) {
-            return useCases.get(selectedUseCaseId);
+        return findUseCase(useCases, selectedUseCaseId)
+                .orElseGet(() -> useCases.values().stream().findFirst().orElseThrow(() -> new AppException("No use cases found")));
+    }
+
+    /**
+     * Finds the use case an identifier names, without falling back to any other use case.
+     *
+     * <p>The identifier matches a use case's key, or its IRI or its policy's IRI in either scheme
+     * (http or https), versioned ({@code .../terms/version/{name}-{date}}) or as the unversioned
+     * term IRI ({@code .../terms/{name}}).
+     *
+     * @param useCases the loaded use cases, keyed by identifier
+     * @param useCaseId the identifier to look up
+     * @return the matching use case, or empty if the identifier is blank or matches none
+     */
+    public static Optional<UseCase> findUseCase(Map<String, UseCase> useCases, String useCaseId) {
+        if (useCaseId == null || useCaseId.isBlank()) {
+            return Optional.empty();
         }
-        if (selectedUseCaseId != null && !selectedUseCaseId.isBlank()) {
-            return useCases.values().stream()
-                    .filter(useCase -> matchesAnyUri(selectedUseCaseId, candidateUseCaseIds(useCase)))
-                    .findFirst()
-                    .orElseGet(() -> useCases.values().stream().findFirst().orElseThrow(() -> new AppException("No use cases found")));
+        String id = useCaseId.trim();
+        if (useCases.containsKey(id)) {
+            return Optional.of(useCases.get(id));
         }
-        return useCases.values().stream().findFirst().orElseThrow(() -> new AppException("No use cases found"));
+        return useCases.values().stream()
+                .filter(useCase -> matchesAnyUri(id, candidateUseCaseIds(useCase)))
+                .findFirst();
+    }
+
+    /**
+     * The identifier to give for a use case on the command line: its unversioned term IRI when
+     * its identifier is a versioned rs.tdwg.org-style IRI, otherwise its identifier.
+     *
+     * @param useCase the use case
+     * @return the identifier to show users
+     */
+    public static String termIdentifier(UseCase useCase) {
+        return useCase.id()
+                .replaceFirst("(/terms/version/[^/]+)-\\d{4}-\\d{2}-\\d{2}$", "$1")
+                .replace("/terms/version/", "/terms/");
     }
 
     private static Model loadRdf(List<Path> paths) {

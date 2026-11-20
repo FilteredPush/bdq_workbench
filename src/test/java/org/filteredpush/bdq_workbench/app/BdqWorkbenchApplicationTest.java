@@ -1,9 +1,14 @@
 package org.filteredpush.bdq_workbench.app;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import org.filteredpush.bdq_workbench.model.UseCase;
 import org.junit.jupiter.api.Test;
 
 class BdqWorkbenchApplicationTest {
@@ -238,5 +243,54 @@ class BdqWorkbenchApplicationTest {
 
         assertThat(out.toString()).startsWith("WARNING: 2 of 2 input record(s) are marked as synthetic or modified "
                 + "example data (2 wholly synthetic).").contains("BDQ Workbench completed: 0 outcomes");
+    }
+
+    private static Map<String, UseCase> publishedStyleUseCases() {
+        Map<String, UseCase> useCases = new LinkedHashMap<>();
+        useCases.put("https://rs.tdwg.org/bdquc/terms/version/Spatial-Temporal_Patterns-2026-04-22",
+                new UseCase("https://rs.tdwg.org/bdquc/terms/version/Spatial-Temporal_Patterns-2026-04-22",
+                        "Spatial-Temporal Patterns", "urn:uuid:policy-stp"));
+        useCases.put("https://rs.tdwg.org/bdquc/terms/version/Alien-Species-2026-04-22",
+                new UseCase("https://rs.tdwg.org/bdquc/terms/version/Alien-Species-2026-04-22",
+                        "Alien Species", "urn:uuid:policy-as"));
+        // the same use case under its term IRI, as the published bdquc.xml also yields
+        useCases.put("https://rs.tdwg.org/bdquc/terms/Alien-Species",
+                new UseCase("https://rs.tdwg.org/bdquc/terms/Alien-Species", "Alien Species", "urn:uuid:policy-as"));
+        return useCases;
+    }
+
+    @Test
+    void commandLineRunWithoutUseCaseListsTheKnownUseCases() {
+        assertThatThrownBy(() -> BdqWorkbenchApplication.checkUseCase(publishedStyleUseCases(), "", "bdquc.xml"))
+                .isInstanceOf(AppException.class)
+                .hasMessageContaining("No use case given; name one with --usecase-id.")
+                .hasMessageContaining("Known use cases in bdquc.xml:")
+                .hasMessageContaining("https://rs.tdwg.org/bdquc/terms/Alien-Species  (Alien Species)")
+                .hasMessageContaining("https://rs.tdwg.org/bdquc/terms/Spatial-Temporal_Patterns  (Spatial-Temporal Patterns)")
+                .satisfies(e -> assertThat(e.getMessage().split("terms/Alien-Species  ", -1)).hasSize(2));
+    }
+
+    @Test
+    void commandLineRunWithUnknownUseCaseListsTheKnownUseCases() {
+        assertThatThrownBy(() -> BdqWorkbenchApplication.checkUseCase(
+                        publishedStyleUseCases(), "https://rs.tdwg.org/bdquc/terms/No-Such-Use-Case", "bdquc.xml"))
+                .isInstanceOf(AppException.class)
+                .hasMessageContaining("Unknown use case: https://rs.tdwg.org/bdquc/terms/No-Such-Use-Case.")
+                .hasMessageContaining("https://rs.tdwg.org/bdquc/terms/Alien-Species  (Alien Species)");
+    }
+
+    @Test
+    void commandLineRunAcceptsTermOrVersionIriOfAKnownUseCase() {
+        assertThatCode(() -> BdqWorkbenchApplication.checkUseCase(publishedStyleUseCases(),
+                "https://rs.tdwg.org/bdquc/terms/Spatial-Temporal_Patterns", "bdquc.xml")).doesNotThrowAnyException();
+        assertThatCode(() -> BdqWorkbenchApplication.checkUseCase(publishedStyleUseCases(),
+                "http://rs.tdwg.org/bdquc/terms/version/Alien-Species-2026-04-22", "bdquc.xml")).doesNotThrowAnyException();
+    }
+
+    @Test
+    void usageSaysTheUseCaseIsRequiredOnTheCommandLine() {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        BdqWorkbenchApplication.run(new String[] {"--help"}, printStream(out), printStream(new ByteArrayOutputStream()));
+        assertThat(out.toString()).contains("--usecase-id <id>              Use case to run (required without --gui)");
     }
 }

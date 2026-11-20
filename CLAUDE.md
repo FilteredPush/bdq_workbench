@@ -47,7 +47,7 @@ Run the application:
 
 ```bash
 java -jar target/bdq_workbench-0.2.1-SNAPSHOT.jar            # no options: opens the desktop GUI
-java -jar target/bdq_workbench-0.2.1-SNAPSHOT.jar --dataset path/to/dataset.zip   # headless run
+java -jar target/bdq_workbench-0.2.1-SNAPSHOT.jar --dataset path/to/dataset.zip --usecase-id https://rs.tdwg.org/bdquc/terms/Spatial-Temporal_Patterns   # headless run
 java -jar target/bdq_workbench-0.2.1-SNAPSHOT.jar --gui --dataset path/to/dataset.zip
 java -jar target/bdq_workbench-0.2.1-SNAPSHOT.jar --help
 ```
@@ -55,10 +55,13 @@ java -jar target/bdq_workbench-0.2.1-SNAPSHOT.jar --help
 Launch modes (`BdqWorkbenchApplication.run`): no options opens the GUI; options without `--gui`
 run headless; options with `--gui` open the GUI with those options filled into its fields instead
 of the built-in defaults (`--gui` on a headless JVM is an error, exit 1). A headless run needs
-only `--dataset`: `WorkbenchDefaults` supplies the same published use-case/test-definition/
+`--dataset` and `--usecase-id`: `WorkbenchDefaults` supplies the same published use-case/test-definition/
 ontology sources the GUI shows (fetched and cached by `CachedResourceResolver` via
-`ConfigLoader.loadForCliRun`) and the same preselected use case
-(`WorkbenchDefaults.preferredUseCaseId`, "Spatial-Temporal Patterns" if available). The dataset
+`ConfigLoader.loadForCliRun`), but not the use case, since the tests run (and so the report)
+depend on it. `BdqWorkbenchApplication.checkUseCase` stops a run without `--usecase-id`, or with one
+the use case source does not have (matched by `RdfPolicyResolverService.findUseCase`: key, term or
+version IRI, http or https), and lists the known use cases by term IRI. The GUI still preselects a
+use case (`WorkbenchDefaults.preferredUseCaseId`, "Spatial-Temporal Patterns" if available). The dataset
 path is validated against the plain `ConfigLoader.load` *before* any source is fetched, so a
 mistyped path fails fast and offline — keep that ordering, it is what keeps the unit tests from
 touching the network.

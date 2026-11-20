@@ -97,10 +97,21 @@ Show command-line help:
 java -jar target/bdq_workbench-0.2.1-SNAPSHOT.jar --help
 ```
 
-Configuration defaults are in `src/main/resources/application.properties` and can be overridden with CLI options, for example:
+Configuration defaults are in `src/main/resources/application.properties` and can be overridden with CLI options. A run from the command line needs the dataset and the use case, named by its term IRI:
 
 ```bash
-java -jar target/bdq_workbench-0.2.1-SNAPSHOT.jar --dataset path/to/dataset.zip
+java -jar target/bdq_workbench-0.2.1-SNAPSHOT.jar --dataset path/to/dataset.zip \
+  --usecase-id https://rs.tdwg.org/bdquc/terms/Spatial-Temporal_Patterns
+```
+
+Without `--usecase-id`, or with one the use case source does not have, the run stops and lists the known use cases, for example:
+
+```text
+BDQ Workbench startup failed: No use case given; name one with --usecase-id. Known use cases in https://bdq.tdwg.org/draft/dist/bdquc.xml:
+  https://rs.tdwg.org/bdquc/terms/Alien-Species  (Alien-Species)
+  https://rs.tdwg.org/bdquc/terms/Spatial-Temporal_Patterns  (Spatial-Temporal Patterns)
+  https://rs.tdwg.org/bdquc/terms/Species-Distribution-Modeling-Trees  (Species Distribution Modeling: Trees)
+  https://rs.tdwg.org/bdquc/terms/Taxon-Management  (Taxon-Management)
 ```
 
 A dataset with more than one table (a Darwin Core Archive with extensions, a data package with
@@ -110,6 +121,7 @@ several resources) always runs through a *dataset view*. You can supply one with
 ```bash
 java -jar target/bdq_workbench-0.2.1-SNAPSHOT.jar \
   --dataset path/to/datapackage.json \
+  --usecase-id https://rs.tdwg.org/bdquc/terms/Spatial-Temporal_Patterns \
   --dataset-view path/to/bdq-dataset-view.json
 ```
 
@@ -151,6 +163,7 @@ record, you decide how to handle it:
 ```bash
 java -jar target/bdq_workbench-0.2.1-SNAPSHOT.jar \
   --dataset path/to/dataset.zip \
+  --usecase-id https://rs.tdwg.org/bdquc/terms/Spatial-Temporal_Patterns \
   --join-policy identification=EXPAND --join-policy multimedia.txt=FIRST_ROW
 ```
 
@@ -436,6 +449,7 @@ library that consults WoRMS into one lane that makes one call at a time:
 
 ```bash
 java -jar target/bdq_workbench-0.2.1-SNAPSHOT.jar --dataset occurrences.zip \
+  --usecase-id https://rs.tdwg.org/bdquc/terms/Spatial-Temporal_Patterns \
   --execution-override 'org.filteredpush.qc.georeference.DwCGeoRefDQDefaults#validationCoordinatesTerrestrialmarine=external,lane:worms' \
   --lane-limit lane:worms=1
 ```

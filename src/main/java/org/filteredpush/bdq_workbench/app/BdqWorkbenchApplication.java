@@ -25,12 +25,13 @@ import java.awt.GraphicsEnvironment;
 import java.nio.file.Files;
 import java.util.HashMap;
 import java.util.List;
-import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 import org.filteredpush.bdq_workbench.execution.ParallelPhaseExecutionService;
 import org.filteredpush.bdq_workbench.execution.ReflectionExecutionAdapter;
 import org.filteredpush.bdq_workbench.ingest.DefaultIngestService;
 import org.filteredpush.bdq_workbench.model.ExecutionSummary;
+import org.filteredpush.bdq_workbench.model.UseCase;
 import org.filteredpush.bdq_workbench.rdf_policy.RdfPolicyResolverService;
 import org.filteredpush.bdq_workbench.reporting.DetailedResponseStreamExporter;
 import org.filteredpush.bdq_workbench.reporting.RdfResponseExporter;
@@ -40,7 +41,6 @@ import org.filteredpush.bdq_workbench.reporting.StructuredMarkdownReportExporter
 import org.filteredpush.bdq_workbench.reporting.SummaryReportExporter;
 import org.filteredpush.bdq_workbench.reporting.UnresolvedResponsesExporter;
 import org.filteredpush.bdq_workbench.reporting.XlsxReportExporter;
-import org.filteredpush.bdq_workbench.model.UseCase;
 import org.filteredpush.bdq_workbench.rdf_policy.UseCaseXmlParser;
 import org.filteredpush.bdq_workbench.test_discovery.ClasspathAnnotationTestDiscoveryService;
 import org.filteredpush.bdq_workbench.test_discovery.DefaultTestBindingService;
@@ -123,8 +123,9 @@ public final class BdqWorkbenchApplication {
             // run cannot supply a default for, and checking it here keeps a mistyped path from
             // fetching the ratified definitions before failing.
             validateStartupConfig(new ConfigLoader().load(parseResult.overrides()));
-            AppConfig config = resolveDefaultUseCase(
-                    new ConfigLoader().loadForCliRun(parseResult.overrides(), new CachedResourceResolver()));
+            AppConfig config = requireUseCase(
+                    new ConfigLoader().loadForCliRun(parseResult.overrides(), new CachedResourceResolver()),
+                    parseResult.overrides().getOrDefault("bdq.usecase.file", ""));
             LOG.info("Starting BDQ Workbench CLI run with dataset {} and use case {}",
                     config.datasetPath(), config.useCaseId());
             ExecutionSummary summary = execute(config);
@@ -164,27 +165,54 @@ public final class BdqWorkbenchApplication {
     }
 
     /**
-     * Fills in the use case a run should execute when the command line named none.
+     * Checks that a command line run names a use case its use case source offers.
      *
-     * <p>The GUI preselects a use case from those its use case source offers; a headless run
-     * makes the same choice through {@link WorkbenchDefaults#preferredUseCaseId}, so that
-     * {@code --dataset} really is the only argument a run needs.
+     * <p>A headless run must say which use case to run with {@code --usecase-id}: the tests run,
+     * and so the report, depend on it. The GUI offers the use cases to choose from instead.
      *
      * @param config the configuration loaded from the command line
-     * @return the configuration, with a use case identifier filled in if it had none
+     * @param useCaseSource the use case source given with {@code --usecase-file}, or blank for the
+     *     default published source; named in messages instead of the local cached copy
+     * @return the configuration, unchanged
+     * @throws AppException if no use case is named, the one named is not in the use case source,
+     *     or the source has no use cases; the message lists the known use cases
      */
-    private static AppConfig resolveDefaultUseCase(AppConfig config) {
-        if (!config.useCaseId().isBlank()) {
-            return config;
+    private static AppConfig requireUseCase(AppConfig config, String useCaseSource) {
+        checkUseCase(UseCaseXmlParser.loadUseCases(config.useCaseXml()), config.useCaseId(),
+                useCaseSource == null || useCaseSource.isBlank() ? WorkbenchDefaults.USE_CASE_SOURCE : useCaseSource);
+        return config;
+    }
+
+    /**
+     * Checks a command line use case identifier against the loaded use cases.
+     *
+     * @param useCases the use cases of the use case source, keyed by identifier
+     * @param useCaseId the identifier given with {@code --usecase-id}, possibly blank
+     * @param source the use case source, for messages
+     * @throws AppException if {@code useCaseId} is blank or names no loaded use case, with the
+     *     known use cases in the message, or if there are no use cases
+     */
+    static void checkUseCase(Map<String, UseCase> useCases, String useCaseId, String source) {
+        if (useCases.isEmpty()) {
+            throw new AppException("No use cases found in " + source
+                    + "; point --usecase-file at a source that has some");
         }
-        List<UseCase> useCases = List.copyOf(UseCaseXmlParser.loadUseCases(config.useCaseXml()).values());
-        String useCaseId = WorkbenchDefaults.preferredUseCaseId(useCases, "");
-        if (useCaseId.isBlank()) {
-            throw new AppException("No use cases found in " + config.useCaseXml()
-                    + "; name one with --usecase-id or point --usecase-file at a source that has some");
+        boolean blank = useCaseId == null || useCaseId.isBlank();
+        if (!blank && RdfPolicyResolverService.findUseCase(useCases, useCaseId).isPresent()) {
+            return;
         }
-        LOG.info("No use case given; defaulting to {}", useCaseId);
-        return config.withUseCaseId(useCaseId);
+        StringBuilder message = new StringBuilder(blank
+                ? "No use case given; name one with --usecase-id."
+                : "Unknown use case: " + useCaseId.trim() + ".");
+        message.append(" Known use cases in ").append(source).append(':');
+        // One line per use case: a source can give a use case under both its term IRI and a
+        // version IRI, which name the same use case on the command line.
+        Map<String, UseCase> byIdentifier = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+        useCases.values().forEach(useCase -> byIdentifier.putIfAbsent(RdfPolicyResolverService.termIdentifier(useCase), useCase));
+        byIdentifier.forEach((identifier, useCase) -> message.append(System.lineSeparator()).append("  ")
+                .append(identifier)
+                .append(useCase.label() == null || useCase.label().isBlank() ? "" : "  (" + useCase.label().trim() + ")"));
+        throw new AppException(message.toString());
     }
 
     /**
@@ -286,7 +314,8 @@ public final class BdqWorkbenchApplication {
     private static void renderUsage(PrintStream out) {
         out.println("Usage: java -jar target/bdq_workbench-0.2.1-SNAPSHOT.jar [options]");
         out.println();
-        out.println("With no options on a desktop environment, the GUI launcher opens.");
+        out.println("With no options on a desktop environment, the GUI launcher opens. A run from the");
+        out.println("command line needs --dataset and --usecase-id.");
         out.println();
         out.println("Options:");
         out.println("  -h, --help                     Show this help");
@@ -306,7 +335,9 @@ public final class BdqWorkbenchApplication {
         out.println("                                 stops with a list otherwise");
         out.println("  --usecase-file <path>          Use case XML file");
         out.println("  --rdf-files <paths>            Comma-separated RDF/OWL files");
-        out.println("  --usecase-id <id>              Optional use case identifier");
+        out.println("  --usecase-id <id>              Use case to run (required without --gui), e.g.");
+        out.println("                                 https://rs.tdwg.org/bdquc/terms/Spatial-Temporal_Patterns;");
+        out.println("                                 run without it to list the known use cases");
         out.println("  --discovery-packages <pkgs>    Comma-separated implementation packages");
         out.println("  --threads <n>                  Worker thread count (>= 1)");
         out.println("  --dedup <true|false>           Run each test once per distinct combination of");
