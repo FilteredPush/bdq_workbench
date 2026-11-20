@@ -76,6 +76,14 @@ mvn -q verify -Prelease
 
 ## Run
 
+The executable jar, `bdq_workbench-<version>.jar`, with SHA-256 and SHA-512 checksums, is attached to each [release](https://github.com/FilteredPush/bdq_workbench/releases); download it from the [latest release](https://github.com/FilteredPush/bdq_workbench/releases/latest) and run it with Java 17 or later:
+
+```bash
+java -jar bdq_workbench-<version>.jar
+```
+
+Or build it from source and run it from `target/`:
+
 ```bash
 mvn -q package
 java -jar target/bdq_workbench-0.2.1-SNAPSHOT.jar
